@@ -149,7 +149,8 @@ async function discoverDirectMapping(rowPayload, sender) {
     const popupTab = await popupPromise;
     const candidates = await requestPromise;
     if (popupTab && popupTab.id) chrome.tabs.remove(popupTab.id).catch(() => {});
-    const mapping = inferDirectMapping(candidates, rowPayload);
+    const refreshedPayload = await readSetPdfTemplatePayload(tabId, frameId);
+    const mapping = inferDirectMapping(candidates, { ...rowPayload, ...(refreshedPayload || {}) });
     if (!mapping) return { ok: false, error: "Direct fetch mapping failed for this report." };
     privateDirectMapping = mapping.privateMapping;
     await storeDirectMapping(privateDirectMapping, mapping.safeMappingSummary);
@@ -157,6 +158,16 @@ async function discoverDirectMapping(rowPayload, sender) {
   } catch {
     return { ok: false, error: "Direct fetch mapping failed for this report." };
   }
+}
+
+async function readSetPdfTemplatePayload(tabId, frameId) {
+  const result = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [frameId] },
+    func: () => window.NimsFastSummaryUtils && {
+      safe_setpdf_template: window.NimsFastSummaryUtils.getSafeSetPdfTemplate(document)
+    }
+  }).catch(() => []);
+  return result && result[0] && result[0].result;
 }
 
 function observePrintReportRequests(tabId, transientArg, observed) {
@@ -230,6 +241,9 @@ function requestContainsArg(details, transientArg) {
 }
 
 function inferDirectMapping(candidates, rowPayload) {
+  if (rowPayload.safe_setpdf_template && rowPayload.safe_setpdf_template.discovered) {
+    return inferSetPdfMapping(candidates, rowPayload);
+  }
   const arg = rowPayload.transient_print_report_arg;
   const currentFields = rowPayload.transient_form_fields || {};
   const ranked = [...candidates].reverse().filter((candidate) => isAllowedNimsUrl(candidate.url));
@@ -269,6 +283,35 @@ function inferDirectMapping(candidates, rowPayload) {
   privateMapping.discoveredRequests = candidates.map(safeRequestDiagnostic);
   privateMapping.selectedTestRow = safeSelectedRow(rowPayload.row);
   privateMapping.safeFormStructure = rowPayload.safe_form_structure || null;
+  return {
+    privateMapping,
+    safeMappingSummary: safeMappingSummary(privateMapping, "candidate"),
+    safeDiagnostics: safeDiagnosticsForMapping(privateMapping)
+  };
+}
+
+function inferSetPdfMapping(candidates, rowPayload) {
+  const template = rowPayload.safe_setpdf_template;
+  const privateMapping = {
+    method: "GET",
+    origin: template.origin,
+    pathname: template.pathname,
+    queryParamNames: template.queryParamNames || ["hmode", "fileName"],
+    postFieldNames: [],
+    modeParameterName: template.modeParamName,
+    modeParameterValue: "PRINTREPORT",
+    argumentParameterName: template.argumentParameterName,
+    requiredFieldNames: [],
+    discoveredAt: new Date().toISOString(),
+    mappingSource: "setPdf",
+    setPdfTemplateDiscovered: true,
+    status: "candidate",
+    validated: false,
+    lastClassification: "",
+    discoveredRequests: candidates.map(safeRequestDiagnostic),
+    selectedTestRow: safeSelectedRow(rowPayload.row),
+    safeFormStructure: rowPayload.safe_form_structure || null
+  };
   return {
     privateMapping,
     safeMappingSummary: safeMappingSummary(privateMapping, "candidate"),
@@ -325,6 +368,7 @@ function buildDirectRequest(mapping, transientArg, fields) {
   const url = new URL(mapping.pathname || "/", mapping.origin);
   const params = new URLSearchParams();
   for (const name of mapping.requiredFieldNames || []) params.set(name, fields[name] || "");
+  if (mapping.modeParameterName) params.set(mapping.modeParameterName, mapping.modeParameterValue || "PRINTREPORT");
   params.set(mapping.argumentParameterName, transientArg);
   if (method === "POST") {
     return {
@@ -397,22 +441,22 @@ function classifyReportResponse(buffer, contentType, status, urlHostPath) {
   const startsPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
   if (ctype.includes("application/pdf") || startsPdf) return classificationResult("pdf_report", byteLength, ["pdf"]);
   if (byteLength < 20) return classificationResult("empty_response", byteLength, []);
-  if ([404, 405, 500].includes(Number(status))) return classificationResult("wrong_endpoint", byteLength, []);
   if (!ctype.includes("text/html") && !ctype.includes("text/plain")) return classificationResult("unsupported_content_type", byteLength, []);
   const text = new TextDecoder("utf-8").decode(buffer.slice(0, 50000)).toLowerCase();
   if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
     return classificationResult("html_login_or_session", byteLength, safeKeywords(text));
   }
-  if (/invduplicateresultreportprinting|duplicate\s+result\s+report/.test(`${hostPath} ${text}`)) {
+  if (/duplicate\s+result\s+report/.test(text)) {
     return classificationResult("html_duplicate_report_page", byteLength, safeKeywords(text));
   }
   if (/<(?:iframe|embed|object)\b|pdfviewer|viewer|window\.print|print\s*\(/.test(text)) {
     return classificationResult("html_report_viewer", byteLength, safeKeywords(text));
   }
   if (hasReportValues(text) && !/view\s*report/.test(text)) {
-    return classificationResult("text_report", byteLength, safeKeywords(text));
+    return classificationResult(ctype.includes("text/html") ? "html_report_content" : "text_report", byteLength, safeKeywords(text));
   }
-  return classificationResult(ctype.includes("text/html") ? "html_generic_page" : "unsupported_content_type", byteLength, safeKeywords(text));
+  if ([404, 405, 500].includes(Number(status))) return classificationResult("wrong_endpoint", byteLength, safeKeywords(text));
+  return classificationResult(ctype.includes("text/html") ? "html_unrecognized_report_candidate" : "unsupported_content_type", byteLength, safeKeywords(text));
 }
 
 function hasReportValues(text) {
@@ -430,7 +474,7 @@ function safeKeywords(text) {
 }
 
 function directFetchErrorForClassification(classification) {
-  if (classification === "pdf_report" || classification === "text_report") return "";
+  if (classification === "pdf_report" || classification === "text_report" || classification === "html_report_content") return "";
   if (classification === "html_login_or_session") return "Session expired or direct fetch missing session context.";
   if (classification === "html_report_viewer") return "Direct fetch returned report viewer HTML, not the report PDF. Second-stage PDF extraction needed.";
   if (classification === "html_duplicate_report_page") return "Direct fetch reached duplicate-report page. Second-stage mapping needed.";
@@ -438,7 +482,7 @@ function directFetchErrorForClassification(classification) {
   if (classification === "wrong_endpoint") return "Direct fetch endpoint is not the report endpoint.";
   if (classification === "unsupported_content_type") return "Direct fetch returned unsupported content type.";
   if (classification === "fetch_error") return "Direct fetch mapping failed for this report.";
-  return "Direct fetch returned generic HTML page.";
+  return "Direct fetch returned unrecognized report candidate HTML.";
 }
 
 async function detectDirectReportFailure(buffer, contentType) {
@@ -495,6 +539,9 @@ function safeDiagnosticsForMapping(mapping) {
     discoveredAt: mapping.discoveredAt || "",
     validatedAt: mapping.validatedAt || "",
     lastClassification: mapping.lastClassification || "",
+    setPdfTemplateDiscovered: Boolean(mapping.setPdfTemplateDiscovered),
+    reportModeParameterName: mapping.modeParameterName || "",
+    reportArgumentParameterName: mapping.argumentParameterName || "",
     selectedTestRow: mapping.selectedTestRow || null,
     safeFormStructure: mapping.safeFormStructure || null,
     discoveredRequests: mapping.discoveredRequests || [],
@@ -586,6 +633,8 @@ function safeMappingSummary(mapping, status) {
     method: mapping.method || "",
     endpoint: safeHostPath(`${mapping.origin || ""}${mapping.pathname || ""}`),
     argumentParameterName: mapping.argumentParameterName || "",
+    modeParameterName: mapping.modeParameterName || "",
+    queryParamNames: mapping.queryParamNames || [],
     requiredFieldNames: mapping.requiredFieldNames || [],
     discoveredAt: mapping.discoveredAt || new Date().toISOString(),
     validatedAt: mapping.validatedAt || "",

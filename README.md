@@ -71,6 +71,7 @@ After mock testing, test only on de-identified real PDF/report output before any
 - Side-panel run buttons and `Diagnose Page` for iframe-based NIMS report pages
 - Direct silent bulk fetching after `Discover Mapping`, without opening each PDF one by one
 - `Test Direct Fetch` for validating the discovered mapping on one report before bulk runs
+- Confirmed NIMS `iframe#setPdf` template support for `/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=<transient argument>`
 - Safe direct-fetch response classification for PDF, text report, login/session HTML, report viewer HTML, duplicate-report pages, generic HTML, empty responses, wrong endpoints, and unsupported content
 - `Copy Direct Fetch Diagnostics` for safe endpoint/path, method, field-name, status, content-type, classification, and parse-count details
 - Separate `Manual Popup Fallback` for slow one-by-one visible popup capture when direct mapping fails
@@ -97,7 +98,7 @@ After mock testing, test only on de-identified real PDF/report output before any
 
 The first full run can still take time depending on NIMS response speed. Repeat runs should be faster when safe parsed-report cache keys are available.
 
-If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text intentionally includes only host/path, method, response status, content-type, response classification, parameter names, POST field names, selected report name/date/department, parse count, and parse errors. It excludes raw URLs, query strings, hidden values, raw `onclick`, raw `printReport` arguments, cookies, tokens, CR number, identifiers, raw HTML, raw PDFs, and raw report text.
+If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text intentionally includes only host/path, method, whether `setPdf` was discovered, query parameter names such as `hmode` and `fileName`, response status, content-type, response classification, parameter names, POST field names, selected report name/date/department, parse count, and parse errors. It excludes raw URLs, query strings, hidden values, raw `onclick`, raw `printReport` arguments, raw `fileName` values, cookies, tokens, CR number, identifiers, raw HTML, raw PDFs, and raw report text.
 
 ## Known Limitations
 

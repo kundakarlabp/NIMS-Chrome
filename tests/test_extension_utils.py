@@ -384,13 +384,17 @@ def test_direct_bulk_static_contract_and_no_default_popup_fallback() -> None:
     assert "chrome.webNavigation.onCommitted.addListener" in background
     assert "NIMS_FETCH_REPORT_DIRECT" in background
     assert "buildDirectRequest" in background
+    assert "inferSetPdfMapping" in background
+    assert "modeParameterName" in background
+    assert "modeParameterValue" in background
+    assert 'params.set(mapping.modeParameterName, mapping.modeParameterValue || "PRINTREPORT")' in background
     assert 'method: "POST"' in background
     assert 'method: "GET"' in background
     assert "Direct mapping not discovered. Click Discover Mapping first." in background
     assert "html_login_or_session" in background
     assert "Required dynamic form field missing in current NIMS page." in background
     assert "Direct fetch returned empty response." in background
-    assert "Direct fetch returned generic HTML page." in background
+    assert "Direct fetch returned unrecognized report candidate HTML." in background
     assert "chrome.storage.session" in background
     assert "safeHostPath" in background
     assert "runDirectBulk" in content_script
@@ -436,6 +440,8 @@ def test_direct_response_classifier_cases() -> None:
       login: c(enc.encode('<html><input type="password"> session expired captcha</html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
       viewer: c(enc.encode('<html><iframe src="/HISInvestigationG5/report.pdf"></iframe><script>window.print()</script></html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/viewer').classification,
       duplicate: c(enc.encode('<html>Duplicate Result Report</html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/invDuplicateResultReportPrinting.cnt').classification,
+      htmlContent: c(enc.encode('<html><table><tr><td>Hemoglobin</td><td>8.9</td><td>g/dL</td></tr></table></html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt').classification,
+      setPdfGeneric: c(enc.encode('<html>Generated Report Page</html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt').classification,
       textReport: c(enc.encode('Hemoglobin 8.9 g/dL Platelet 150000 report'), 'text/plain', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
       wrong: c(enc.encode('not found content that is long enough'), 'text/html', 404, 'www.nimsts.edu.in/HISInvestigationG5/missing').classification
     };
@@ -448,6 +454,8 @@ def test_direct_response_classifier_cases() -> None:
         "login": "html_login_or_session",
         "viewer": "html_report_viewer",
         "duplicate": "html_duplicate_report_page",
+        "htmlContent": "html_report_content",
+        "setPdfGeneric": "html_unrecognized_report_candidate",
         "textReport": "text_report",
         "wrong": "wrong_endpoint",
     }
@@ -460,8 +468,38 @@ def test_direct_diagnostics_are_safe_static_contract() -> None:
     assert "safeDiagnosticsForMapping" in background
     assert "safeRequestDiagnostic" in background
     assert "queryParamNames" in background
+    assert "setPdfTemplateDiscovered" in background
+    assert "reportModeParameterName" in background
+    assert "reportArgumentParameterName" in background
     assert "postFieldNames" in background
     assert "responseSize" in background
     assert "toDirectFetchDiagnosticsText" in sidepanel
     assert "raw_text_preview" not in sidepanel
     assert "transient_print_report_arg" not in sidepanel
+
+
+def test_setpdf_template_extraction_and_static_direct_request_contract() -> None:
+    script = r"""
+    const utils = require('./extension/src/contentUtils.js');
+    globalThis.location = { href: 'https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt' };
+    const doc = {
+      querySelector: (selector) => selector === 'iframe#setPdf' ? {
+        getAttribute: (name) => name === 'src' ? '/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=SECRET-FILE' : ''
+      } : null
+    };
+    const template = utils.getSafeSetPdfTemplate(doc);
+    console.log(JSON.stringify(template));
+    """
+    out = run_node(script)
+    assert out["discovered"] is True
+    assert out["endpoint"] == "www.nimsts.edu.in/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt"
+    assert out["queryParamNames"] == ["hmode", "fileName"]
+    assert out["modeParamName"] == "hmode"
+    assert out["modeParamValue"] == "PRINTREPORT"
+    assert out["argumentParameterName"] == "fileName"
+    serialized = json.dumps(out)
+    assert "SECRET-FILE" not in serialized
+
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    assert "fileName" in background
+    assert "mode=PRINTREPORT" not in background

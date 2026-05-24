@@ -10,7 +10,8 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Raw PDFs are parsed in memory and are not permanently stored.
 - Direct report mapping is stored only in service-worker memory and `chrome.storage.session` when available; the displayed mapping summary contains method and host/path only.
 - A mapping discovered from one click is only a candidate until `Test Direct Fetch` successfully fetches and parses one report in the current session.
-- Raw `onclick`, raw `printReport(...)` arguments, cookies, tokens, session IDs, query strings, hidden input values, CR number, and patient identifiers are not stored or exported.
+- The confirmed `iframe#setPdf` template stores only host/path plus query parameter names such as `hmode` and `fileName`; raw `fileName` values are not stored or exported.
+- Raw `onclick`, raw `printReport(...)` arguments, raw `fileName` values, cookies, tokens, session IDs, query strings, hidden input values, CR number, and patient identifiers are not stored or exported.
 - If hidden form values are needed for direct fetch, their field names may be remembered, but current values are read transiently from the live page for that request only.
 - Cache keys do not trust generated row indexes such as `row-1` or `row-2`; PDF/report bytes are preferred, then real report identifiers combined with date and report name, then URL/date/name metadata only when bytes are unavailable.
 - Direct bulk cache lookup uses a non-reversible SHA-256 `report_key:` derived from the transient report argument plus safe row metadata. The raw argument is not stored.
