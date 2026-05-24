@@ -37,8 +37,9 @@ source .venv/bin/activate
 10. Open the NIMS Fast Summary side panel.
 11. Click `Diagnose Page`.
 12. Confirm the `HISInvestigationG5` iframe has `View Report` rows.
-13. Click `Fast Summary`.
-14. Verify the generated values against source reports before clinical decisions.
+13. If rows show `Onclick: yes` and `Href: no`, the extension will attempt the controlled onclick/popup workflow.
+14. Click `Fast Summary`.
+15. Verify the generated values against source reports before clinical decisions.
 
 ## Test With Mock Page
 
@@ -66,6 +67,8 @@ After mock testing, test only on de-identified real PDF/report output before any
 - Dynamic toolbar detection with `MutationObserver` and a short periodic page scan
 - Iframe support for `AHIMSG5` and `HISInvestigationG5` on both `nimsts.edu.in` and `www.nimsts.edu.in`
 - Side-panel run buttons and `Diagnose Page` for iframe-based NIMS report pages
+- Controlled onclick/popup report opening for NIMS rows that have `View Report` onclick handlers but no direct href
+- `Copy Safe Mapping Diagnostics` for sharing function names, argument counts/kinds, and input names without raw onclick values or hidden input values
 - Background fetch scaffolding using the active Chrome session
 - Parser endpoints for CBC, RFT/electrolytes, LFT, coagulation, culture, radiology, and other reports
 - Parsed JSON cache, never raw PDF cache
@@ -81,6 +84,8 @@ After mock testing, test only on de-identified real PDF/report output before any
 - Live NIMS popup/form workflows may need adjustment in `extension/src/contentScript.js` and `extension/src/background.js` after testing on the real page.
 - POST-only report viewers are detected and reported as `POST workflow needs live-site mapping`.
 - `Diagnose Page` shows only sanitized host/path frame information and row previews; it strips query strings and does not show raw row text, onclick code, cookies, tokens, or credentials.
+- First live Fast Summary is intentionally limited to a small selected set: latest 3 CBC reports, latest 3 renal/liver/electrolyte reports, and all culture reports.
+- If the onclick/form flow cannot be mapped safely, the per-report error says `NIMS onclick/form workflow needs specific mapping`.
 - If a fetched page is login/session-expired HTML, it is reported as failed and is not parsed as a lab report.
 - OCR is intentionally disabled by default.
 - AI interpretation remains disabled/rule-based for now.

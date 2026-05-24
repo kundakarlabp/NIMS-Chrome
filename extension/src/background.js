@@ -1,4 +1,5 @@
 const HELPER = "http://127.0.0.1:8765";
+const popupCaptures = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -27,6 +28,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NIMS_PREPARE_POPUP_CAPTURE") {
+    const captureId = crypto.randomUUID();
+    popupCaptures.set(captureId, {
+      openerTabId: sender.tab && sender.tab.id,
+      done: false,
+      result: null,
+      createdAt: Date.now()
+    });
+    setTimeout(() => finalizeCapture(captureId, { ok: false, error: "NIMS onclick/form workflow needs specific mapping" }), 20000);
+    sendResponse({ ok: true, captureId });
+    return false;
+  }
+
+  if (message.type === "NIMS_GET_POPUP_CAPTURE") {
+    const capture = popupCaptures.get(message.captureId);
+    sendResponse(capture ? { done: capture.done, result: capture.result } : { done: true, result: { ok: false, error: "NIMS onclick/form workflow needs specific mapping" } });
+    if (capture && capture.done) popupCaptures.delete(message.captureId);
+    return false;
+  }
+
+  if (message.type === "NIMS_CANCEL_POPUP_CAPTURE") {
+    popupCaptures.delete(message.captureId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message.type === "NIMS_CLEAR_CACHE") {
     fetch(`${HELPER}/clear-cache`, { method: "POST" })
       .then((response) => sendResponse({ ok: response.ok }))
@@ -35,6 +62,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   return false;
+});
+
+chrome.tabs.onCreated.addListener((tab) => {
+  const entry = nextPendingCapture(tab.openerTabId);
+  if (!entry) return;
+  waitForTabComplete(tab.id)
+    .then(() => fetchCapturedTab(tab.id))
+    .then((result) => finalizeCapture(entry.captureId, result))
+    .catch((error) => finalizeCapture(entry.captureId, { ok: false, error: `NIMS onclick/form workflow needs specific mapping: ${error.message}` }));
 });
 
 async function fetchReportWithSession(row) {
@@ -89,6 +125,56 @@ async function fetchViaTemporaryTab(url) {
     return { ok: false, error: `Popup/new-tab workflow needs manual support: ${error.message}` };
   } finally {
     if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+function nextPendingCapture(openerTabId) {
+  for (const [captureId, capture] of popupCaptures.entries()) {
+    if (capture.done) continue;
+    if (capture.openerTabId && openerTabId && capture.openerTabId !== openerTabId) continue;
+    return { captureId, capture };
+  }
+  return null;
+}
+
+async function fetchCapturedTab(tabId) {
+  try {
+    const current = await chrome.tabs.get(tabId);
+    const finalUrl = current.url || "";
+    if (!isAllowedNimsOrDataUrl(finalUrl)) {
+      return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    }
+    const response = await fetch(finalUrl, { credentials: "include", redirect: "follow" });
+    const buffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "";
+    const htmlError = await detectHtmlAuthFailure(buffer, contentType);
+    if (htmlError) return { ok: false, error: htmlError, status: response.status, finalUrl, contentType };
+    return {
+      ok: response.ok,
+      status: response.status,
+      finalUrl,
+      contentType,
+      base64: arrayBufferToBase64(buffer)
+    };
+  } finally {
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
+}
+
+function finalizeCapture(captureId, result) {
+  const capture = popupCaptures.get(captureId);
+  if (!capture || capture.done) return;
+  capture.done = true;
+  capture.result = result;
+}
+
+function isAllowedNimsOrDataUrl(url) {
+  if (/^data:/i.test(url || "")) return true;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && ["nimsts.edu.in", "www.nimsts.edu.in"].includes(parsed.hostname);
+  } catch {
+    return false;
   }
 }
 

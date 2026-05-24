@@ -64,11 +64,11 @@
       const parsedReports = [];
       for (let index = 0; index < selected.length; index += 1) {
         const row = selected[index];
-        if (row.post_workflow || !row.source_url) {
-          parsedReports.push(rowError(row, row.status || "POST workflow needs live-site mapping"));
+        if ((!row.source_url && !row.onclick_present) || (row.post_workflow && !row.source_url)) {
+          parsedReports.push(rowError(row, row.status || "NIMS onclick/form workflow needs specific mapping"));
           continue;
         }
-        setProgress(`Fetching report ${index + 1}/${selected.length}`);
+        setProgress(`Fetching selected report ${index + 1}/${selected.length}`);
         const fetched = await fetchReport(row);
         if (!fetched.ok) {
           parsedReports.push(rowError(row, fetched.error || "unable to parse / verify source report"));
@@ -101,10 +101,54 @@
   }
 
   async function fetchReport(row) {
-    if (isExtension) return chrome.runtime.sendMessage({ type: "NIMS_FETCH_REPORT", row });
+    if (isExtension && row.source_url) return chrome.runtime.sendMessage({ type: "NIMS_FETCH_REPORT", row });
+    if (isExtension && row.onclick_present) return fetchReportByControlledClick(row);
     const response = await fetch(row.source_url);
     const buffer = await response.arrayBuffer();
     return { ok: response.ok, status: response.status, finalUrl: response.url, base64: arrayBufferToBase64(buffer) };
+  }
+
+  async function fetchReportByControlledClick(row) {
+    const capture = await chrome.runtime.sendMessage({ type: "NIMS_PREPARE_POPUP_CAPTURE" });
+    if (!capture || !capture.ok || !capture.captureId) {
+      return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    }
+
+    const clicked = clickViewReportRow(row);
+    if (!clicked.ok) {
+      await chrome.runtime.sendMessage({ type: "NIMS_CANCEL_POPUP_CAPTURE", captureId: capture.captureId }).catch(() => {});
+      return clicked;
+    }
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await sleep(500);
+      const result = await chrome.runtime.sendMessage({ type: "NIMS_GET_POPUP_CAPTURE", captureId: capture.captureId });
+      if (result && result.done) return result.result || { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    }
+    await chrome.runtime.sendMessage({ type: "NIMS_CANCEL_POPUP_CAPTURE", captureId: capture.captureId }).catch(() => {});
+    return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+  }
+
+  function clickViewReportRow(row) {
+    const tr = Array.from(document.querySelectorAll("tr"))[row.row_index];
+    if (!tr) return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    const candidates = [
+      ...(tr.hasAttribute("onclick") ? [tr] : []),
+      ...Array.from(tr.querySelectorAll("[onclick], a, button, input[type='button'], input[type='submit']"))
+    ];
+    const clickTarget = candidates
+      .find((node) => /view\s*report/i.test(node.innerText || node.value || node.textContent || "") || node.getAttribute("onclick"));
+    if (!clickTarget) return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    try {
+      clickTarget.click();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    }
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async function parseReport(row, fetched) {

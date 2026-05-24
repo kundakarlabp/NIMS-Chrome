@@ -19,6 +19,7 @@ function bindActions() {
   document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("cultures_only"));
   document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("full"));
   document.getElementById("diagnosePage").addEventListener("click", diagnosePage);
+  document.getElementById("copyMappingDiagnostics").addEventListener("click", copySafeMappingDiagnostics);
   document.getElementById("copySummary").addEventListener("click", copySummary);
   document.getElementById("exportCsv").addEventListener("click", () => download("nims-summary.csv", toCsv(latestState), "text/csv"));
   document.getElementById("exportJson").addEventListener("click", () => download("nims-summary.json", JSON.stringify(latestState || {}, null, 2), "application/json"));
@@ -109,13 +110,18 @@ function collectFrameDiagnostic() {
     viewReportRows: Array.from(document.querySelectorAll("tr")).filter((row) => /view\s*report/i.test(row.innerText || row.textContent || "")).length,
     hasSummary: Boolean(window.NimsFastSummary),
     hasUtils: Boolean(window.NimsFastSummaryUtils),
-    rowPreviews: rows.slice(0, 5).map((row) => ({
+    rowPreviews: rows.slice(0, 10).map((row) => ({
       date_sent: row.date_sent || "",
       report_name: row.report_name || "",
       department: row.department || "",
       hasHref: Boolean(row.href),
       hasOnclick: Boolean(row.onclick),
-      postWorkflowSuspected: Boolean(row.post_workflow)
+      onclickPattern: row.onclick_diagnostics ? row.onclick_diagnostics.onclickPattern : "",
+      argumentCount: row.onclick_diagnostics ? row.onclick_diagnostics.argumentCount : 0,
+      argumentKinds: row.onclick_diagnostics ? row.onclick_diagnostics.argumentKinds : [],
+      globalFormPresent: Boolean(row.global_form_present),
+      postWorkflowSuspected: Boolean(row.post_workflow),
+      nearbyInputNames: row.nearby_input_names || []
     }))
   };
 }
@@ -164,7 +170,7 @@ function renderDiagnostics(diagnostic) {
     frame.hasUtils ? "yes" : "no"
   ]);
   const best = sidepanelUtils.selectBestFrameDiagnostic(frames);
-  const previews = best && best.rowPreviews ? best.rowPreviews : [];
+  const previews = best && best.rowPreviews ? best.rowPreviews.slice(0, 5) : [];
   target.innerHTML = `
     <table><tbody>
       <tr><th>Active tab</th><td>${escapeHtml(diagnostic.activeTabUrl || "")}</td></tr>
@@ -174,8 +180,8 @@ function renderDiagnostics(diagnostic) {
     <h3>Frames</h3>
     ${frameRows.length ? table(["Frame ID", "URL", "Title", "TR count", "View Report rows", "Summary API", "Utils API"], frameRows) : `<div class="empty">No frames checked.</div>`}
     <h3>Best Frame Row Previews</h3>
-    ${previews.length ? table(["Date sent", "Report name", "Department/lab", "Href", "Onclick", "POST suspected"], previews.map((row) => [
-      row.date_sent, row.report_name, row.department, row.hasHref ? "yes" : "no", row.hasOnclick ? "yes" : "no", row.postWorkflowSuspected ? "yes" : "no"
+    ${previews.length ? table(["Date sent", "Report name", "Department/lab", "Href", "Onclick", "Onclick pattern", "Args", "Global form", "POST suspected"], previews.map((row) => [
+      row.date_sent, row.report_name, row.department, row.hasHref ? "yes" : "no", row.hasOnclick ? "yes" : "no", row.onclickPattern, row.argumentCount, row.globalFormPresent ? "yes" : "no", row.postWorkflowSuspected ? "yes" : "no"
     ])) : `<div class="empty">No sanitized row previews.</div>`}
   `;
 }
@@ -243,6 +249,38 @@ function table(headers, rows) {
 
 function copySummary() {
   navigator.clipboard.writeText(toCopyText(latestState));
+}
+
+function copySafeMappingDiagnostics() {
+  navigator.clipboard.writeText(toSafeMappingDiagnosticsText(latestDiagnostic));
+}
+
+function toSafeMappingDiagnosticsText(diagnostic) {
+  if (!diagnostic) return "No diagnosis yet.";
+  const best = sidepanelUtils.selectBestFrameDiagnostic(diagnostic.frames || []);
+  const lines = [
+    "NIMS Fast Summary safe mapping diagnostics",
+    `Best frame: ${best ? best.url : ""}`,
+    `View Report rows: ${best ? best.viewReportRows : 0}`,
+    ""
+  ];
+  const previews = best && best.rowPreviews ? best.rowPreviews.slice(0, 10) : [];
+  previews.forEach((row, index) => {
+    lines.push(`Row ${index + 1}`);
+    lines.push(`Date: ${row.date_sent || ""}`);
+    lines.push(`Report: ${row.report_name || ""}`);
+    lines.push(`Department: ${row.department || ""}`);
+    lines.push(`Href: ${row.hasHref ? "yes" : "no"}`);
+    lines.push(`Onclick: ${row.hasOnclick ? "yes" : "no"}`);
+    lines.push(`Onclick function: ${row.onclickPattern || ""}`);
+    lines.push(`Argument count: ${row.argumentCount || 0}`);
+    lines.push(`Argument kinds: ${(row.argumentKinds || []).join(", ")}`);
+    lines.push(`Global form present: ${row.globalFormPresent ? "yes" : "no"}`);
+    lines.push(`POST workflow: ${row.postWorkflowSuspected ? "true" : "false"}`);
+    lines.push(`Nearby input names: ${(row.nearbyInputNames || []).join(", ")}`);
+    lines.push("");
+  });
+  return lines.join("\n");
 }
 
 function toCsv(state) {

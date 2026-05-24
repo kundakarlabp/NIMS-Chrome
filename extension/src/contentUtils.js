@@ -32,10 +32,15 @@
         href: urlInfo.href,
         onclick: urlInfo.onclick,
         source_url: urlInfo.source_url,
+        onclick_present: Boolean(urlInfo.onclick),
+        onclick_parse_status: urlInfo.onclick_parse_status,
+        onclick_diagnostics: urlInfo.onclick_diagnostics,
+        global_form_present: urlInfo.global_form_present,
+        nearby_input_names: urlInfo.nearby_input_names,
         post_workflow: urlInfo.post_workflow,
         report_id: reportId,
         raw_row_text: rowText,
-        status: urlInfo.post_workflow ? "POST workflow needs live-site mapping" : "ready"
+        status: urlInfo.post_workflow ? "NIMS onclick/form workflow needs specific mapping" : "ready"
       });
     });
     return sortRowsLatestFirst(rows);
@@ -45,13 +50,23 @@
     const link = row.querySelector("a[href]");
     const href = link ? link.getAttribute("href") || "" : "";
     const absoluteHref = href ? resolveUrl(href, baseUrl) : "";
-    const clickNode = Array.from(row.querySelectorAll("[onclick]"))[0];
+    const clickNode = row.hasAttribute && row.hasAttribute("onclick")
+      ? row
+      : Array.from(row.querySelectorAll("[onclick]"))[0];
     const onclick = clickNode ? clickNode.getAttribute("onclick") || "" : "";
+    const onclickDiagnostics = analyzeOnclickPattern(onclick);
+    const parsedUrl = absoluteHref || parseUrlFromOnclick(onclick, baseUrl);
+    const globalFormPresent = hasGlobalPostForm(row);
+    const postWorkflow = detectPostWorkflow(row);
     return {
       href: absoluteHref,
       onclick,
-      source_url: absoluteHref || parseUrlFromOnclick(onclick, baseUrl),
-      post_workflow: detectPostWorkflow(row)
+      source_url: parsedUrl,
+      onclick_parse_status: parsedUrl ? "parsed" : (onclick ? "needs_mapping" : "unsupported"),
+      onclick_diagnostics: onclickDiagnostics,
+      global_form_present: globalFormPresent,
+      nearby_input_names: nearbyInputNames(row),
+      post_workflow: postWorkflow
     };
   }
 
@@ -69,10 +84,77 @@
   }
 
   function detectPostWorkflow(row) {
+    const clickNode = row.hasAttribute && row.hasAttribute("onclick")
+      ? row
+      : Array.from(row.querySelectorAll ? row.querySelectorAll("[onclick]") : [])[0];
+    const onclick = clickNode ? clickNode.getAttribute("onclick") || "" : "";
     const form = row.closest("form") || row.querySelector("form");
+    if (onclick) {
+      const diagnostics = analyzeOnclickPattern(onclick);
+      return (/\bsubmit\s*\(|__doPostBack/i.test(onclick) || /submit/i.test(diagnostics.functionName || "")) && !parseUrlFromOnclick(onclick, root.location && root.location.href);
+    }
     if (form && String(form.getAttribute("method") || "").toLowerCase() === "post") return true;
     const text = `${row.outerHTML || ""} ${row.getAttribute("onclick") || ""}`;
     return /\bsubmit\s*\(|__doPostBack|method\s*=\s*["']?post/i.test(text);
+  }
+
+  function hasGlobalPostForm(row) {
+    const form = row.closest ? row.closest("form") : null;
+    return Boolean(form && String(form.getAttribute("method") || "").toLowerCase() === "post");
+  }
+
+  function analyzeOnclickPattern(onclick) {
+    const text = String(onclick || "").trim();
+    if (!text) return { onclickPattern: "", functionName: "", argumentCount: 0, argumentKinds: [] };
+    const match = text.match(/([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)/);
+    const functionName = match ? match.group?.(1) || match[1] : "";
+    const args = match ? splitArgs(match[2]) : [];
+    return {
+      onclickPattern: functionName ? `${functionName}(args: ${args.length})` : "inline(args: 0)",
+      functionName,
+      argumentCount: args.length,
+      argumentKinds: args.map(classifyArgument)
+    };
+  }
+
+  function splitArgs(argText) {
+    const args = [];
+    let current = "";
+    let quote = "";
+    for (let i = 0; i < argText.length; i += 1) {
+      const char = argText[i];
+      if (quote) {
+        current += char;
+        if (char === quote && argText[i - 1] !== "\\") quote = "";
+      } else if (char === "'" || char === '"') {
+        quote = char;
+        current += char;
+      } else if (char === ",") {
+        args.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) args.push(current.trim());
+    return args;
+  }
+
+  function classifyArgument(arg) {
+    const value = String(arg || "").replace(/^['"]|['"]$/g, "");
+    if (/^\d+$/.test(value)) return "number_like";
+    if (/(sample|lab|req|report|invest|test|crno|episode)/i.test(value)) return "sample_like";
+    if (/^https?:\/\//i.test(value) || looksLikeUrlPath(value)) return "url_like";
+    if (!value) return "empty";
+    return "unknown";
+  }
+
+  function nearbyInputNames(row) {
+    const scope = (row.closest && row.closest("form")) || row.parentElement || row;
+    return unique(Array.from(scope.querySelectorAll ? scope.querySelectorAll("input, select, textarea") : [])
+      .map((input) => input.getAttribute("name") || input.getAttribute("id") || "")
+      .filter(Boolean)
+      .slice(0, 20));
   }
 
   function selectRowsForMode(rows, mode) {
@@ -80,8 +162,7 @@
     if (mode === "full") return sorted;
     if (mode === "cultures_only") return sorted.filter((row) => hasTag(row, "culture"));
 
-    const limits = { cbc: 5, rft: 5, electrolytes: 5, lft: 5, coagulation: 3 };
-    const counts = {};
+    const counts = { cbc: 0, chemistry: 0 };
     const selected = [];
     for (const row of sorted) {
       const tags = row.report_tags || inferReportTags(row.report_name || "");
@@ -89,20 +170,15 @@
         selected.push(row);
         continue;
       }
-      if (tags.includes("inflammatory")) {
+      if (tags.includes("cbc") && counts.cbc < 3) {
         selected.push(row);
+        counts.cbc += 1;
         continue;
       }
-      let include = false;
-      for (const tag of tags) {
-        if (!Object.prototype.hasOwnProperty.call(limits, tag)) continue;
-        counts[tag] = counts[tag] || 0;
-        if (counts[tag] < limits[tag]) {
-          include = true;
-          counts[tag] += 1;
-        }
+      if (tags.some((tag) => ["rft", "electrolytes", "lft"].includes(tag)) && counts.chemistry < 3) {
+        selected.push(row);
+        counts.chemistry += 1;
       }
-      if (include) selected.push(row);
     }
     return selected;
   }
@@ -130,6 +206,12 @@
         report_type: row.report_type || firstReportType(row.report_tags || []),
         report_tags: row.report_tags || [],
         status: row.status || "",
+        onclick_present: Boolean(row.onclick_present),
+        onclick_parse_status: row.onclick_parse_status || "",
+        onclick_diagnostics: row.onclick_diagnostics || null,
+        global_form_present: Boolean(row.global_form_present),
+        post_workflow: Boolean(row.post_workflow),
+        nearby_input_names: row.nearby_input_names || [],
         report_id: isSafeReportId(row.report_id) ? row.report_id : "",
         errors: row.errors || []
       };
@@ -303,6 +385,11 @@
     extractUrlFromNode,
     parseUrlFromOnclick,
     detectPostWorkflow,
+    hasGlobalPostForm,
+    analyzeOnclickPattern,
+    splitArgs,
+    classifyArgument,
+    nearbyInputNames,
     selectRowsForMode,
     sanitizeState,
     sanitizeRows,
