@@ -110,6 +110,7 @@ body.nims-sidepanel {
 
 section {
   margin: 14px 0;
+  overflow-x: auto;
 }
 
 section h2 {
