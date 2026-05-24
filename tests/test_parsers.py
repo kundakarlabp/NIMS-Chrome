@@ -10,8 +10,8 @@ HELPER = ROOT / "helper"
 sys.path.insert(0, str(HELPER))
 
 from cache import clear_cache, is_safe_report_id, is_safe_report_key, make_cache_key  # noqa: E402
-from main import app  # noqa: E402
-from parsers.culture_parser import parse_culture  # noqa: E402
+from main import app, build_culture_table, build_interpretation  # noqa: E402
+from parsers.culture_parser import parse_culture, parse_cultures  # noqa: E402
 from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_parameters  # noqa: E402
 from parsers.pdf_text import detect_non_report_payload  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -131,8 +131,7 @@ def test_nims_sputum_positive_aerobic_culture_fields() -> None:
     assert culture.result == "positive"
     assert culture.growth_quantity == "scanty"
     assert culture.organism == "Gram negative bacilli"
-    assert "Possible colonization/contamination" in culture.comment
-    assert "repeat if necessary" in culture.comment
+    assert culture.comment == "Possible colonization/contamination; repeat if necessary."
     assert culture.sensitivity_summary == {"sensitive": [], "resistant": [], "intermediate": []}
 
 
@@ -232,6 +231,204 @@ def test_nims_simple_susceptibility_table() -> None:
     assert "Amikacin" in culture.susceptible_antibiotics
     assert "Meropenem" in culture.susceptible_antibiotics
     assert "Ceftriaxone" in culture.resistant_antibiotics
+
+
+def test_culture_table_deduplicates_exact_duplicate_rows() -> None:
+    culture = parse_culture(
+        """
+        Sample Processed: SPUTUM
+        AEROBIC CULTURE
+        CULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.
+        Lab/Study No. : E7654
+        Coll./Study Date : 08-May-2026 19:04
+        Specimen/26BCT08916
+        Reporting Date : 09-May-2026 13:26
+        """
+    ).model_dump()
+    culture["comment"] = "  " + culture["comment"] + "  "
+    reports = [
+        {
+            "report_id": "dup-culture",
+            "report_name": "Sputum culture",
+            "date_sent": "09-May-2026",
+            "report_type": "culture",
+            "report_tags": ["culture"],
+            "culture_results": [culture, culture, dict(culture, raw_evidence_short="  different spacing  "), culture],
+            "parameters": [],
+            "errors": [],
+        }
+    ]
+    rows = build_culture_table(reports)
+    assert len(rows) == 1
+    assert rows[0]["culture_no"] == "E7654"
+    assert rows[0]["organism"] == "Gram negative bacilli"
+
+
+def test_blood_culture_repeated_reports_dedupe_to_unique_bottle_status_rows() -> None:
+    cultures = blood_culture_48_and_final_rows()
+    reports = [
+        {
+            "report_id": f"blood-{index}",
+            "report_name": "Blood culture",
+            "date_sent": "15-May-2026",
+            "report_type": "culture",
+            "report_tags": ["culture"],
+            "culture_results": [culture.model_dump() for culture in cultures],
+            "parameters": [],
+            "errors": [],
+        }
+        for index in range(4)
+    ]
+    rows = build_culture_table(reports)
+    assert len(rows) == 8
+    assert {row["bottle_set_code"] for row in rows} == {
+        "set_1_bottle_1",
+        "set_1_bottle_2",
+        "set_2_bottle_1",
+        "set_2_bottle_2",
+    }
+    assert {row["status"] for row in rows} == {"48_hour", "final"}
+
+
+def test_blood_culture_interpretation_prefers_final_compact_summary() -> None:
+    reports = [
+        {
+            "report_id": "blood-final",
+            "report_name": "Blood culture",
+            "date_sent": "18-May-2026",
+            "report_type": "culture",
+            "report_tags": ["culture"],
+            "culture_results": [culture.model_dump() for culture in blood_culture_48_and_final_rows()],
+            "parameters": [],
+            "errors": [],
+        }
+    ]
+    interpretation = build_interpretation(reports)
+    joined = " ".join(interpretation)
+    assert "Blood culture B18598 / specimen 26IBC07738 collected 13-May-2026 19:35" in joined
+    assert "final reports available" in joined
+    assert "32 bottle/set reports" not in joined
+
+
+def test_positive_culture_interpretation_appears_before_blood_no_growth() -> None:
+    sputum = parse_culture(
+        """
+        Sample Processed: SPUTUM
+        AEROBIC CULTURE
+        CULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.
+        COLONIZATION OR CONTAMINATION ? PLEASE REPEAT IF NECESSARY.
+        Lab/Study No. : E7654
+        Coll./Study Date : 08-May-2026 19:04
+        Specimen/26BCT08916
+        Reporting Date : 09-May-2026 13:26
+        """
+    )
+    reports = [
+        {
+            "report_id": "blood",
+            "report_name": "Blood culture",
+            "date_sent": "18-May-2026",
+            "report_type": "culture",
+            "report_tags": ["culture"],
+            "culture_results": [culture.model_dump() for culture in blood_culture_48_and_final_rows()],
+            "parameters": [],
+            "errors": [],
+        },
+        {
+            "report_id": "sputum",
+            "report_name": "Sputum culture",
+            "date_sent": "09-May-2026",
+            "report_type": "culture",
+            "report_tags": ["culture"],
+            "culture_results": [sputum.model_dump()],
+            "parameters": [],
+            "errors": [],
+        },
+    ]
+    interpretation = build_interpretation(reports)
+    assert interpretation[0].startswith("Sputum culture E7654 collected 08-May-2026 19:04")
+    assert "scanty growth of Gram negative bacilli" in interpretation[0]
+    assert "possible colonization/contamination" in interpretation[0]
+
+
+def test_repeat_if_necessary_comment_normalization_without_contamination() -> None:
+    culture = parse_culture(
+        """
+        Sample Processed: SPUTUM
+        CULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.
+        PLEASE REPEAT IF NECESSARY.
+        """
+    )
+    assert culture.comment == "Repeat if necessary."
+
+
+def test_cached_duplicate_culture_results_are_deduplicated_in_summary() -> None:
+    culture = parse_culture(
+        """
+        Sample Processed : Blood
+        Lab/Study No. : B18598
+        Coll./Study Date : 13-May-2026 19:35
+        Specimen/26IBC07738
+        Reporting Date : 15-May-2026 15:07
+        Fan Blood Culture - First Bottle of first Set (48 Hrs Report)
+        CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+        """
+    ).model_dump()
+    client = TestClient(app)
+    summary = client.post(
+        "/summarize",
+        json={
+            "mode": "cultures_only",
+            "reports": [
+                {
+                    "report_id": "cached-blood",
+                    "report_name": "Blood culture",
+                    "date_sent": "15-May-2026",
+                    "report_type": "culture",
+                    "report_tags": ["culture"],
+                    "culture_results": [culture, culture, culture, culture],
+                    "parameters": [],
+                    "errors": [],
+                    "cached": True,
+                }
+            ],
+        },
+    ).json()
+    assert len(summary["culture_table"]) == 1
+    assert summary["culture_table"][0]["culture_no"] == "B18598"
+
+
+def blood_culture_48_and_final_rows():
+    common = """
+    Sample Processed : Blood
+    Lab/Study No. : B18598
+    Requisition Date: 13-May-2026 19:32
+    Coll./Study Date : 13-May-2026 19:35
+    Specimen/26IBC07738
+    """
+    forty_eight = common + """
+    Reporting Date : 15-May-2026 15:07
+    Fan Blood Culture - First Bottle of first Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - Second Bottle of first Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - First Bottle of Second Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - Second Bottle of Second Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    """
+    final = common + """
+    Reporting Date : 18-May-2026 15:07
+    Fan Blood Culture - First Bottle of first Set (Final Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION.
+    Fan Blood Culture - Second Bottle of first Set (Final Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION.
+    Fan Blood Culture - First Bottle of Second Set (Final Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION.
+    Fan Blood Culture - Second Bottle of Second Set (Final Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION.
+    """
+    return [*parse_cultures(forty_eight), *parse_cultures(final)]
 
 
 def test_table_and_newline_style_lab_parsing() -> None:
