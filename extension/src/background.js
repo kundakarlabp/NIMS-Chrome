@@ -47,6 +47,8 @@ async function fetchReportWithSession(row) {
     const response = await fetch(url, { credentials: "include", redirect: "follow" });
     const contentType = response.headers.get("content-type") || "";
     const buffer = await response.arrayBuffer();
+    const htmlError = await detectHtmlAuthFailure(buffer, contentType);
+    if (htmlError) return { ok: false, error: htmlError, status: response.status, finalUrl: response.url, contentType };
     if (response.ok && buffer.byteLength > 0) {
       return {
         ok: true,
@@ -73,11 +75,14 @@ async function fetchViaTemporaryTab(url) {
     const finalUrl = current.url || url;
     const response = await fetch(finalUrl, { credentials: "include", redirect: "follow" });
     const buffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "";
+    const htmlError = await detectHtmlAuthFailure(buffer, contentType);
+    if (htmlError) return { ok: false, error: htmlError, status: response.status, finalUrl, contentType };
     return {
       ok: response.ok,
       status: response.status,
       finalUrl,
-      contentType: response.headers.get("content-type") || "",
+      contentType,
       base64: arrayBufferToBase64(buffer)
     };
   } catch (error) {
@@ -107,5 +112,15 @@ function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   for (let i = 0; i < bytes.byteLength; i += 1) binary += String.fromCharCode(bytes[i]);
   return btoa(binary);
+}
+
+async function detectHtmlAuthFailure(buffer, contentType) {
+  const ctype = (contentType || "").toLowerCase();
+  if (!ctype.includes("text/html")) return "";
+  const text = new TextDecoder("utf-8").decode(buffer.slice(0, 5000)).toLowerCase();
+  if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
+    return "session expired or report fetch failed";
+  }
+  return "HTML response is not a recognizable report";
 }
 

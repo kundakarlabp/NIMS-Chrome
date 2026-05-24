@@ -42,7 +42,9 @@ function render(state, progress) {
     <table><tbody>
       <tr><th>Mode</th><td>${escapeHtml(result.mode)}</td></tr>
       <tr><th>Reports found</th><td>${result.reportsFound}</td></tr>
-      <tr><th>Reports read</th><td>${result.reportsRead}</td></tr>
+      <tr><th>Reports selected</th><td>${result.reportsSelected || 0}</td></tr>
+      <tr><th>Reports parsed</th><td>${result.reportsParsed || result.reportsRead || 0}</td></tr>
+      <tr><th>Reports failed</th><td>${result.reportsFailed || 0}</td></tr>
       <tr><th>Reports skipped</th><td>${result.reportsSkipped}</td></tr>
       <tr><th>Errors</th><td>${(result.errors || []).length}</td></tr>
       <tr><th>Date range</th><td>${dateRange(result.summary.lab_trend_table)}</td></tr>
@@ -50,6 +52,7 @@ function render(state, progress) {
   `;
 
   renderSourceReports(result.summary.source_reports || []);
+  renderFailedReports(result.summary.source_reports || []);
   renderLabTrends(result.summary.lab_trend_table || { columns: [], rows: [] });
   renderCultures(result.summary.culture_table || []);
   renderInterpretation(result.summary.interpretation || []);
@@ -61,8 +64,20 @@ function renderSourceReports(rows) {
     target.innerHTML = `<div class="empty">No source reports parsed.</div>`;
     return;
   }
-  target.innerHTML = table(["Date sent", "Report name", "Type", "Status", "Notes"], rows.map((row) => [
-    row.date_sent, row.report_name, row.type, row.status, row.notes
+  target.innerHTML = table(["Date sent", "Report name", "Type", "Tags", "Status", "Notes"], rows.map((row) => [
+    row.date_sent, row.report_name, row.type, row.tags, row.status, row.notes
+  ]));
+}
+
+function renderFailedReports(rows) {
+  const target = document.getElementById("failedReports");
+  const failed = rows.filter((row) => row.status === "error" || row.notes);
+  if (!failed.length) {
+    target.innerHTML = `<div class="empty">No failed reports.</div>`;
+    return;
+  }
+  target.innerHTML = table(["Date sent", "Report name", "Error"], failed.map((row) => [
+    row.date_sent, row.report_name, row.notes || "unable to parse / verify source report"
   ]));
 }
 
@@ -105,8 +120,7 @@ function table(headers, rows) {
 }
 
 function copySummary() {
-  const text = document.body.innerText;
-  navigator.clipboard.writeText(text);
+  navigator.clipboard.writeText(toCopyText(latestState));
 }
 
 function toCsv(state) {
@@ -123,6 +137,29 @@ function toCsv(state) {
   for (const row of result.culture_table || []) {
     lines.push(csv(["Culture", row.date_sent, row.culture_number, row.result, `${row.organism} ${row.sensitivity_summary}`]));
   }
+  return lines.join("\n");
+}
+
+function toCopyText(state) {
+  const result = state && state.result && state.result.summary;
+  if (!result) return "Clinical safety: verify values against source reports before clinical decisions.";
+  const lines = ["Clinical safety: verify values against source reports before clinical decisions.", ""];
+  lines.push("Source Reports");
+  for (const row of result.source_reports || []) {
+    lines.push([row.date_sent, row.report_name, row.type, row.tags, row.status, row.notes].filter(Boolean).join(" | "));
+  }
+  lines.push("", "Lab Trends");
+  const lab = result.lab_trend_table || { columns: [], rows: [] };
+  lines.push(["Parameter", ...lab.columns, "Trend"].join(" | "));
+  for (const row of lab.rows || []) {
+    lines.push([row.parameter, ...(row.values || []), row.trend].join(" | "));
+  }
+  lines.push("", "Cultures");
+  for (const row of result.culture_table || []) {
+    lines.push([row.date_sent, row.culture_number, row.site_specimen, row.result, row.organism, row.sensitivity_summary, row.status].filter(Boolean).join(" | "));
+  }
+  lines.push("", "Interpretation");
+  for (const item of result.interpretation || []) lines.push(`- ${item}`);
   return lines.join("\n");
 }
 

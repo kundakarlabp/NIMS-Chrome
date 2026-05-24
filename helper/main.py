@@ -12,8 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from cache import clear_cache, get_cached, make_cache_key, set_cached
 from models import ParsedReport, ParseReportRequest, SummarizeRequest
 from parsers.culture_parser import parse_culture
-from parsers.lab_parser import infer_report_type, parse_lab_parameters
-from parsers.pdf_text import decode_report_bytes, extract_text_from_bytes
+from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_parameters
+from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, extract_text_from_bytes
 
 
 app = FastAPI(title="NIMS Fast Summary Helper", version="0.1.0")
@@ -47,9 +47,26 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
     if not text:
         text, errors = extract_text_from_bytes(pdf_bytes)
 
+    non_report_error = detect_non_report_payload(text, payload.content_type)
+    if non_report_error:
+        parsed = ParsedReport(
+            report_id=payload.report_id or cache_key,
+            report_name=payload.report_name,
+            date_sent=payload.date_sent,
+            report_type="other",
+            report_tags=["other"],
+            parameters=[],
+            culture=None,
+            raw_text_preview="",
+            errors=[non_report_error],
+        ).model_dump()
+        set_cached(cache_key, parsed)
+        return parsed
+
+    report_tags = infer_report_tags(payload.report_name, text)
     report_type = infer_report_type(payload.report_name, text)
     parameters = parse_lab_parameters(text, payload.date_sent)
-    culture = parse_culture(text) if report_type == "culture" else None
+    culture = parse_culture(text) if "culture" in report_tags else None
     preview = deidentify(text)[:500]
 
     parsed = ParsedReport(
@@ -57,6 +74,7 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
         report_name=payload.report_name,
         date_sent=payload.date_sent,
         report_type=report_type,
+        report_tags=report_tags,
         parameters=parameters,
         culture=culture,
         raw_text_preview=preview,
@@ -70,7 +88,7 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
 def summarize(payload: SummarizeRequest) -> dict[str, Any]:
     reports = [coerce_report(report) for report in payload.reports]
     if payload.mode == "cultures_only":
-        selected = [r for r in reports if r.get("report_type") == "culture"]
+        selected = [r for r in reports if has_tag(r, "culture")]
     elif payload.mode == "fast":
         selected = select_fast_reports(reports)
     else:
@@ -113,15 +131,20 @@ def select_fast_reports(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        report_type = report.get("report_type", "other")
+        report_tags = report.get("report_tags") or [report.get("report_type", "other")]
         name = report.get("report_name", "").lower()
-        if report_type == "culture":
+        if "culture" in report_tags:
             selected.append(report)
         elif any(marker in name for marker in ("crp", "procalcitonin")):
             selected.append(report)
-        elif counts[report_type] < limits.get(report_type, 0):
-            selected.append(report)
-            counts[report_type] += 1
+        else:
+            included = False
+            for tag in report_tags:
+                if counts[tag] < limits.get(tag, 0):
+                    included = True
+                    counts[tag] += 1
+            if included:
+                selected.append(report)
     return selected
 
 
@@ -134,6 +157,7 @@ def source_report_rows(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
                 "date_sent": report.get("date_sent", ""),
                 "report_name": report.get("report_name", ""),
                 "type": report.get("report_type", "other"),
+                "tags": ", ".join(report.get("report_tags") or [report.get("report_type", "other")]),
                 "status": "cached" if report.get("cached") else ("error" if errors else "parsed"),
                 "notes": "; ".join(errors),
             }
@@ -246,6 +270,10 @@ def format_sensitivity(sensitivity: dict[str, list[str]]) -> str:
         if values:
             parts.append(f"{label}: {', '.join(values)}")
     return "; ".join(parts) if parts else "See report; sensitivity parsing incomplete"
+
+
+def has_tag(report: dict[str, Any], tag: str) -> bool:
+    return tag in (report.get("report_tags") or [report.get("report_type", "other")])
 
 
 def date_key(value: str) -> datetime:

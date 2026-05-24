@@ -2,6 +2,14 @@
 
 Local FastAPI parser service for the NIMS Fast Summary Chrome extension.
 
+V2 safety behavior:
+
+- Raw PDFs are parsed in memory only.
+- `row-1`/`row-2` style generated IDs are not trusted as cache keys.
+- Parsed JSON cache uses report bytes when available.
+- Login/session-expired HTML is rejected instead of parsed.
+- AI interpretation remains disabled/rule-based for the MVP.
+
 ## Run
 
 ```powershell

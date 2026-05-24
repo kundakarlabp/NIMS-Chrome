@@ -11,7 +11,7 @@
   "content_scripts": [
     {
       "matches": ["https://nimsts.edu.in/AHIMSG5/*"],
-      "js": ["src/contentScript.js"],
+      "js": ["src/contentUtils.js", "src/contentScript.js"],
       "css": ["src/styles.css"],
       "run_at": "document_idle"
     }

@@ -24,6 +24,7 @@ class ParseReportRequest(BaseModel):
     source_url: str = ""
     pdf_base64: str = ""
     text: str | None = None
+    content_type: str = ""
 
 
 class Parameter(BaseModel):
@@ -55,6 +56,7 @@ class ParsedReport(BaseModel):
     report_name: str = ""
     date_sent: str = ""
     report_type: ReportType = "other"
+    report_tags: list[str] = Field(default_factory=list)
     parameters: list[Parameter] = Field(default_factory=list)
     culture: CultureResult | None = None
     raw_text_preview: str = ""

@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Delayed Mock NIMS Report List</title>
+    <link rel="stylesheet" href="../src/styles.css">
+  </head>
+  <body>
+    <h1>CR No Wise Result Report Printing New</h1>
+    <div id="target">Waiting for mock AJAX table...</div>
+    <script src="../src/contentUtils.js"></script>
+    <script src="../src/contentScript.js"></script>
+    <script>
+      setTimeout(() => {
+        document.getElementById("target").innerHTML = `
+          <table>
+            <tbody>
+              <tr>
+                <td>19-May-2026</td>
+                <td>Biochemistry</td>
+                <td>RFT Electrolytes LFT</td>
+                <td><button onclick="window.open('/AHIMSG5/mock/report?id=LAB12345')">View Report</button></td>
+              </tr>
+            </tbody>
+          </table>
+        `;
+      }, 700);
+    </script>
+  </body>
+</html>

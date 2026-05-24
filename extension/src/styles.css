@@ -97,6 +97,17 @@ body.nims-sidepanel {
   font-size: 12px;
 }
 
+.safety-warning {
+  padding: 8px;
+  margin: 8px 0;
+  border: 1px solid #b45309;
+  border-radius: 6px;
+  background: #fff7ed;
+  color: #7c2d12;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 section {
   margin: 14px 0;
 }
