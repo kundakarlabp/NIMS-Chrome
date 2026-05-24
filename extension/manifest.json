@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "NIMS Fast Summary",
+  "version": "0.1.0",
+  "description": "Local fast summary tables for NIMS HIS reports after manual login.",
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
+  "host_permissions": [
+    "https://nimsts.edu.in/AHIMSG5/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://nimsts.edu.in/AHIMSG5/*"],
+      "js": ["src/contentScript.js"],
+      "css": ["src/styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel.html"
+  },
+  "action": {
+    "default_title": "NIMS Fast Summary"
+  }
+}
+

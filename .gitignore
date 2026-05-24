@@ -1,0 +1,14 @@
+.env
+cache.db
+helper/cache.db
+*.pdf
+sample_real_reports/
+logs/
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+dist/
+build/
+node_modules/
+
