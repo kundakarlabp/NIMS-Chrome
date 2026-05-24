@@ -32,10 +32,18 @@
         href: urlInfo.href,
         onclick: urlInfo.onclick,
         source_url: urlInfo.source_url,
+        onclick_present: urlInfo.onclick_present,
+        onclick_function_name: urlInfo.onclick_function_name,
+        onclick_arg_count: urlInfo.onclick_arg_count,
+        onclick_parse_status: urlInfo.onclick_parse_status,
+        global_form_present: urlInfo.global_form_present,
+        form_method: urlInfo.form_method,
         post_workflow: urlInfo.post_workflow,
+        unsupported_post_only: urlInfo.unsupported_post_only,
+        nearby_input_names: urlInfo.nearby_input_names,
         report_id: reportId,
         raw_row_text: rowText,
-        status: urlInfo.post_workflow ? "POST workflow needs live-site mapping" : "ready"
+        status: urlInfo.unsupported_post_only ? "NIMS onclick/form workflow needs specific mapping" : "ready"
       });
     });
     return sortRowsLatestFirst(rows);
@@ -47,12 +55,62 @@
     const absoluteHref = href ? resolveUrl(href, baseUrl) : "";
     const clickNode = Array.from(row.querySelectorAll("[onclick]"))[0];
     const onclick = clickNode ? clickNode.getAttribute("onclick") || "" : "";
+    const form = row.closest("form") || row.querySelector("form");
+    const formMethod = form ? String(form.getAttribute("method") || "").toLowerCase() : "";
+    const sourceUrl = absoluteHref || parseUrlFromOnclick(onclick, baseUrl);
+    const onclickInfo = analyzeOnclick(onclick, sourceUrl);
+    const unsupportedPostOnly = Boolean(!absoluteHref && !onclick && formMethod === "post" && row.querySelector("input[type='submit'], button[type='submit']"));
     return {
       href: absoluteHref,
       onclick,
-      source_url: absoluteHref || parseUrlFromOnclick(onclick, baseUrl),
-      post_workflow: detectPostWorkflow(row)
+      source_url: sourceUrl,
+      onclick_present: Boolean(onclick),
+      onclick_function_name: onclickInfo.functionName,
+      onclick_arg_count: onclickInfo.argCount,
+      onclick_parse_status: onclickInfo.parseStatus,
+      global_form_present: Boolean(form),
+      form_method: formMethod,
+      post_workflow: false,
+      unsupported_post_only: unsupportedPostOnly,
+      nearby_input_names: nearbyInputNames(row)
     };
+  }
+
+  function analyzeOnclick(onclick, sourceUrl) {
+    if (!onclick) return { functionName: "", argCount: 0, parseStatus: "none" };
+    if (sourceUrl) return { ...parseFunctionCall(onclick), parseStatus: "url_parsed" };
+    const parsed = parseFunctionCall(onclick);
+    if (parsed.functionName) return { ...parsed, parseStatus: "function_detected" };
+    return { ...parsed, parseStatus: "needs_mapping" };
+  }
+
+  function parseFunctionCall(onclick) {
+    const match = String(onclick || "").match(/([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)/);
+    if (!match) return { functionName: "", argCount: 0 };
+    return { functionName: match[1], argCount: splitArgs(match[2]).length };
+  }
+
+  function splitArgs(argText) {
+    const args = [];
+    let current = "";
+    let quote = "";
+    for (let i = 0; i < String(argText || "").length; i += 1) {
+      const char = argText[i];
+      if (quote) {
+        current += char;
+        if (char === quote && argText[i - 1] !== "\\") quote = "";
+      } else if (char === "'" || char === '"') {
+        quote = char;
+        current += char;
+      } else if (char === ",") {
+        args.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) args.push(current.trim());
+    return args;
   }
 
   function parseUrlFromOnclick(onclick, baseUrl) {
@@ -69,10 +127,24 @@
   }
 
   function detectPostWorkflow(row) {
+    const clickNode = Array.from(row.querySelectorAll("[onclick]"))[0];
+    const onclick = clickNode ? clickNode.getAttribute("onclick") || "" : "";
+    if (onclick) return false;
     const form = row.closest("form") || row.querySelector("form");
     if (form && String(form.getAttribute("method") || "").toLowerCase() === "post") return true;
     const text = `${row.outerHTML || ""} ${row.getAttribute("onclick") || ""}`;
     return /\bsubmit\s*\(|__doPostBack|method\s*=\s*["']?post/i.test(text);
+  }
+
+  function nearbyInputNames(row) {
+    const form = row.closest("form");
+    const scope = form || row;
+    return unique(
+      Array.from(scope.querySelectorAll("input, select, textarea"))
+        .map((input) => input.getAttribute("name") || input.getAttribute("id") || "")
+        .filter(Boolean)
+        .slice(0, 20)
+    );
   }
 
   function selectRowsForMode(rows, mode) {
@@ -130,6 +202,15 @@
         report_type: row.report_type || firstReportType(row.report_tags || []),
         report_tags: row.report_tags || [],
         status: row.status || "",
+        onclick_present: Boolean(row.onclick_present),
+        onclick_function_name: row.onclick_function_name || "",
+        onclick_arg_count: row.onclick_arg_count || 0,
+        onclick_parse_status: row.onclick_parse_status || "",
+        global_form_present: Boolean(row.global_form_present),
+        form_method: row.form_method || "",
+        post_workflow: Boolean(row.post_workflow),
+        unsupported_post_only: Boolean(row.unsupported_post_only),
+        nearby_input_names: row.nearby_input_names || [],
         report_id: isSafeReportId(row.report_id) ? row.report_id : "",
         errors: row.errors || []
       };
@@ -303,6 +384,10 @@
     extractUrlFromNode,
     parseUrlFromOnclick,
     detectPostWorkflow,
+    analyzeOnclick,
+    parseFunctionCall,
+    splitArgs,
+    nearbyInputNames,
     selectRowsForMode,
     sanitizeState,
     sanitizeRows,

@@ -55,7 +55,7 @@ def test_url_extraction_date_sorting_tags_and_sanitization() -> None:
     serialized = json.dumps(out["sanitized"])
     assert "raw_row_text" not in serialized
     assert "source_url" not in serialized
-    assert "onclick" not in serialized
+    assert "secret()" not in serialized
     assert "https://secret" not in serialized
     assert "row-1" not in serialized
 
@@ -90,11 +90,32 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
 def test_side_panel_buttons_and_frame_execution_present() -> None:
     html = (ROOT / "extension" / "src" / "sidepanel.html").read_text(encoding="utf-8")
     js = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
-    for button_id in ("runFast", "runCultures", "runFull", "diagnosePage"):
+    for button_id in ("runFast", "runCultures", "runFull", "diagnosePage", "copyMappingDiagnostics"):
         assert f'id="{button_id}"' in html
     assert "allFrames: true" in js
     assert "frameIds: [best.frameId]" in js
     assert "collectFrameDiagnostic" in js
+    assert "NIMS_HELPER_HEALTH" in js
+    assert "Helper status" in js
+    assert "copySafeMappingDiagnostics" in js
+
+
+def test_background_helper_routes_and_content_script_avoids_localhost_fetch() -> None:
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    content_script = (ROOT / "extension" / "src" / "contentScript.js").read_text(encoding="utf-8")
+    for message_type in (
+        "NIMS_HELPER_HEALTH",
+        "NIMS_HELPER_PARSE_REPORT",
+        "NIMS_HELPER_SUMMARIZE",
+        "NIMS_HELPER_CLEAR_CACHE",
+    ):
+        assert message_type in background
+    assert "async function callHelper" in background
+    assert "Local helper is not reachable at 127.0.0.1:8765" in background
+    assert "NIMS_HELPER_PARSE_REPORT" in content_script
+    assert "NIMS_HELPER_SUMMARIZE" in content_script
+    assert "http://127.0.0.1:8765" not in content_script
+    assert "Failed to fetch" not in content_script
 
 
 def test_diagnostic_sanitization_and_best_frame_selection() -> None:
@@ -148,3 +169,55 @@ def test_diagnostic_sanitization_and_best_frame_selection() -> None:
     assert "source_url" not in serialized
     assert "CR No: 123456" not in serialized
     assert "Patient Name: John Doe" not in serialized
+
+
+def test_global_post_form_with_onclick_is_not_unsupported_and_sanitized() -> None:
+    script = r"""
+    const utils = require('./extension/src/contentUtils.js');
+    const form = {
+      getAttribute: (name) => name === 'method' ? 'post' : '',
+      querySelectorAll: () => [
+        { getAttribute: (name) => name === 'name' ? 'hmode' : 'SECRET_VALUE' },
+        { getAttribute: (name) => name === 'name' ? 'selectedLabNo' : 'LAB_SECRET' }
+      ]
+    };
+    const clickNode = { getAttribute: () => "viewReport('123456','LAB-SECRET-99','abc')" };
+    const row = {
+      querySelectorAll: (selector) => selector === '[onclick]' ? [clickNode] : [],
+      querySelector: () => null,
+      closest: () => form,
+      outerHTML: '<tr><input type=\"hidden\" name=\"selectedLabNo\" value=\"LAB_SECRET\"></tr>',
+      getAttribute: () => ''
+    };
+    const info = utils.extractUrlFromNode(row, 'https://nimsts.edu.in/HISInvestigationG5/page');
+    const sanitized = utils.sanitizeState({
+      mode: 'fast',
+      rows: [{
+        date_sent: '19-May-2026',
+        report_name: 'CBC',
+        onclick: "viewReport('123456','LAB-SECRET-99','abc')",
+        raw_row_text: 'Patient Name Test CR No: 123456',
+        ...info
+      }],
+      selected: [],
+      parsedReports: [],
+      result: null
+    }, false);
+    console.log(JSON.stringify({ info, sanitized }));
+    """
+    out = run_node(script)
+    serialized = json.dumps(out["sanitized"])
+    assert out["info"]["onclick_present"] is True
+    assert out["info"]["global_form_present"] is True
+    assert out["info"]["form_method"] == "post"
+    assert out["info"]["post_workflow"] is False
+    assert out["info"]["unsupported_post_only"] is False
+    assert out["info"]["onclick_function_name"] == "viewReport"
+    assert out["info"]["onclick_arg_count"] == 3
+    assert out["info"]["onclick_parse_status"] == "function_detected"
+    assert "123456" not in serialized
+    assert "LAB-SECRET-99" not in serialized
+    assert "LAB_SECRET" not in serialized
+    assert "raw_row_text" not in serialized
+    assert "hmode" in serialized
+    assert "selectedLabNo" in serialized

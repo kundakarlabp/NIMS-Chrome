@@ -19,12 +19,13 @@ function bindActions() {
   document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("cultures_only"));
   document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("full"));
   document.getElementById("diagnosePage").addEventListener("click", diagnosePage);
+  document.getElementById("copyMappingDiagnostics").addEventListener("click", copySafeMappingDiagnostics);
   document.getElementById("copySummary").addEventListener("click", copySummary);
   document.getElementById("exportCsv").addEventListener("click", () => download("nims-summary.csv", toCsv(latestState), "text/csv"));
   document.getElementById("exportJson").addEventListener("click", () => download("nims-summary.json", JSON.stringify(latestState || {}, null, 2), "application/json"));
   document.getElementById("clearCache").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ type: "NIMS_CLEAR_CACHE" }, () => {
-      document.getElementById("status").textContent = "Cache cleared";
+    chrome.runtime.sendMessage({ type: "NIMS_HELPER_CLEAR_CACHE" }, (response) => {
+      document.getElementById("status").textContent = response && response.ok ? "Cache cleared" : ((response && response.error) || "Cache clear failed");
     });
   });
   document.getElementById("retryFailed").addEventListener("click", async () => {
@@ -86,9 +87,12 @@ async function prepareAndDiagnoseActiveTab() {
     target: { tabId: tab.id, allFrames: true },
     func: collectFrameDiagnostic
   });
+  const helperHealth = await chrome.runtime.sendMessage({ type: "NIMS_HELPER_HEALTH" });
   const frames = injections.map((item) => ({ frameId: item.frameId, ...(item.result || {}) }));
   const diagnostic = sidepanelUtils.sanitizeDiagnosticResult({
     activeTabUrl: tab.url || "",
+    helperStatus: helperHealth && helperHealth.ok ? "ok" : "failed",
+    helperError: helperHealth && helperHealth.ok ? "" : ((helperHealth && helperHealth.error) || "Local helper health check failed"),
     totalFramesChecked: frames.length,
     frames
   });
@@ -109,13 +113,20 @@ function collectFrameDiagnostic() {
     viewReportRows: Array.from(document.querySelectorAll("tr")).filter((row) => /view\s*report/i.test(row.innerText || row.textContent || "")).length,
     hasSummary: Boolean(window.NimsFastSummary),
     hasUtils: Boolean(window.NimsFastSummaryUtils),
-    rowPreviews: rows.slice(0, 5).map((row) => ({
+    rowPreviews: rows.slice(0, 10).map((row) => ({
       date_sent: row.date_sent || "",
       report_name: row.report_name || "",
       department: row.department || "",
       hasHref: Boolean(row.href),
       hasOnclick: Boolean(row.onclick),
-      postWorkflowSuspected: Boolean(row.post_workflow)
+      onclick_function_name: row.onclick_function_name || "",
+      onclick_arg_count: row.onclick_arg_count || 0,
+      onclick_parse_status: row.onclick_parse_status || "",
+      global_form_present: Boolean(row.global_form_present),
+      form_method: row.form_method || "",
+      postWorkflowSuspected: Boolean(row.post_workflow),
+      unsupported_post_only: Boolean(row.unsupported_post_only),
+      nearby_input_names: row.nearby_input_names || []
     }))
   };
 }
@@ -164,18 +175,20 @@ function renderDiagnostics(diagnostic) {
     frame.hasUtils ? "yes" : "no"
   ]);
   const best = sidepanelUtils.selectBestFrameDiagnostic(frames);
-  const previews = best && best.rowPreviews ? best.rowPreviews : [];
+  const previews = best && best.rowPreviews ? best.rowPreviews.slice(0, 5) : [];
   target.innerHTML = `
     <table><tbody>
       <tr><th>Active tab</th><td>${escapeHtml(diagnostic.activeTabUrl || "")}</td></tr>
+      <tr><th>Helper status</th><td>${escapeHtml(diagnostic.helperStatus || "")}</td></tr>
+      <tr><th>Helper error</th><td>${escapeHtml(diagnostic.helperError || "")}</td></tr>
       <tr><th>Total frames checked</th><td>${escapeHtml(diagnostic.totalFramesChecked || 0)}</td></tr>
       <tr><th>Best frame selected</th><td>${escapeHtml(diagnostic.bestFrameId || "")} ${escapeHtml(diagnostic.bestFrameUrl || "")}</td></tr>
     </tbody></table>
     <h3>Frames</h3>
     ${frameRows.length ? table(["Frame ID", "URL", "Title", "TR count", "View Report rows", "Summary API", "Utils API"], frameRows) : `<div class="empty">No frames checked.</div>`}
     <h3>Best Frame Row Previews</h3>
-    ${previews.length ? table(["Date sent", "Report name", "Department/lab", "Href", "Onclick", "POST suspected"], previews.map((row) => [
-      row.date_sent, row.report_name, row.department, row.hasHref ? "yes" : "no", row.hasOnclick ? "yes" : "no", row.postWorkflowSuspected ? "yes" : "no"
+    ${previews.length ? table(["Date sent", "Report name", "Department/lab", "Href", "Onclick", "Function", "Args", "Parse", "Global form", "Method", "Unsupported POST"], previews.map((row) => [
+      row.date_sent, row.report_name, row.department, row.hasHref ? "yes" : "no", row.hasOnclick ? "yes" : "no", row.onclick_function_name, row.onclick_arg_count, row.onclick_parse_status, row.global_form_present ? "yes" : "no", row.form_method, row.unsupported_post_only ? "yes" : "no"
     ])) : `<div class="empty">No sanitized row previews.</div>`}
   `;
 }
@@ -243,6 +256,40 @@ function table(headers, rows) {
 
 function copySummary() {
   navigator.clipboard.writeText(toCopyText(latestState));
+}
+
+function copySafeMappingDiagnostics() {
+  navigator.clipboard.writeText(toSafeMappingDiagnosticsText(latestDiagnostic));
+}
+
+function toSafeMappingDiagnosticsText(diagnostic) {
+  if (!diagnostic) return "No diagnosis yet.";
+  const best = sidepanelUtils.selectBestFrameDiagnostic(diagnostic.frames || []);
+  const lines = [
+    "NIMS Fast Summary safe mapping diagnostics",
+    `Best frame: ${best ? best.url : ""}`,
+    `View Report rows: ${best ? best.viewReportRows : 0}`,
+    `Helper status: ${diagnostic.helperStatus || ""}`,
+    ""
+  ];
+  const previews = best && best.rowPreviews ? best.rowPreviews.slice(0, 10) : [];
+  previews.forEach((row, index) => {
+    lines.push(`Row ${index + 1}`);
+    lines.push(`Date: ${row.date_sent || ""}`);
+    lines.push(`Report: ${row.report_name || ""}`);
+    lines.push(`Department: ${row.department || ""}`);
+    lines.push(`Href: ${row.hasHref ? "yes" : "no"}`);
+    lines.push(`Onclick: ${row.hasOnclick ? "yes" : "no"}`);
+    lines.push(`Onclick function: ${row.onclick_function_name || ""}`);
+    lines.push(`Onclick arg count: ${row.onclick_arg_count || 0}`);
+    lines.push(`Onclick parse status: ${row.onclick_parse_status || ""}`);
+    lines.push(`Global form present: ${row.global_form_present ? "yes" : "no"}`);
+    lines.push(`Form method: ${row.form_method || ""}`);
+    lines.push(`Unsupported POST only: ${row.unsupported_post_only ? "yes" : "no"}`);
+    lines.push(`Nearby input names: ${(row.nearby_input_names || []).join(", ")}`);
+    lines.push("");
+  });
+  return lines.join("\n");
 }
 
 function toCsv(state) {
