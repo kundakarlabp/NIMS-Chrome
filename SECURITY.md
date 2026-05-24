@@ -10,6 +10,7 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Raw PDFs are parsed in memory and are not permanently stored.
 - Cache keys do not trust generated row indexes such as `row-1` or `row-2`; PDF/report bytes are preferred, then real report identifiers combined with date and report name, then URL/date/name metadata only when bytes are unavailable.
 - Chrome storage and JSON export are sanitized by default and exclude raw row text, full report URLs, onclick code, and raw text previews.
+- The side-panel `Diagnose Page` feature reports only sanitized iframe host/path, row counts, API availability, and minimal row previews; it strips query strings and does not expose raw row text, onclick code, cookies, tokens, or credentials.
 - Debug mode is off by default. If enabled for live-site mapping, the UI warns: `Debug mode may contain PHI. Do not export/share.`
 - Login/session-expired HTML is treated as a failed fetch and is not parsed as a clinical report.
 - Do not commit real patient data, credentials, screenshots, exported reports, or raw PDFs.

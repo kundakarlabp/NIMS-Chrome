@@ -68,3 +68,83 @@ def test_dynamic_toolbar_scaffolding_present() -> None:
     assert "nims-fast-summary-toolbar" in content_script
     assert "setTimeout" in delayed_page
     assert "View Report" in delayed_page
+
+
+def test_manifest_includes_hisinvestigation_all_frames() -> None:
+    manifest = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    expected_hosts = {
+        "https://nimsts.edu.in/AHIMSG5/*",
+        "https://www.nimsts.edu.in/AHIMSG5/*",
+        "https://nimsts.edu.in/HISInvestigationG5/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*",
+        "http://127.0.0.1:8765/*",
+    }
+    assert expected_hosts.issubset(set(manifest["host_permissions"]))
+    script = manifest["content_scripts"][0]
+    assert script["all_frames"] is True
+    assert script["js"] == ["src/contentUtils.js", "src/contentScript.js"]
+    assert script["run_at"] == "document_idle"
+    assert expected_hosts - {"http://127.0.0.1:8765/*"} <= set(script["matches"])
+
+
+def test_side_panel_buttons_and_frame_execution_present() -> None:
+    html = (ROOT / "extension" / "src" / "sidepanel.html").read_text(encoding="utf-8")
+    js = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
+    for button_id in ("runFast", "runCultures", "runFull", "diagnosePage"):
+        assert f'id="{button_id}"' in html
+    assert "allFrames: true" in js
+    assert "frameIds: [best.frameId]" in js
+    assert "collectFrameDiagnostic" in js
+
+
+def test_diagnostic_sanitization_and_best_frame_selection() -> None:
+    script = r"""
+    const utils = require('./extension/src/sidepanelUtils.js');
+    const diag = utils.sanitizeDiagnosticResult({
+      activeTabUrl: 'https://www.nimsts.edu.in/AHIMSG5/page?crno=123456&token=secret',
+      frames: [
+        {
+          frameId: 1,
+          url: 'https://www.nimsts.edu.in/AHIMSG5/menu?token=secret',
+          title: 'Menu Patient Name: John Doe CR No: 123456',
+          totalTr: 2,
+          viewReportRows: 0,
+          raw_row_text: 'Patient Name: John Doe CR No: 123456',
+          onclick: 'openReport(secret)',
+          source_url: 'https://secret/report?token=secret'
+        },
+        {
+          frameId: 7,
+          url: 'https://www.nimsts.edu.in/HISInvestigationG5/report?crno=123456&token=secret',
+          title: 'Cr No Wise Result Report Printing New_iframe',
+          totalTr: 20,
+          viewReportRows: 9,
+          rowPreviews: [
+            {
+              date_sent: '19-May-2026',
+              report_name: 'CBC Patient Name: John Doe',
+              department: 'Biochemistry',
+              hasHref: true,
+              hasOnclick: true,
+              postWorkflowSuspected: false,
+              raw_row_text: 'CR No: 123456',
+              onclick: 'secret()'
+            }
+          ]
+        }
+      ]
+    });
+    const best = utils.selectBestFrameDiagnostic(diag.frames);
+    console.log(JSON.stringify({ diag, best }));
+    """
+    out = run_node(script)
+    serialized = json.dumps(out)
+    assert out["diag"]["activeTabUrl"] == "www.nimsts.edu.in/AHIMSG5/page"
+    assert out["diag"]["frames"][1]["url"] == "www.nimsts.edu.in/HISInvestigationG5/report"
+    assert out["best"]["frameId"] == 7
+    assert "token=secret" not in serialized
+    assert "raw_row_text" not in serialized
+    assert "onclick" not in serialized
+    assert "source_url" not in serialized
+    assert "CR No: 123456" not in serialized
+    assert "Patient Name: John Doe" not in serialized

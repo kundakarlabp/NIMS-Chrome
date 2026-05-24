@@ -1,4 +1,6 @@
 let latestState = null;
+let latestDiagnostic = null;
+const sidepanelUtils = window.NimsSidepanelUtils;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindActions();
@@ -13,6 +15,10 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function bindActions() {
+  document.getElementById("runFast").addEventListener("click", () => runSummaryFromBestFrame("fast"));
+  document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("cultures_only"));
+  document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("full"));
+  document.getElementById("diagnosePage").addEventListener("click", diagnosePage);
   document.getElementById("copySummary").addEventListener("click", copySummary);
   document.getElementById("exportCsv").addEventListener("click", () => download("nims-summary.csv", toCsv(latestState), "text/csv"));
   document.getElementById("exportJson").addEventListener("click", () => download("nims-summary.json", JSON.stringify(latestState || {}, null, 2), "application/json"));
@@ -22,14 +28,96 @@ function bindActions() {
     });
   });
   document.getElementById("retryFailed").addEventListener("click", async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.id) {
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => window.NimsFastSummary && window.NimsFastSummary.runSummary("full")
-      });
-    }
+    await runSummaryFromBestFrame("full");
   });
+}
+
+async function runSummaryFromBestFrame(mode) {
+  const status = document.getElementById("status");
+  try {
+    status.textContent = "Checking NIMS frames";
+    const { tab, diagnostic } = await prepareAndDiagnoseActiveTab();
+    renderDiagnostics(diagnostic);
+    const best = sidepanelUtils.selectBestFrameDiagnostic(diagnostic.frames);
+    if (!best || !best.hasSummary || Number(best.viewReportRows || 0) <= 0) {
+      status.textContent = "No frame with View Report rows found";
+      return;
+    }
+    status.textContent = `Running ${mode} in frame ${best.frameId}`;
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [best.frameId] },
+      func: (summaryMode) => window.NimsFastSummary && window.NimsFastSummary.runSummary(summaryMode),
+      args: [mode]
+    });
+  } catch (error) {
+    status.textContent = `Error: ${error.message}`;
+  }
+}
+
+async function diagnosePage() {
+  const status = document.getElementById("status");
+  try {
+    status.textContent = "Diagnosing NIMS frames";
+    const { diagnostic } = await prepareAndDiagnoseActiveTab();
+    renderDiagnostics(diagnostic);
+    status.textContent = "Diagnosis complete";
+  } catch (error) {
+    status.textContent = `Error: ${error.message}`;
+  }
+}
+
+async function prepareAndDiagnoseActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) throw new Error("No active tab found");
+  if (!sidepanelUtils.isAllowedNimsUrl(tab.url || "")) {
+    throw new Error("Open a NIMS page before running summary");
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    files: ["src/contentUtils.js"]
+  }).catch(() => {});
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    files: ["src/contentScript.js"]
+  }).catch(() => {});
+
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    func: collectFrameDiagnostic
+  });
+  const frames = injections.map((item) => ({ frameId: item.frameId, ...(item.result || {}) }));
+  const diagnostic = sidepanelUtils.sanitizeDiagnosticResult({
+    activeTabUrl: tab.url || "",
+    totalFramesChecked: frames.length,
+    frames
+  });
+  const best = sidepanelUtils.selectBestFrameDiagnostic(diagnostic.frames);
+  diagnostic.bestFrameId = best ? best.frameId : "";
+  diagnostic.bestFrameUrl = best ? best.url : "";
+  latestDiagnostic = diagnostic;
+  return { tab, diagnostic };
+}
+
+function collectFrameDiagnostic() {
+  const utils = window.NimsFastSummaryUtils;
+  const rows = utils ? utils.extractReportRows(document, location.href) : [];
+  return {
+    url: location.href,
+    title: document.title || "",
+    totalTr: document.querySelectorAll("tr").length,
+    viewReportRows: Array.from(document.querySelectorAll("tr")).filter((row) => /view\s*report/i.test(row.innerText || row.textContent || "")).length,
+    hasSummary: Boolean(window.NimsFastSummary),
+    hasUtils: Boolean(window.NimsFastSummaryUtils),
+    rowPreviews: rows.slice(0, 5).map((row) => ({
+      date_sent: row.date_sent || "",
+      report_name: row.report_name || "",
+      department: row.department || "",
+      hasHref: Boolean(row.href),
+      hasOnclick: Boolean(row.onclick),
+      postWorkflowSuspected: Boolean(row.post_workflow)
+    }))
+  };
 }
 
 function render(state, progress) {
@@ -56,6 +144,40 @@ function render(state, progress) {
   renderLabTrends(result.summary.lab_trend_table || { columns: [], rows: [] });
   renderCultures(result.summary.culture_table || []);
   renderInterpretation(result.summary.interpretation || []);
+}
+
+function renderDiagnostics(diagnostic) {
+  latestDiagnostic = diagnostic;
+  const target = document.getElementById("diagnostics");
+  if (!diagnostic) {
+    target.innerHTML = `<div class="empty">No diagnosis yet.</div>`;
+    return;
+  }
+  const frames = diagnostic.frames || [];
+  const frameRows = frames.map((frame) => [
+    frame.frameId,
+    frame.url,
+    frame.title,
+    frame.totalTr,
+    frame.viewReportRows,
+    frame.hasSummary ? "yes" : "no",
+    frame.hasUtils ? "yes" : "no"
+  ]);
+  const best = sidepanelUtils.selectBestFrameDiagnostic(frames);
+  const previews = best && best.rowPreviews ? best.rowPreviews : [];
+  target.innerHTML = `
+    <table><tbody>
+      <tr><th>Active tab</th><td>${escapeHtml(diagnostic.activeTabUrl || "")}</td></tr>
+      <tr><th>Total frames checked</th><td>${escapeHtml(diagnostic.totalFramesChecked || 0)}</td></tr>
+      <tr><th>Best frame selected</th><td>${escapeHtml(diagnostic.bestFrameId || "")} ${escapeHtml(diagnostic.bestFrameUrl || "")}</td></tr>
+    </tbody></table>
+    <h3>Frames</h3>
+    ${frameRows.length ? table(["Frame ID", "URL", "Title", "TR count", "View Report rows", "Summary API", "Utils API"], frameRows) : `<div class="empty">No frames checked.</div>`}
+    <h3>Best Frame Row Previews</h3>
+    ${previews.length ? table(["Date sent", "Report name", "Department/lab", "Href", "Onclick", "POST suspected"], previews.map((row) => [
+      row.date_sent, row.report_name, row.department, row.hasHref ? "yes" : "no", row.hasOnclick ? "yes" : "no", row.postWorkflowSuspected ? "yes" : "no"
+    ])) : `<div class="empty">No sanitized row previews.</div>`}
+  `;
 }
 
 function renderSourceReports(rows) {

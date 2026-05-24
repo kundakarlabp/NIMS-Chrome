@@ -6,14 +6,23 @@
   "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
   "host_permissions": [
     "https://nimsts.edu.in/AHIMSG5/*",
+    "https://www.nimsts.edu.in/AHIMSG5/*",
+    "https://nimsts.edu.in/HISInvestigationG5/*",
+    "https://www.nimsts.edu.in/HISInvestigationG5/*",
     "http://127.0.0.1:8765/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://nimsts.edu.in/AHIMSG5/*"],
+      "matches": [
+        "https://nimsts.edu.in/AHIMSG5/*",
+        "https://www.nimsts.edu.in/AHIMSG5/*",
+        "https://nimsts.edu.in/HISInvestigationG5/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*"
+      ],
       "js": ["src/contentUtils.js", "src/contentScript.js"],
       "css": ["src/styles.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "background": {
