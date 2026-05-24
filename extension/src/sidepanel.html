@@ -12,6 +12,12 @@
         <h1>NIMS Fast Summary</h1>
       </div>
       <div class="safety-warning">Clinical safety: verify values against source reports before clinical decisions.</div>
+      <div class="mode-actions primary-actions">
+        <button id="runFast">Fast Summary</button>
+        <button id="runCultures">Cultures Only</button>
+        <button id="runFull">Full Summary</button>
+        <button id="diagnosePage">Diagnose Page</button>
+      </div>
       <div class="mode-actions">
         <button id="copySummary">Copy summary</button>
         <button id="exportCsv">Export CSV</button>
@@ -20,6 +26,10 @@
         <button id="retryFailed">Retry failed reports</button>
       </div>
       <div id="status" class="status">Waiting for report list.</div>
+      <section>
+        <h2>Page Diagnosis</h2>
+        <div id="diagnostics" class="empty">No diagnosis yet.</div>
+      </section>
       <section>
         <h2>Summary</h2>
         <div id="summaryHeader" class="empty">No summary yet.</div>
@@ -45,6 +55,7 @@
         <ul id="interpretation"></ul>
       </section>
     </main>
+    <script src="sidepanelUtils.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>
