@@ -54,6 +54,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NIMS_RECORD_DIRECT_TEST") {
+    recordDirectTestResult(message.result).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_GET_DIRECT_DIAGNOSTICS") {
+    getDirectDiagnostics().then(sendResponse);
+    return true;
+  }
+
   if (message.type === "NIMS_HELPER_HEALTH") {
     callHelper("/health").then(sendResponse);
     return true;
@@ -143,7 +153,7 @@ async function discoverDirectMapping(rowPayload, sender) {
     if (!mapping) return { ok: false, error: "Direct fetch mapping failed for this report." };
     privateDirectMapping = mapping.privateMapping;
     await storeDirectMapping(privateDirectMapping, mapping.safeMappingSummary);
-    return { ok: true, summary: mapping.safeMappingSummary };
+    return { ok: true, summary: mapping.safeMappingSummary, diagnostics: mapping.safeDiagnostics };
   } catch {
     return { ok: false, error: "Direct fetch mapping failed for this report." };
   }
@@ -158,6 +168,7 @@ function observePrintReportRequests(tabId, transientArg, observed) {
       chrome.tabs.onCreated.removeListener(onTabCreated);
       chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequest);
       chrome.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
+      chrome.webRequest.onCompleted.removeListener(onCompleted);
       chrome.webNavigation.onCommitted.removeListener(onNavigation);
       resolve(observed);
     }
@@ -170,10 +181,17 @@ function observePrintReportRequests(tabId, transientArg, observed) {
       const candidate = {
         method: details.method || "GET",
         url: details.url,
+        tabId: details.tabId,
+        frameId: details.frameId,
         type: details.type || "",
+        initiator: details.initiator || "",
         formData: details.requestBody && details.requestBody.formData ? details.requestBody.formData : {},
+        queryParamNames: queryParamNames(details.url),
         argMatch: requestContainsArg(details, transientArg),
-        contentType: ""
+        contentType: "",
+        statusCode: 0,
+        responseSize: 0,
+        openedPopup: false
       };
       observed.push(candidate);
       if (candidate.argMatch) setTimeout(done, 400);
@@ -184,14 +202,21 @@ function observePrintReportRequests(tabId, transientArg, observed) {
       const header = (details.responseHeaders || []).find((inner) => /^content-type$/i.test(inner.name));
       if (header) item.contentType = header.value || "";
     }
+    function onCompleted(details) {
+      const item = observed.find((candidate) => candidate.url === details.url);
+      if (!item) return;
+      item.statusCode = details.statusCode || 0;
+      item.responseSize = details.responseSize || 0;
+    }
     function onNavigation(details) {
       if (relatedTabIds.has(details.tabId) && isAllowedNimsUrl(details.url)) {
-        observed.push({ method: "GET", url: details.url, type: "navigation", formData: {}, argMatch: String(details.url).includes(transientArg), contentType: "" });
+        observed.push({ method: "GET", url: details.url, tabId: details.tabId, frameId: details.frameId, type: "navigation", formData: {}, queryParamNames: queryParamNames(details.url), argMatch: String(details.url).includes(transientArg), contentType: "", statusCode: 0, responseSize: 0, openedPopup: details.tabId !== tabId });
       }
     }
     chrome.tabs.onCreated.addListener(onTabCreated);
     chrome.webRequest.onBeforeRequest.addListener(onBeforeRequest, { urls: NIMS_URL_FILTERS }, ["requestBody"]);
     chrome.webRequest.onHeadersReceived.addListener(onHeadersReceived, { urls: NIMS_URL_FILTERS }, ["responseHeaders"]);
+    chrome.webRequest.onCompleted.addListener(onCompleted, { urls: NIMS_URL_FILTERS });
     chrome.webNavigation.onCommitted.addListener(onNavigation);
   });
 }
@@ -216,6 +241,8 @@ function inferDirectMapping(candidates, rowPayload) {
     method,
     origin: parsed.origin,
     pathname: parsed.pathname,
+    queryParamNames: queryParamNames(matched.url),
+    postFieldNames: Object.keys(matched.formData || {}),
     argumentParameterName: "",
     requiredFieldNames: [],
     discoveredAt: new Date().toISOString()
@@ -236,9 +263,16 @@ function inferDirectMapping(candidates, rowPayload) {
   }
   if (!privateMapping.argumentParameterName) return null;
   privateMapping.requiredFieldNames = unique(privateMapping.requiredFieldNames.filter((name) => name !== privateMapping.argumentParameterName));
+  privateMapping.status = "candidate";
+  privateMapping.validated = false;
+  privateMapping.lastClassification = "";
+  privateMapping.discoveredRequests = candidates.map(safeRequestDiagnostic);
+  privateMapping.selectedTestRow = safeSelectedRow(rowPayload.row);
+  privateMapping.safeFormStructure = rowPayload.safe_form_structure || null;
   return {
     privateMapping,
-    safeMappingSummary: safeMappingSummary(privateMapping, "ready")
+    safeMappingSummary: safeMappingSummary(privateMapping, "candidate"),
+    safeDiagnostics: safeDiagnosticsForMapping(privateMapping)
   };
 }
 
@@ -261,18 +295,28 @@ async function fetchReportDirect(rowPayload) {
     const response = await fetch(request.url, request.options);
     const contentType = response.headers.get("content-type") || "";
     const buffer = await response.arrayBuffer();
-    const reportError = await detectDirectReportFailure(buffer, contentType);
-    if (reportError) return { ok: false, error: reportError, status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType };
+    const classified = classifyReportResponse(buffer, contentType, response.status, safeHostPath(response.url));
+    mapping.lastClassification = classified.classification;
+    await storeDirectMapping(mapping, safeMappingSummary(mapping, mapping.status || "candidate"));
+    if (["html_report_viewer", "html_duplicate_report_page"].includes(classified.classification)) {
+      const second = await fetchSecondStageReport(buffer, contentType, response.url);
+      if (second) return second;
+    }
+    const reportError = directFetchErrorForClassification(classified.classification);
+    if (reportError) return { ok: false, error: reportError, status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType, classification: classified.classification, byteLength: classified.byteLength, safeKeywords: classified.safeKeywords };
     if (!response.ok) return { ok: false, error: "Direct fetch mapping failed for this report.", status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType };
     return {
       ok: true,
       status: response.status,
       contentType,
       finalUrlSafeHostPath: safeHostPath(response.url),
+      classification: classified.classification,
+      byteLength: classified.byteLength,
+      safeKeywords: classified.safeKeywords,
       base64: arrayBufferToBase64(buffer)
     };
   } catch {
-    return { ok: false, error: "Direct fetch mapping failed for this report." };
+    return { ok: false, error: "Direct fetch mapping failed for this report.", classification: "fetch_error" };
   }
 }
 
@@ -298,19 +342,213 @@ function buildDirectRequest(mapping, transientArg, fields) {
   return { url: url.href, options: { method: "GET", credentials: "include", redirect: "follow" } };
 }
 
-async function detectDirectReportFailure(buffer, contentType) {
-  if (!buffer || buffer.byteLength === 0) return "Report response was empty.";
+async function fetchSecondStageReport(buffer, contentType, baseUrl) {
   const ctype = (contentType || "").toLowerCase();
-  if (ctype.includes("pdf")) return "";
-  if (ctype.includes("text/html") || ctype.includes("text/plain")) {
-    const text = new TextDecoder("utf-8").decode(buffer.slice(0, 5000)).toLowerCase();
-    if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
-      return "Report response was login/session page.";
+  if (!ctype.includes("text/html")) return null;
+  const html = new TextDecoder("utf-8").decode(buffer.slice(0, 200000));
+  const url = findSecondStageUrl(html, baseUrl);
+  if (!url || !isAllowedNimsUrl(url)) return null;
+  try {
+    const response = await fetch(url, { credentials: "include", redirect: "follow" });
+    const nextContentType = response.headers.get("content-type") || "";
+    const nextBuffer = await response.arrayBuffer();
+    const classified = classifyReportResponse(nextBuffer, nextContentType, response.status, safeHostPath(response.url));
+    const error = directFetchErrorForClassification(classified.classification);
+    if (error) return { ok: false, error, status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType: nextContentType, classification: classified.classification, byteLength: classified.byteLength, safeKeywords: classified.safeKeywords };
+    return {
+      ok: true,
+      status: response.status,
+      contentType: nextContentType,
+      finalUrlSafeHostPath: safeHostPath(response.url),
+      classification: classified.classification,
+      byteLength: classified.byteLength,
+      safeKeywords: classified.safeKeywords,
+      base64: arrayBufferToBase64(nextBuffer)
+    };
+  } catch {
+    return { ok: false, error: "Second-stage report extraction failed.", classification: "fetch_error" };
+  }
+}
+
+function findSecondStageUrl(html, baseUrl) {
+  const patterns = [
+    /<(?:iframe|embed|object)[^>]+(?:src|data)\s*=\s*["']([^"']+)["']/i,
+    /<a[^>]+href\s*=\s*["']([^"']*(?:pdf|report|print)[^"']*)["']/i,
+    /<form[^>]+action\s*=\s*["']([^"']+)["']/i
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) continue;
+    try {
+      return new URL(match[1], baseUrl).href;
+    } catch {
+      return "";
     }
-    if (/\b(hemoglobin|creatinine|culture|bilirubin|platelet|sodium|potassium|report)\b/.test(text)) return "";
-    return "Report response was not PDF or recognizable report.";
   }
   return "";
+}
+
+function classifyReportResponse(buffer, contentType, status, urlHostPath) {
+  const byteLength = buffer ? buffer.byteLength : 0;
+  const ctype = (contentType || "").toLowerCase();
+  const hostPath = String(urlHostPath || "").toLowerCase();
+  if (!buffer || byteLength === 0) return classificationResult("empty_response", byteLength, []);
+  const bytes = new Uint8Array(buffer.slice(0, 5));
+  const startsPdf = bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
+  if (ctype.includes("application/pdf") || startsPdf) return classificationResult("pdf_report", byteLength, ["pdf"]);
+  if (byteLength < 20) return classificationResult("empty_response", byteLength, []);
+  if ([404, 405, 500].includes(Number(status))) return classificationResult("wrong_endpoint", byteLength, []);
+  if (!ctype.includes("text/html") && !ctype.includes("text/plain")) return classificationResult("unsupported_content_type", byteLength, []);
+  const text = new TextDecoder("utf-8").decode(buffer.slice(0, 50000)).toLowerCase();
+  if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
+    return classificationResult("html_login_or_session", byteLength, safeKeywords(text));
+  }
+  if (/invduplicateresultreportprinting|duplicate\s+result\s+report/.test(`${hostPath} ${text}`)) {
+    return classificationResult("html_duplicate_report_page", byteLength, safeKeywords(text));
+  }
+  if (/<(?:iframe|embed|object)\b|pdfviewer|viewer|window\.print|print\s*\(/.test(text)) {
+    return classificationResult("html_report_viewer", byteLength, safeKeywords(text));
+  }
+  if (hasReportValues(text) && !/view\s*report/.test(text)) {
+    return classificationResult("text_report", byteLength, safeKeywords(text));
+  }
+  return classificationResult(ctype.includes("text/html") ? "html_generic_page" : "unsupported_content_type", byteLength, safeKeywords(text));
+}
+
+function hasReportValues(text) {
+  return /\b(hemoglobin|haemoglobin|creatinine|culture|bilirubin|platelet|sodium|potassium|urea|wbc|tlc|report)\b/.test(text)
+    && /\d+(?:\.\d+)?/.test(text);
+}
+
+function classificationResult(classification, byteLength, safeKeywordsList) {
+  return { classification, byteLength, safeKeywords: (safeKeywordsList || []).slice(0, 20) };
+}
+
+function safeKeywords(text) {
+  const allowed = ["pdf", "report", "viewer", "print", "duplicate", "login", "session", "expired", "hemoglobin", "creatinine", "culture", "bilirubin", "platelet", "sodium", "potassium", "urea", "wbc", "tlc", "iframe", "embed", "object"];
+  return allowed.filter((word) => new RegExp(`\\b${word}\\b`, "i").test(text || ""));
+}
+
+function directFetchErrorForClassification(classification) {
+  if (classification === "pdf_report" || classification === "text_report") return "";
+  if (classification === "html_login_or_session") return "Session expired or direct fetch missing session context.";
+  if (classification === "html_report_viewer") return "Direct fetch returned report viewer HTML, not the report PDF. Second-stage PDF extraction needed.";
+  if (classification === "html_duplicate_report_page") return "Direct fetch reached duplicate-report page. Second-stage mapping needed.";
+  if (classification === "empty_response") return "Direct fetch returned empty response.";
+  if (classification === "wrong_endpoint") return "Direct fetch endpoint is not the report endpoint.";
+  if (classification === "unsupported_content_type") return "Direct fetch returned unsupported content type.";
+  if (classification === "fetch_error") return "Direct fetch mapping failed for this report.";
+  return "Direct fetch returned generic HTML page.";
+}
+
+async function detectDirectReportFailure(buffer, contentType) {
+  const classified = classifyReportResponse(buffer, contentType, 200, "");
+  return directFetchErrorForClassification(classified.classification);
+}
+
+async function recordDirectTestResult(result) {
+  const mapping = await getPrivateDirectMapping();
+  if (!mapping) return { ok: false, error: "Direct mapping not discovered. Click Discover Mapping first." };
+  const safe = sanitizeDirectTestResult(result || {});
+  mapping.lastTestDirectFetch = safe;
+  mapping.lastClassification = safe.classification || "";
+  mapping.validated = Boolean(safe.ok && safe.parsed);
+  mapping.status = mapping.validated ? "validated" : "failed";
+  if (mapping.validated) mapping.validatedAt = new Date().toISOString();
+  await storeDirectMapping(mapping, safeMappingSummary(mapping, mapping.status));
+  return { ok: true, summary: safeMappingSummary(mapping, mapping.status) };
+}
+
+function sanitizeDirectTestResult(result) {
+  return {
+    ok: Boolean(result.ok),
+    parsed: Boolean(result.parsed),
+    status: Number(result.status || 0),
+    contentType: result.contentType || "",
+    endpoint: result.finalUrlSafeHostPath || result.endpoint || "",
+    classification: result.classification || "",
+    parameterCount: Number(result.parameterCount || 0),
+    hasCulture: Boolean(result.hasCulture),
+    reportTags: result.reportTags || [],
+    errors: (result.errors || []).slice(0, 5)
+  };
+}
+
+async function getDirectDiagnostics() {
+  const mapping = await getPrivateDirectMapping();
+  if (!mapping) {
+    const data = await chrome.storage.local.get("nimsDirectMappingSummary");
+    return { ok: true, diagnostics: { mappingStatus: (data.nimsDirectMappingSummary && data.nimsDirectMappingSummary.status) || "none" } };
+  }
+  return { ok: true, diagnostics: safeDiagnosticsForMapping(mapping) };
+}
+
+function safeDiagnosticsForMapping(mapping) {
+  return {
+    mappingStatus: mapping.status || "candidate",
+    method: mapping.method || "",
+    endpoint: safeHostPath(`${mapping.origin || ""}${mapping.pathname || ""}`),
+    argumentParameterName: mapping.argumentParameterName || "",
+    queryParamNames: mapping.queryParamNames || [],
+    postFieldNames: mapping.postFieldNames || [],
+    requiredFieldNames: mapping.requiredFieldNames || [],
+    discoveredAt: mapping.discoveredAt || "",
+    validatedAt: mapping.validatedAt || "",
+    lastClassification: mapping.lastClassification || "",
+    selectedTestRow: mapping.selectedTestRow || null,
+    safeFormStructure: mapping.safeFormStructure || null,
+    discoveredRequests: mapping.discoveredRequests || [],
+    lastTestDirectFetch: mapping.lastTestDirectFetch || null
+  };
+}
+
+function safeSelectedRow(row) {
+  return {
+    date_sent: row && row.date_sent || "",
+    report_name: row && row.report_name || "",
+    department: row && row.department || "",
+    onclick_function_name: row && row.onclick_function_name || "",
+    onclick_arg_count: Number(row && row.onclick_arg_count || 0)
+  };
+}
+
+function safeRequestDiagnostic(candidate) {
+  return {
+    method: candidate.method || "",
+    endpoint: safeHostPath(candidate.url || ""),
+    initiator: safeHostPath(candidate.initiator || ""),
+    tabId: Number(candidate.tabId || 0),
+    frameId: Number(candidate.frameId || 0),
+    type: candidate.type || "",
+    statusCode: Number(candidate.statusCode || 0),
+    contentType: candidate.contentType || "",
+    responseSize: Number(candidate.responseSize || 0),
+    queryParamNames: queryParamNames(candidate.url || ""),
+    postFieldNames: Object.keys(candidate.formData || {}),
+    openedPopup: Boolean(candidate.openedPopup),
+    argMatch: Boolean(candidate.argMatch)
+  };
+}
+
+function queryParamNames(url) {
+  try {
+    return Array.from(new URL(url || "").searchParams.keys());
+  } catch {
+    return [];
+  }
+}
+
+/*
+  Test-only export. The service worker is not loaded through CommonJS in Chrome,
+  but static tests can exercise the response classifier without mocking Chrome.
+*/
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    classifyReportResponse,
+    directFetchErrorForClassification,
+    safeRequestDiagnostic,
+    safeMappingSummary
+  };
 }
 
 async function storeDirectMapping(privateMapping, summary) {
@@ -330,9 +568,9 @@ async function getPrivateDirectMapping() {
 
 async function getDirectMappingSummary() {
   const mapping = await getPrivateDirectMapping();
-  if (mapping) return safeMappingSummary(mapping, "ready");
+  if (mapping) return safeMappingSummary(mapping, mapping.status || "candidate");
   const data = await chrome.storage.local.get("nimsDirectMappingSummary");
-  return data.nimsDirectMappingSummary || { status: "failed" };
+  return data.nimsDirectMappingSummary || { status: "none" };
 }
 
 async function clearDirectMapping() {
@@ -349,7 +587,10 @@ function safeMappingSummary(mapping, status) {
     endpoint: safeHostPath(`${mapping.origin || ""}${mapping.pathname || ""}`),
     argumentParameterName: mapping.argumentParameterName || "",
     requiredFieldNames: mapping.requiredFieldNames || [],
-    discoveredAt: mapping.discoveredAt || new Date().toISOString()
+    discoveredAt: mapping.discoveredAt || new Date().toISOString(),
+    validatedAt: mapping.validatedAt || "",
+    lastClassification: mapping.lastClassification || "",
+    lastTestDirectFetch: mapping.lastTestDirectFetch || null
   };
 }
 

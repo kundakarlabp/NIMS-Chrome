@@ -27,6 +27,7 @@ function bindActions() {
   });
   document.getElementById("diagnosePage").addEventListener("click", diagnosePage);
   document.getElementById("copyMappingDiagnostics").addEventListener("click", copySafeMappingDiagnostics);
+  document.getElementById("copyDirectFetchDiagnostics").addEventListener("click", copyDirectFetchDiagnostics);
   document.getElementById("copySummary").addEventListener("click", copySummary);
   document.getElementById("exportCsv").addEventListener("click", () => download("nims-summary.csv", toCsv(latestState), "text/csv"));
   document.getElementById("exportJson").addEventListener("click", () => download("nims-summary.json", JSON.stringify(latestState || {}, null, 2), "application/json"));
@@ -57,7 +58,7 @@ async function discoverMappingFromBestFrame() {
     });
     const response = injections && injections[0] && await injections[0].result;
     status.textContent = response && response.ok
-      ? `Direct mapping ready: ${response.summary.method} ${response.summary.endpoint}`
+      ? `Direct mapping candidate: ${response.summary.method} ${response.summary.endpoint}. Run Test Direct Fetch.`
       : ((response && response.error) || "Direct fetch mapping failed for this report.");
   } catch (error) {
     status.textContent = `Error: ${error.message}`;
@@ -296,6 +297,72 @@ function copySummary() {
 
 function copySafeMappingDiagnostics() {
   navigator.clipboard.writeText(toSafeMappingDiagnosticsText(latestDiagnostic));
+}
+
+async function copyDirectFetchDiagnostics() {
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_GET_DIRECT_DIAGNOSTICS" });
+  const text = toDirectFetchDiagnosticsText(latestDiagnostic, response && response.diagnostics);
+  await navigator.clipboard.writeText(text);
+  document.getElementById("status").textContent = "Direct fetch diagnostics copied";
+}
+
+function toDirectFetchDiagnosticsText(pageDiagnostic, direct) {
+  const best = sidepanelUtils.selectBestFrameDiagnostic((pageDiagnostic && pageDiagnostic.frames) || []);
+  const lines = [
+    "NIMS Fast Summary direct fetch diagnostics",
+    `Active tab: ${pageDiagnostic ? pageDiagnostic.activeTabUrl || "" : ""}`,
+    `Best frame: ${best ? best.url || "" : ""}`,
+    `Helper status: ${pageDiagnostic ? pageDiagnostic.helperStatus || "" : ""}`,
+    `Mapping status: ${direct ? direct.mappingStatus || "none" : "none"}`,
+    `Endpoint: ${direct ? direct.endpoint || "" : ""}`,
+    `Method: ${direct ? direct.method || "" : ""}`,
+    `Argument parameter: ${direct ? direct.argumentParameterName || "" : ""}`,
+    `Query parameter names: ${direct ? (direct.queryParamNames || []).join(", ") : ""}`,
+    `POST field names: ${direct ? (direct.postFieldNames || []).join(", ") : ""}`,
+    `Required field names: ${direct ? (direct.requiredFieldNames || []).join(", ") : ""}`,
+    `Last classification: ${direct ? direct.lastClassification || "" : ""}`,
+    ""
+  ];
+  if (direct && direct.selectedTestRow) {
+    lines.push("Selected test row");
+    lines.push(`Date: ${direct.selectedTestRow.date_sent || ""}`);
+    lines.push(`Report: ${direct.selectedTestRow.report_name || ""}`);
+    lines.push(`Department: ${direct.selectedTestRow.department || ""}`);
+    lines.push(`Function: ${direct.selectedTestRow.onclick_function_name || ""}`);
+    lines.push(`Arg count: ${direct.selectedTestRow.onclick_arg_count || 0}`);
+    lines.push("");
+  }
+  if (direct && direct.safeFormStructure) {
+    lines.push("Current form structure");
+    lines.push(`Method: ${direct.safeFormStructure.form_method || ""}`);
+    lines.push(`Action: ${direct.safeFormStructure.form_action_host_path || ""}`);
+    lines.push(`Field names: ${(direct.safeFormStructure.field_names || []).join(", ")}`);
+    lines.push("");
+  }
+  lines.push("Discovered requests");
+  for (const request of (direct && direct.discoveredRequests) || []) {
+    lines.push([
+      request.method || "",
+      request.endpoint || "",
+      `status=${request.statusCode || 0}`,
+      `type=${request.type || ""}`,
+      `content=${request.contentType || ""}`,
+      `query=[${(request.queryParamNames || []).join(", ")}]`,
+      `post=[${(request.postFieldNames || []).join(", ")}]`,
+      `popup=${request.openedPopup ? "yes" : "no"}`
+    ].join(" | "));
+  }
+  if (direct && direct.lastTestDirectFetch) {
+    lines.push("", "Last test direct fetch");
+    lines.push(`Status: ${direct.lastTestDirectFetch.status || 0}`);
+    lines.push(`Content type: ${direct.lastTestDirectFetch.contentType || ""}`);
+    lines.push(`Classification: ${direct.lastTestDirectFetch.classification || ""}`);
+    lines.push(`Parsed: ${direct.lastTestDirectFetch.parsed ? "yes" : "no"}`);
+    lines.push(`Parameter count: ${direct.lastTestDirectFetch.parameterCount || 0}`);
+    lines.push(`Tags: ${(direct.lastTestDirectFetch.reportTags || []).join(", ")}`);
+    lines.push(`Errors: ${(direct.lastTestDirectFetch.errors || []).join("; ")}`);
+  }
+  return sidepanelUtils.sanitizeDiagnosticText(lines.join("\n"));
 }
 
 function toSafeMappingDiagnosticsText(diagnostic) {
