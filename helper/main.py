@@ -214,7 +214,7 @@ def build_lab_trend_table(reports: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_culture_table(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
+    rows_by_key: dict[str, dict[str, Any]] = {}
     for report in reports:
         for culture in culture_items(report):
             sensitivity = culture.get("sensitivity_summary") or {}
@@ -223,39 +223,35 @@ def build_culture_table(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
             site_specimen = culture.get("site_specimen") or " / ".join(
                 part for part in [culture.get("site", ""), culture.get("specimen", "")] if part
             )
-            rows.append(
-                {
-                    "date_sent": culture.get("date_sent") or report.get("date_sent", ""),
-                    "requisition_date": culture.get("requisition_date", ""),
-                    "collection_date": culture.get("collection_date", ""),
-                    "reporting_date": culture.get("reporting_date", ""),
-                    "culture_no": culture.get("culture_no") or culture.get("culture_number", ""),
-                    "culture_number": culture.get("culture_no") or culture.get("culture_number", ""),
-                    "specimen_no": culture.get("specimen_no", ""),
-                    "sample_processed": culture.get("sample_processed", ""),
-                    "site_specimen": site_specimen,
-                    "culture_type": culture.get("culture_type", ""),
-                    "bottle_set": display_bottle_set(culture.get("bottle_set", "")),
-                    "bottle_set_code": culture.get("bottle_set", ""),
-                    "status": culture.get("report_status", "unknown"),
-                    "report_status": culture.get("report_status", "unknown"),
-                    "result": culture.get("result") or culture.get("result_status", "unknown"),
-                    "growth": culture.get("growth_quantity", ""),
-                    "growth_quantity": culture.get("growth_quantity", ""),
-                    "organism": organism,
-                    "comment": culture.get("comment", ""),
-                    "sensitivity_summary": format_sensitivity(sensitivity),
-                    "susceptible_antibiotics": culture.get("susceptible_antibiotics", []),
-                    "resistant_antibiotics": culture.get("resistant_antibiotics", []),
-                    "intermediate_antibiotics": culture.get("intermediate_antibiotics", []),
-                    "raw_evidence_short": culture.get("raw_evidence_short", ""),
-                }
-            )
-    return sorted(
-        rows,
-        key=lambda r: (date_key(r.get("reporting_date") or r.get("date_sent", "")), r.get("culture_no", ""), r.get("bottle_set_code", "")),
-        reverse=True,
-    )
+            row = {
+                "date_sent": culture.get("date_sent") or report.get("date_sent", ""),
+                "requisition_date": culture.get("requisition_date", ""),
+                "collection_date": culture.get("collection_date", ""),
+                "reporting_date": culture.get("reporting_date", ""),
+                "culture_no": culture.get("culture_no") or culture.get("culture_number", ""),
+                "culture_number": culture.get("culture_no") or culture.get("culture_number", ""),
+                "specimen_no": culture.get("specimen_no", ""),
+                "sample_processed": culture.get("sample_processed", ""),
+                "site_specimen": site_specimen,
+                "culture_type": culture.get("culture_type", ""),
+                "bottle_set": display_bottle_set(culture.get("bottle_set", "")),
+                "bottle_set_code": culture.get("bottle_set", ""),
+                "status": culture.get("report_status", "unknown"),
+                "report_status": culture.get("report_status", "unknown"),
+                "result": culture.get("result") or culture.get("result_status", "unknown"),
+                "growth": culture.get("growth_quantity", ""),
+                "growth_quantity": culture.get("growth_quantity", ""),
+                "organism": organism,
+                "comment": normalize_comment(culture.get("comment", "")),
+                "sensitivity_summary": format_sensitivity(sensitivity),
+                "susceptible_antibiotics": culture.get("susceptible_antibiotics", []),
+                "resistant_antibiotics": culture.get("resistant_antibiotics", []),
+                "intermediate_antibiotics": culture.get("intermediate_antibiotics", []),
+                "raw_evidence_short": normalize_space(culture.get("raw_evidence_short", "")),
+            }
+            row["culture_row_key"] = culture_row_key(row)
+            rows_by_key.setdefault(row["culture_row_key"], row)
+    return sorted(rows_by_key.values(), key=culture_sort_key)
 
 
 def build_interpretation(reports: list[dict[str, Any]]) -> list[str]:
@@ -342,24 +338,109 @@ def microbiology_interpretation(rows: list[dict[str, Any]]) -> list[str]:
             continue
         site = row.get("site_specimen") or "culture"
         date = row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "available date"
+        culture_no = f" {row.get('culture_no')}" if row.get("culture_no") else ""
         growth = f"{row.get('growth')} growth of " if row.get("growth") else "growth of "
         organism = row.get("organism") or "an organism"
-        comment = f"; {row.get('comment')}" if row.get("comment") else ""
-        bullets.append(f"{site} culture on {date}: reported {growth}{organism}{comment}.")
-    blood_no_growth: defaultdict[str, int] = defaultdict(int)
+        sensitivity = row.get("sensitivity_summary", "")
+        sensitivity_note = f"; {sensitivity}" if sensitivity and sensitivity != "No susceptibility table found" else ""
+        comment = comment_sentence_fragment(row.get("comment", ""))
+        bullets.append(f"{site} culture{culture_no} collected {date}: {growth}{organism}{comment}{sensitivity_note}.")
+    blood_groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         if row.get("result") == "no_growth" and "blood" in (row.get("site_specimen", "") + row.get("culture_type", "")).lower():
-            key = row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "available date"
-            blood_no_growth[key] += 1
-    for date, count in blood_no_growth.items():
-        suffix = "report" if count == 1 else "bottle/set reports"
-        bullets.append(f"Blood cultures on {date}: no aerobic growth reported across {count} {suffix}.")
+            key = (
+                row.get("culture_no", ""),
+                row.get("specimen_no", ""),
+                row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "available date",
+                row.get("culture_type", ""),
+            )
+            blood_groups[key].append(row)
+    for (culture_no, specimen_no, collection_date, _culture_type), group_rows in blood_groups.items():
+        statuses = {row.get("status") or row.get("report_status") for row in group_rows}
+        label = "Blood culture"
+        if culture_no:
+            label += f" {culture_no}"
+        if specimen_no:
+            label += f" / specimen {specimen_no}"
+        if "final" in statuses:
+            bullets.append(f"{label} collected {collection_date}: no aerobic growth in all reported bottle/set sections; final reports available.")
+        elif "48_hour" in statuses:
+            bullets.append(f"{label} collected {collection_date}: no aerobic growth reported at 48 hours; final report pending/expected.")
+        else:
+            bullets.append(f"{label} collected {collection_date}: no aerobic growth reported.")
     for row in rows:
         if row.get("result") == "pending":
             site = row.get("site_specimen") or "Culture"
             date = row.get("collection_date") or row.get("date_sent") or ""
             bullets.append(f"{site} culture on {date}: result pending.")
     return bullets[:5]
+
+
+def culture_row_key(row: dict[str, Any]) -> str:
+    key_parts = [
+        row.get("culture_no", ""),
+        row.get("specimen_no", ""),
+        row.get("collection_date", ""),
+        row.get("reporting_date", ""),
+        row.get("culture_type", ""),
+        row.get("bottle_set_code", ""),
+        row.get("report_status") or row.get("status", ""),
+        row.get("result", ""),
+        row.get("organism", ""),
+        row.get("growth_quantity") or row.get("growth", ""),
+    ]
+    return "|".join(normalize_space(part).lower() for part in key_parts)
+
+
+def culture_sort_key(row: dict[str, Any]) -> tuple[int, int, str, str, int, int, int]:
+    collection = date_key(row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "")
+    reporting = date_key(row.get("reporting_date", ""))
+    return (
+        -collection.toordinal(),
+        -((collection.hour * 60) + collection.minute),
+        row.get("culture_no", ""),
+        row.get("specimen_no", ""),
+        bottle_order(row.get("bottle_set_code", "")),
+        status_order(row.get("status") or row.get("report_status", "")),
+        -reporting.toordinal(),
+    )
+
+
+def bottle_order(value: str) -> int:
+    order = {"set_1_bottle_1": 1, "set_1_bottle_2": 2, "set_2_bottle_1": 3, "set_2_bottle_2": 4}
+    return order.get(value or "", 99)
+
+
+def status_order(value: str) -> int:
+    order = {"48_hour": 1, "preliminary": 2, "final": 3, "unknown": 9}
+    return order.get(value or "", 9)
+
+
+def normalize_comment(value: str) -> str:
+    lower = normalize_space(value).lower()
+    if not lower:
+        return ""
+    if "possible colonization/contamination" in lower and "repeat if necessary" in lower:
+        return "Possible colonization/contamination; repeat if necessary."
+    if "colonization or contamination" in lower and "repeat if necessary" in lower:
+        return "Possible colonization/contamination; repeat if necessary."
+    if lower == "repeat if necessary" or lower == "repeat if necessary.":
+        return "Repeat if necessary."
+    return value.strip()
+
+
+def comment_sentence_fragment(value: str) -> str:
+    comment = normalize_comment(value).rstrip(".")
+    if not comment:
+        return ""
+    lower = comment.lower()
+    if "possible colonization/contamination" in lower and "repeat if necessary" in lower:
+        return "; report comments possible colonization/contamination and recommends repeat if necessary"
+    return f"; {comment}"
+
+
+def normalize_space(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def has_tag(report: dict[str, Any], tag: str) -> bool:
