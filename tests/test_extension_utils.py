@@ -90,8 +90,10 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
 def test_side_panel_buttons_and_frame_execution_present() -> None:
     html = (ROOT / "extension" / "src" / "sidepanel.html").read_text(encoding="utf-8")
     js = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
-    for button_id in ("runFast", "runCultures", "runFull", "diagnosePage", "copyMappingDiagnostics"):
+    for button_id in ("testFirstReport", "runFast", "runCultures", "runFull", "diagnosePage", "copyMappingDiagnostics"):
         assert f'id="{button_id}"' in html
+    assert "Test First Report" in html
+    assert 'runSummaryFromBestFrame("test_first")' in js
     assert "allFrames: true" in js
     assert "frameIds: [best.frameId]" in js
     assert "collectFrameDiagnostic" in js
@@ -221,3 +223,80 @@ def test_global_post_form_with_onclick_is_not_unsupported_and_sanitized() -> Non
     assert "raw_row_text" not in serialized
     assert "hmode" in serialized
     assert "selectedLabNo" in serialized
+
+
+def test_printreport_rows_have_safe_locator_and_are_not_failed_immediately() -> None:
+    script = r"""
+    const utils = require('./extension/src/contentUtils.js');
+    globalThis.getComputedStyle = () => ({ display: 'table-row', visibility: 'visible' });
+    const button = {
+      value: '',
+      getAttribute: (name) => name === 'onclick' ? "printReport('SECRET-ARG')" : '',
+      innerText: 'View Report',
+      textContent: 'View Report',
+      hidden: false
+    };
+    const row = {
+      cells: [{ innerText: '24-May-2026', textContent: '24-May-2026' }, { innerText: 'CBC', textContent: 'CBC' }, { innerText: 'View Report', textContent: 'View Report' }],
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === '[onclick]' ? [button] : [button],
+      closest: () => ({ getAttribute: (name) => name === 'method' ? 'post' : '', querySelectorAll: () => [] }),
+      innerText: '24-May-2026 CBC View Report',
+      textContent: '24-May-2026 CBC View Report',
+      hidden: false
+    };
+    const doc = {
+      querySelectorAll: (selector) => selector === 'tr' ? [row] : [button]
+    };
+    const rows = utils.extractReportRows(doc, 'https://www.nimsts.edu.in/HISInvestigationG5/page');
+    const sanitized = utils.sanitizeState({ mode: 'fast', rows, selected: rows, parsedReports: [], result: null }, false);
+    console.log(JSON.stringify({ row: rows[0], sanitized }));
+    """
+    out = run_node(script)
+    assert out["row"]["onclick_function_name"] == "printReport"
+    assert out["row"]["onclick_arg_count"] == 1
+    assert out["row"]["onclick_parse_status"] == "function_detected"
+    assert out["row"]["status"] == "ready"
+    assert out["row"]["row_index"] == 0
+    assert out["row"]["view_report_button_index"] == 0
+    serialized = json.dumps(out["sanitized"])
+    assert "SECRET-ARG" not in serialized
+    assert "printReport('SECRET-ARG')" not in serialized
+
+
+def test_fast_summary_selection_is_capped_and_test_first_selects_latest_cbc() -> None:
+    script = r"""
+    const utils = require('./extension/src/contentUtils.js');
+    const rows = [];
+    for (let i = 1; i <= 10; i += 1) rows.push({ date_sent: `${String(i).padStart(2, '0')}-May-2026`, report_name: `CBC ${i}`, report_tags: ['cbc'] });
+    for (let i = 1; i <= 10; i += 1) rows.push({ date_sent: `${String(i).padStart(2, '0')}-May-2026`, report_name: `RFT LFT Electrolytes ${i}`, report_tags: ['rft', 'lft', 'electrolytes'] });
+    for (let i = 1; i <= 30; i += 1) rows.push({ date_sent: `${String(i).padStart(2, '0')}-May-2026`, report_name: `Blood Culture ${i}`, report_tags: ['culture'] });
+    const fast = utils.selectRowsForMode(rows, 'fast');
+    const testFirst = utils.selectRowsForMode(rows, 'test_first');
+    console.log(JSON.stringify({ fastCount: fast.length, cbcCount: fast.filter(r => r.report_tags.includes('cbc')).length, rleCount: fast.filter(r => r.report_tags.includes('rft')).length, testFirst }));
+    """
+    out = run_node(script)
+    assert out["fastCount"] <= 20
+    assert out["cbcCount"] <= 3
+    assert out["rleCount"] <= 3
+    assert len(out["testFirst"]) == 1
+    assert out["testFirst"][0]["report_name"] == "CBC 10"
+
+
+def test_background_printreport_click_capture_static_contract() -> None:
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    content_script = (ROOT / "extension" / "src" / "contentScript.js").read_text(encoding="utf-8")
+    assert "isSupportedPrintReportRow" in background
+    assert 'row.onclick_function_name === "printReport"' in background
+    assert "captureReportByClick(row, sender)" in background
+    assert "chrome.tabs.onCreated.addListener" in background
+    assert "chrome.tabs.onUpdated.addListener" in background
+    assert 'world: "MAIN"' in background
+    assert "No View Report button found for row" in background
+    assert "printReport did not open a popup/tab" in background
+    assert "Report popup opened but content could not be fetched" in background
+    assert "Session expired or login page returned" in background
+    assert "Unable to capture NIMS printReport output" in background
+    assert "NIMS onclick/form workflow needs specific mapping" in content_script
+    assert "Opening report" in content_script
+    assert "Parsing report" in content_script
