@@ -19,7 +19,13 @@ from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, ext
 app = FastAPI(title="NIMS Fast Summary Helper", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["chrome-extension://*", "http://127.0.0.1:8765", "null"],
+    allow_origins=[
+        "chrome-extension://*",
+        "https://nimsts.edu.in",
+        "https://www.nimsts.edu.in",
+        "http://127.0.0.1:8765",
+        "null",
+    ],
     allow_origin_regex=r"chrome-extension://.*",
     allow_methods=["*"],
     allow_headers=["*"],

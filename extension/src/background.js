@@ -27,20 +27,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === "NIMS_CLEAR_CACHE") {
-    fetch(`${HELPER}/clear-cache`, { method: "POST" })
-      .then((response) => sendResponse({ ok: response.ok }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+  if (message.type === "NIMS_HELPER_HEALTH") {
+    callHelper("/health").then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_HELPER_PARSE_REPORT") {
+    callHelper("/parse-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message.body || {})
+    }).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_HELPER_SUMMARIZE") {
+    callHelper("/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message.body || {})
+    }).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_HELPER_CLEAR_CACHE" || message.type === "NIMS_CLEAR_CACHE") {
+    callHelper("/clear-cache", { method: "POST" }).then(sendResponse);
     return true;
   }
 
   return false;
 });
 
+async function callHelper(path, options = {}) {
+  const url = `${HELPER}${path}`;
+  try {
+    const response = await fetch(url, options);
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
+    }
+    if (!response.ok) return { ok: false, error: `Helper ${path} returned status ${response.status}`, data };
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Local helper is not reachable at 127.0.0.1:8765. Start the helper and retry. Details: ${error.message}`
+    };
+  }
+}
+
 async function fetchReportWithSession(row) {
   const url = row.source_url || row.href;
   if (!url) {
-    return { ok: false, error: "No report URL available" };
+    if (row && (row.onclick_present || row.onclick_function_name)) {
+      return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
+    }
+    return { ok: false, error: "NIMS onclick/form workflow needs specific mapping" };
   }
 
   try {

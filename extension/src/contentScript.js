@@ -1,5 +1,4 @@
 (function () {
-  const HELPER = "http://127.0.0.1:8765";
   const isExtension = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage;
   const utils = window.NimsFastSummaryUtils;
   const DEBUG_MODE = false;
@@ -64,11 +63,17 @@
       const parsedReports = [];
       for (let index = 0; index < selected.length; index += 1) {
         const row = selected[index];
-        if (row.post_workflow || !row.source_url) {
-          parsedReports.push(rowError(row, row.status || "POST workflow needs live-site mapping"));
+        if (row.source_url) {
+          setProgress(`Fetching selected report ${index + 1}/${selected.length}`);
+        } else if (row.onclick_present || row.onclick_function_name) {
+          setProgress(`Fetching selected report ${index + 1}/${selected.length}`);
+        } else if (row.unsupported_post_only) {
+          parsedReports.push(rowError(row, "NIMS onclick/form workflow needs specific mapping"));
+          continue;
+        } else {
+          parsedReports.push(rowError(row, "NIMS onclick/form workflow needs specific mapping"));
           continue;
         }
-        setProgress(`Fetching report ${index + 1}/${selected.length}`);
         const fetched = await fetchReport(row);
         if (!fetched.ok) {
           parsedReports.push(rowError(row, fetched.error || "unable to parse / verify source report"));
@@ -80,7 +85,7 @@
       }
 
       setProgress("Creating tables");
-      const summary = await postJson(`${HELPER}/summarize`, { mode, reports: parsedReports });
+      const summary = await callHelper("NIMS_HELPER_SUMMARIZE", { mode, reports: parsedReports });
       const failed = parsedReports.filter((r) => r.errors && r.errors.length > 0);
       const result = {
         mode,
@@ -108,7 +113,7 @@
   }
 
   async function parseReport(row, fetched) {
-    return postJson(`${HELPER}/parse-report`, {
+    return callHelper("NIMS_HELPER_PARSE_REPORT", {
       report_id: row.report_id,
       report_name: row.report_name,
       date_sent: row.date_sent,
@@ -118,14 +123,13 @@
     });
   }
 
-  async function postJson(url, body) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-    return response.json();
+  async function callHelper(type, body) {
+    if (!isExtension) throw new Error("Local helper calls require the Chrome extension background worker.");
+    const response = await chrome.runtime.sendMessage({ type, body });
+    if (!response || response.ok === false) {
+      throw new Error((response && response.error) || "Local helper request failed");
+    }
+    return response.data;
   }
 
   function rowError(row, error) {
