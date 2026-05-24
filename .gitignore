@@ -11,4 +11,6 @@ __pycache__/
 dist/
 build/
 node_modules/
+.gradle/
+local.properties
 

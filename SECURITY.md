@@ -34,8 +34,9 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Do not commit `cache.db`, `.env`, logs, API keys, or real report samples.
 - Do not upload PHI to external services.
 - Optional AI interpretation, if enabled later with `OPENAI_API_KEY`, must receive only de-identified structured JSON.
-- Android mobile mode uses manual NIMS login in a WebView. The app must not store NIMS usernames/passwords, auto-fill credentials, export cookies, or bypass captcha/OTP/session controls.
-- Android helper API keys should be stored in device secure storage. Clear cache/settings controls should be available.
+- Android mobile mode uses manual NIMS login in a WebView. The app does not add credential fields, does not store NIMS usernames/passwords, does not auto-fill credentials, does not export cookies, and must not bypass captcha/OTP/session controls.
+- Android report fetching uses the active WebView cookie session and sends report content to the configured helper only for parsing. NIMS cookies stay on the device and are not posted to Railway.
+- Android helper API keys are stored with Android Keystore-backed encryption. Clear settings controls are available.
 
 To clear local parsed cache, use the extension `Clear cache` button or delete `helper/cache.db`.
 
