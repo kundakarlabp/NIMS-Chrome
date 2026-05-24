@@ -6,6 +6,8 @@ This is the V2 safety-improved MVP. It does not automate login, store credential
 
 ## Setup
 
+### Desktop Local Mode
+
 1. Install Python 3.11 or newer.
 2. Clone this repository.
 3. Start the helper:
@@ -42,6 +44,62 @@ source .venv/bin/activate
 15. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF and validate the mapping only if the helper parses at least one value or culture.
 16. Only after `Test Direct Fetch` succeeds, click `Bulk Fast Summary` or `Bulk Full Summary`.
 17. Verify the generated values against source reports before clinical decisions.
+
+### Desktop With Railway Helper
+
+This mode keeps NIMS fetching in the logged-in Chrome session, but sends fetched report content to a Railway-hosted helper for parsing/summarizing. Railway never logs in to NIMS and must never receive NIMS cookies, tokens, usernames, passwords, captcha, or OTP values.
+
+1. Deploy the helper service from this repository to Railway.
+2. Use `helper/Dockerfile` or the root `railway.json` Dockerfile config.
+3. Set Railway environment variables:
+
+```text
+NIMS_HELPER_REMOTE_MODE=true
+NIMS_HELPER_API_KEY=<strong random key>
+NIMS_HELPER_DISABLE_RAW_LOGS=true
+NIMS_HELPER_CACHE_ENABLED=false
+NIMS_HELPER_ALLOWED_ORIGINS=<your chrome-extension:// origin if needed>
+NIMS_HELPER_MAX_BODY_MB=25
+```
+
+4. Confirm the public Railway `/health` URL returns `{"ok": true}`.
+5. In the extension side panel, set `Helper mode` to `Remote Railway`.
+6. Enter the Railway helper URL and API key.
+7. Click `Test Helper Connection`.
+8. Continue the normal workflow: `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
+
+The extension still performs direct NIMS report fetching in the browser session. Only report PDF/HTML/text content is sent to the helper for parsing. If Railway returns `Remote helper unauthorized. Check API key.`, update the saved API key.
+
+### Android WebView Mobile Mode
+
+The planned mobile app lives under `mobile/android/` when built. The intended workflow is:
+
+1. Install the debug APK on the phone.
+2. Enter the Railway helper URL and API key.
+3. Open NIMS in the in-app WebView.
+4. Login manually.
+5. Open `CR No Wise Result Report Printing New`.
+6. Run `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
+
+The Android app must use the active WebView/NIMS session for report fetching and must not store NIMS credentials or bypass captcha/OTP/session controls.
+
+## Railway Deployment
+
+The helper listens on `0.0.0.0` and uses Railway `PORT` when deployed:
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port ${PORT:-8765}
+```
+
+For Railway:
+
+1. Create a Railway service from this GitHub repo.
+2. Use the root `railway.json`, or set the service root to `helper/` and use `helper/Dockerfile`.
+3. Set the environment variables listed in `Desktop With Railway Helper`.
+4. Deploy.
+5. Open `https://<service>.up.railway.app/health`.
+
+Do not deploy a public unauthenticated helper. In remote mode, `/parse-report`, `/summarize`, `/cache-lookup`, and `/clear-cache` require `X-NIMS-HELPER-KEY`.
 
 ## Test With Mock Page
 

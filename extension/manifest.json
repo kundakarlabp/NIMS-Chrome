@@ -9,7 +9,9 @@
     "https://www.nimsts.edu.in/AHIMSG5/*",
     "https://nimsts.edu.in/HISInvestigationG5/*",
     "https://www.nimsts.edu.in/HISInvestigationG5/*",
-    "http://127.0.0.1:8765/*"
+    "http://127.0.0.1:8765/*",
+    "https://*.railway.app/*",
+    "https://*.up.railway.app/*"
   ],
   "content_scripts": [
     {

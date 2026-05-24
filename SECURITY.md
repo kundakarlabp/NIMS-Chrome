@@ -7,7 +7,14 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - It does not store usernames, passwords, OTPs, captcha answers, or session tokens.
 - It must not be used to bypass hospital authentication, captcha, OTP, session expiry, or access controls.
 - The local helper runs on `http://127.0.0.1:8765` and stores parsed JSON cache only.
+- The helper can optionally run in Railway remote mode. Railway remote mode receives report PDF/HTML/text content for parsing, so it must be protected by `NIMS_HELPER_API_KEY`.
+- Do not deploy a public unauthenticated parser. In `NIMS_HELPER_REMOTE_MODE=true`, `/parse-report`, `/summarize`, `/cache-lookup`, and `/clear-cache` require `X-NIMS-HELPER-KEY`.
+- Railway must not log in to NIMS, store NIMS credentials, store NIMS cookies, store NIMS session tokens, or bypass captcha/OTP/session controls.
+- Remote helper CORS must be configured with explicit `NIMS_HELPER_ALLOWED_ORIGINS`; wildcard CORS is not used in remote mode.
+- Remote helper cache is disabled by default unless `NIMS_HELPER_CACHE_ENABLED=true`.
 - Raw PDFs are parsed in memory and are not permanently stored.
+- Raw report HTML/text is parsed in memory and is not permanently stored by default.
+- Helper cache stores parsed JSON only. It must not store raw PDFs, raw HTML, raw text, cookies, tokens, or credentials.
 - Direct report mapping is stored only in service-worker memory and `chrome.storage.session` when available; the displayed mapping summary contains method and host/path only.
 - A mapping discovered from one click is only a candidate until `Test Direct Fetch` successfully fetches and parses one report in the current session.
 - The confirmed `iframe#setPdf` template stores only host/path plus query parameter names such as `hmode` and `fileName`; raw `fileName` values are not stored or exported.
@@ -27,6 +34,8 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Do not commit `cache.db`, `.env`, logs, API keys, or real report samples.
 - Do not upload PHI to external services.
 - Optional AI interpretation, if enabled later with `OPENAI_API_KEY`, must receive only de-identified structured JSON.
+- Android mobile mode uses manual NIMS login in a WebView. The app must not store NIMS usernames/passwords, auto-fill credentials, export cookies, or bypass captcha/OTP/session controls.
+- Android helper API keys should be stored in device secure storage. Clear cache/settings controls should be available.
 
 To clear local parsed cache, use the extension `Clear cache` button or delete `helper/cache.db`.
 

@@ -31,6 +31,30 @@
         <button id="clearCache">Clear cache</button>
         <button id="retryFailed">Retry failed reports</button>
       </div>
+      <section class="helper-settings">
+        <h2>Helper Settings</h2>
+        <label>
+          Helper mode
+          <select id="helperMode">
+            <option value="local">Local: http://127.0.0.1:8765</option>
+            <option value="remote">Remote Railway</option>
+          </select>
+        </label>
+        <label>
+          Helper URL
+          <input id="helperUrl" type="url" placeholder="https://your-service.up.railway.app">
+        </label>
+        <label>
+          Helper API key
+          <input id="helperApiKey" type="password" autocomplete="off" placeholder="Required for remote mode">
+        </label>
+        <div id="helperKeyStatus" class="empty"></div>
+        <div class="mode-actions">
+          <button id="saveHelperSettings">Save settings</button>
+          <button id="testHelperConnection">Test Helper Connection</button>
+          <button id="clearHelperSettings">Clear helper settings</button>
+        </div>
+      </section>
       <div id="status" class="status">Waiting for report list.</div>
       <section>
         <h2>Page Diagnosis</h2>

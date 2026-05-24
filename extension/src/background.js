@@ -1,4 +1,4 @@
-const HELPER = "http://127.0.0.1:8765";
+const DEFAULT_HELPER = "http://127.0.0.1:8765";
 const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
   "https://www.nimsts.edu.in/AHIMSG5/*",
@@ -69,6 +69,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NIMS_GET_HELPER_SETTINGS") {
+    getHelperSettings().then((settings) => sendResponse({ ok: true, settings: safeHelperSettings(settings) }));
+    return true;
+  }
+
+  if (message.type === "NIMS_SAVE_HELPER_SETTINGS") {
+    saveHelperSettings(message.settings || {}).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_CLEAR_HELPER_SETTINGS") {
+    chrome.storage.local.remove("nimsHelperSettings").then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
   if (message.type === "NIMS_HELPER_PARSE_REPORT") {
     callHelper("/parse-report", {
       method: "POST",
@@ -105,9 +120,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function callHelper(path, options = {}) {
-  const url = `${HELPER}${path}`;
+  const settings = await getHelperSettings();
+  if (settings.mode === "remote" && !settings.url) {
+    return { ok: false, error: "Set Railway helper URL first." };
+  }
+  const baseUrl = normalizeHelperUrl(settings.url || DEFAULT_HELPER);
+  const url = `${baseUrl}${path}`;
   try {
-    const response = await fetch(url, options);
+    const headers = new Headers(options.headers || {});
+    if (settings.mode === "remote" && settings.apiKey) headers.set("X-NIMS-HELPER-KEY", settings.apiKey);
+    const response = await fetch(url, { ...options, headers });
     const text = await response.text();
     let data = null;
     try {
@@ -115,13 +137,59 @@ async function callHelper(path, options = {}) {
     } catch {
       data = text;
     }
+    if (response.status === 401) return { ok: false, error: "Remote helper unauthorized. Check API key.", data };
     if (!response.ok) return { ok: false, error: `Helper ${path} returned status ${response.status}`, data };
     return { ok: true, data };
   } catch (error) {
+    if (settings.mode === "remote") {
+      return { ok: false, error: `Remote helper is not reachable. Check Railway helper URL. Details: ${error.message}` };
+    }
     return {
       ok: false,
       error: `Local helper is not reachable at 127.0.0.1:8765. Start the helper and retry. Details: ${error.message}`
     };
+  }
+}
+
+async function getHelperSettings() {
+  const data = await chrome.storage.local.get("nimsHelperSettings");
+  const settings = data.nimsHelperSettings || {};
+  return {
+    mode: settings.mode === "remote" ? "remote" : "local",
+    url: normalizeHelperUrl(settings.url || (settings.mode === "remote" ? "" : DEFAULT_HELPER)),
+    apiKey: settings.apiKey || ""
+  };
+}
+
+async function saveHelperSettings(input) {
+  const current = await getHelperSettings();
+  const mode = input.mode === "remote" ? "remote" : "local";
+  const url = mode === "remote" ? normalizeHelperUrl(input.url || current.url || "") : DEFAULT_HELPER;
+  if (mode === "remote" && !url) return { ok: false, error: "Set Railway helper URL first." };
+  const apiKey = Object.prototype.hasOwnProperty.call(input, "apiKey") && input.apiKey ? String(input.apiKey) : current.apiKey;
+  await chrome.storage.local.set({ nimsHelperSettings: { mode, url, apiKey } });
+  return { ok: true, settings: safeHelperSettings({ mode, url, apiKey }) };
+}
+
+function safeHelperSettings(settings) {
+  const key = settings.apiKey || "";
+  return {
+    mode: settings.mode || "local",
+    url: settings.url || DEFAULT_HELPER,
+    hasApiKey: Boolean(key),
+    apiKeyMasked: key ? `saved (${key.slice(-4).padStart(8, "*")})` : ""
+  };
+}
+
+function normalizeHelperUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.origin + parsed.pathname.replace(/\/+$/, "");
+  } catch {
+    return "";
   }
 }
 
