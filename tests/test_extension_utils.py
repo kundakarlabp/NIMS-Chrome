@@ -124,6 +124,8 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
         "https://nimsts.edu.in/HISInvestigationG5/*",
         "https://www.nimsts.edu.in/HISInvestigationG5/*",
         "http://127.0.0.1:8765/*",
+        "https://*.railway.app/*",
+        "https://*.up.railway.app/*",
     }
     assert expected_hosts.issubset(set(manifest["host_permissions"]))
     assert "<all_urls>" not in json.dumps(manifest)
@@ -133,7 +135,12 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
     assert script["all_frames"] is True
     assert script["js"] == ["src/contentUtils.js", "src/contentScript.js"]
     assert script["run_at"] == "document_idle"
-    assert expected_hosts - {"http://127.0.0.1:8765/*"} <= set(script["matches"])
+    assert {
+        "https://nimsts.edu.in/AHIMSG5/*",
+        "https://www.nimsts.edu.in/AHIMSG5/*",
+        "https://nimsts.edu.in/HISInvestigationG5/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*",
+    } <= set(script["matches"])
 
 
 def test_side_panel_buttons_and_frame_execution_present() -> None:
@@ -150,6 +157,9 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
         "manualPopupFallback",
         "copyMappingDiagnostics",
         "copyDirectFetchDiagnostics",
+        "saveHelperSettings",
+        "testHelperConnection",
+        "clearHelperSettings",
     ):
         assert f'id="{button_id}"' in html
     assert "Discover Mapping" in html
@@ -158,6 +168,8 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
     assert "Bulk Full Summary" in html
     assert "Manual Popup Fallback" in html
     assert "Copy Direct Fetch Diagnostics" in html
+    assert "Remote Railway" in html
+    assert "Helper API key" in html
     assert 'runSummaryFromBestFrame("test_direct")' in js
     assert 'runSummaryFromBestFrame("bulk_fast")' in js
     assert 'runSummaryFromBestFrame("bulk_full")' in js
@@ -171,6 +183,8 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
     assert "Helper status" in js
     assert "copySafeMappingDiagnostics" in js
     assert "copyDirectFetchDiagnostics" in js
+    assert "loadHelperSettings" in js
+    assert "saveHelperSettings" in js
 
 
 def test_side_panel_culture_columns_and_exports_present() -> None:
@@ -214,6 +228,10 @@ def test_background_helper_routes_and_content_script_avoids_localhost_fetch() ->
         assert message_type in background
     assert "async function callHelper" in background
     assert "Local helper is not reachable at 127.0.0.1:8765" in background
+    assert "Remote helper unauthorized. Check API key." in background
+    assert "Set Railway helper URL first." in background
+    assert "X-NIMS-HELPER-KEY" in background
+    assert "nimsHelperSettings" in background
     assert "NIMS_HELPER_PARSE_REPORT" in content_script
     assert "NIMS_HELPER_SUMMARIZE" in content_script
     assert "http://127.0.0.1:8765" not in content_script

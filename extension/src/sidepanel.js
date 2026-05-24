@@ -4,6 +4,7 @@ const sidepanelUtils = window.NimsSidepanelUtils;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindActions();
+  loadHelperSettings();
   chrome.storage.local.get(["nimsFastSummaryState", "nimsFastSummaryProgress"], (items) => {
     latestState = items.nimsFastSummaryState || null;
     render(latestState, items.nimsFastSummaryProgress);
@@ -39,6 +40,41 @@ function bindActions() {
   document.getElementById("retryFailed").addEventListener("click", async () => {
     await runSummaryFromBestFrame("bulk_full");
   });
+  document.getElementById("saveHelperSettings").addEventListener("click", saveHelperSettings);
+  document.getElementById("testHelperConnection").addEventListener("click", testHelperConnection);
+  document.getElementById("clearHelperSettings").addEventListener("click", clearHelperSettings);
+}
+
+async function loadHelperSettings() {
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_GET_HELPER_SETTINGS" });
+  const settings = response && response.settings || {};
+  document.getElementById("helperMode").value = settings.mode || "local";
+  document.getElementById("helperUrl").value = settings.url || "http://127.0.0.1:8765";
+  document.getElementById("helperApiKey").value = "";
+  document.getElementById("helperKeyStatus").textContent = settings.hasApiKey ? `API key ${settings.apiKeyMasked}` : "No API key saved.";
+}
+
+async function saveHelperSettings() {
+  const settings = {
+    mode: document.getElementById("helperMode").value,
+    url: document.getElementById("helperUrl").value,
+    apiKey: document.getElementById("helperApiKey").value
+  };
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_SAVE_HELPER_SETTINGS", settings });
+  document.getElementById("status").textContent = response && response.ok ? "Helper settings saved" : ((response && response.error) || "Helper settings save failed");
+  if (response && response.ok) await loadHelperSettings();
+}
+
+async function testHelperConnection() {
+  await saveHelperSettings();
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_HELPER_HEALTH" });
+  document.getElementById("status").textContent = response && response.ok ? "Helper connection ok" : ((response && response.error) || "Helper connection failed");
+}
+
+async function clearHelperSettings() {
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_CLEAR_HELPER_SETTINGS" });
+  document.getElementById("status").textContent = response && response.ok ? "Helper settings cleared; local helper restored" : "Clear helper settings failed";
+  await loadHelperSettings();
 }
 
 async function discoverMappingFromBestFrame() {

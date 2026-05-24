@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
+import secrets
+import time
+import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from cache import clear_cache, get_cached, is_safe_report_key, make_cache_key, set_cached
 from models import CacheLookupRequest, ParsedReport, ParseReportRequest, SummarizeRequest
@@ -16,20 +21,121 @@ from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_p
 from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, extract_text_from_bytes
 
 
-app = FastAPI(title="NIMS Fast Summary Helper", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "chrome-extension://*",
+logger = logging.getLogger("nims_helper")
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def remote_mode() -> bool:
+    return env_flag("NIMS_HELPER_REMOTE_MODE", False)
+
+
+def cache_enabled() -> bool:
+    if remote_mode():
+        return env_flag("NIMS_HELPER_CACHE_ENABLED", False)
+    return env_flag("NIMS_HELPER_CACHE_ENABLED", True)
+
+
+def max_body_bytes() -> int:
+    try:
+        megabytes = int(os.getenv("NIMS_HELPER_MAX_BODY_MB", "25"))
+    except ValueError:
+        megabytes = 25
+    return max(megabytes, 1) * 1024 * 1024
+
+
+def allowed_origins() -> list[str]:
+    configured = [
+        origin.strip()
+        for origin in os.getenv("NIMS_HELPER_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip() and origin.strip() != "*"
+    ]
+    if remote_mode():
+        return configured
+    return [
         "https://nimsts.edu.in",
         "https://www.nimsts.edu.in",
         "http://127.0.0.1:8765",
         "null",
-    ],
-    allow_origin_regex=r"chrome-extension://.*",
+    ]
+
+
+def require_api_key(x_nims_helper_key: str | None = Header(default=None)) -> None:
+    if not remote_mode():
+        return
+    expected = os.getenv("NIMS_HELPER_API_KEY", "")
+    if expected and x_nims_helper_key and secrets.compare_digest(x_nims_helper_key, expected):
+        return
+    raise HTTPException(status_code=401, detail="unauthorized")
+
+
+app = FastAPI(title="NIMS Fast Summary Helper", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins(),
+    allow_origin_regex=None if remote_mode() else r"chrome-extension://.*",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def safety_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    start = time.perf_counter()
+    content_length = request.headers.get("content-length")
+    try:
+        length_value = int(content_length or "0")
+    except ValueError:
+        length_value = 0
+    if length_value > max_body_bytes():
+        return JSONResponse(
+            status_code=413,
+            content={"ok": False, "error": "request body too large", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
+        )
+    try:
+        response = await call_next(request)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000)
+        logger.exception(
+            "helper_error request_id=%s endpoint=%s error_class=%s duration_ms=%s",
+            request_id,
+            request.url.path,
+            exc.__class__.__name__,
+            duration_ms,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": "internal server error", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
+        )
+    response.headers["X-Request-ID"] = request_id
+    duration_ms = round((time.perf_counter() - start) * 1000)
+    logger.info(
+        "helper_request request_id=%s endpoint=%s status=%s content_type=%s payload_size=%s duration_ms=%s",
+        request_id,
+        request.url.path,
+        response.status_code,
+        request.headers.get("content-type", ""),
+        length_value,
+        duration_ms,
+    )
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):
+    if exc.status_code == 401 and exc.detail == "unauthorized":
+        return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": str(exc.detail)})
 
 
 @app.get("/health")
@@ -38,12 +144,12 @@ def health() -> dict[str, bool]:
 
 
 @app.post("/parse-report")
-def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
+def parse_report(payload: ParseReportRequest, _auth: None = Depends(require_api_key)) -> dict[str, Any]:
     pdf_bytes = decode_report_bytes(payload.pdf_base64)
     cache_key = make_cache_key(
         payload.report_id, pdf_bytes, payload.source_url, payload.date_sent, payload.report_name
     )
-    cached = get_cached(cache_key)
+    cached = get_cached(cache_key) if cache_enabled() else None
     if cached:
         cached["cached"] = True
         return cached
@@ -66,7 +172,8 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
             raw_text_preview="",
             errors=[non_report_error],
         ).model_dump()
-        set_cached(cache_key, parsed)
+        if cache_enabled():
+            set_cached(cache_key, parsed)
         return parsed
 
     report_tags = infer_report_tags(payload.report_name, text)
@@ -88,12 +195,13 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
         raw_text_preview=preview,
         errors=errors,
     ).model_dump()
-    set_cached(cache_key, parsed)
+    if cache_enabled():
+        set_cached(cache_key, parsed)
     return parsed
 
 
 @app.post("/summarize")
-def summarize(payload: SummarizeRequest) -> dict[str, Any]:
+def summarize(payload: SummarizeRequest, _auth: None = Depends(require_api_key)) -> dict[str, Any]:
     reports = [coerce_report(report) for report in payload.reports]
     if payload.mode == "cultures_only":
         selected = [r for r in reports if has_tag(r, "culture")]
@@ -112,12 +220,12 @@ def summarize(payload: SummarizeRequest) -> dict[str, Any]:
 
 
 @app.post("/cache-lookup")
-def cache_lookup(payload: CacheLookupRequest) -> dict[str, Any]:
+def cache_lookup(payload: CacheLookupRequest, _auth: None = Depends(require_api_key)) -> dict[str, Any]:
     hits: dict[str, Any] = {}
     misses: list[str] = []
     for item in payload.reports:
         report_key = item.report_key.strip()
-        if not is_safe_report_key(report_key):
+        if not cache_enabled() or not is_safe_report_key(report_key):
             misses.append(report_key)
             continue
         cached = get_cached(report_key)
@@ -130,7 +238,7 @@ def cache_lookup(payload: CacheLookupRequest) -> dict[str, Any]:
 
 
 @app.post("/clear-cache")
-def clear() -> dict[str, bool]:
+def clear(_auth: None = Depends(require_api_key)) -> dict[str, bool]:
     clear_cache()
     return {"ok": True}
 
