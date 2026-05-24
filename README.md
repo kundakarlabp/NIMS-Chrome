@@ -2,7 +2,7 @@
 
 NIMS Fast Summary is a local Chrome extension plus Python helper for summarizing NIMS e-Sushrut/HIS report-list pages after you have logged in manually.
 
-It does not automate login, store credentials, bypass captcha/OTP, or send patient identifiers to external AI services. The MVP focuses on extracting report rows, parsing local report/PDF content, and showing lab trend and culture tables.
+This is the V2 safety-improved MVP. It does not automate login, store credentials, bypass captcha/OTP, or send patient identifiers to external AI services. The main value is accurate local tables; do not use output for clinical decisions until manually verified against source reports.
 
 ## Setup
 
@@ -29,11 +29,12 @@ source .venv/bin/activate
    - Enable Developer mode
    - Click Load unpacked
    - Choose the `extension/` folder
-5. Open NIMS HIS.
-6. Login manually.
-7. Go to the report-list page after entering the CR number.
-8. Click `Fast Summary`.
-9. View or copy the tables.
+5. First test on the mock page below.
+6. Open NIMS HIS.
+7. Login manually.
+8. Enter the CR number and wait for the report-list table.
+9. Click `Fast Summary`.
+10. Verify the generated values against source reports before clinical decisions.
 
 ## Test With Mock Page
 
@@ -45,14 +46,25 @@ extension/test_pages/mock_report_list.html
 
 The mock page includes fake/de-identified report rows and exercises the toolbar UI. It does not contain real patient data.
 
+Also test the delayed mock page, which simulates AJAX/postback table insertion:
+
+```text
+extension/test_pages/delayed_mock_report_list.html
+```
+
+After mock testing, test only on de-identified real PDF/report output before any live clinical workflow.
+
 ## What Is Built
 
 - Chrome Extension Manifest V3 under `extension/`
 - Local FastAPI helper under `helper/`
 - Robust visible table row extraction for rows containing `View Report`
+- Dynamic toolbar detection with `MutationObserver` and a short periodic page scan
 - Background fetch scaffolding using the active Chrome session
 - Parser endpoints for CBC, RFT/electrolytes, LFT, coagulation, culture, radiology, and other reports
 - Parsed JSON cache, never raw PDF cache
+- Row-index values such as `row-1` are not trusted as cache keys
+- Chrome storage and JSON export are sanitized by default to avoid raw row text, URLs, onclick code, and report previews
 - Lab trend table latest-to-old
 - Culture table
 - Export JSON/CSV and copy summary buttons
@@ -61,11 +73,12 @@ The mock page includes fake/de-identified report rows and exercises the toolbar 
 ## Known Limitations
 
 - Live NIMS popup/form workflows may need adjustment in `extension/src/contentScript.js` and `extension/src/background.js` after testing on the real page.
-- POST-only report viewers are detected and reported as `Needs manual support`.
+- POST-only report viewers are detected and reported as `POST workflow needs live-site mapping`.
+- If a fetched page is login/session-expired HTML, it is reported as failed and is not parsed as a lab report.
 - OCR is intentionally disabled by default.
-- AI interpretation is optional and not required for the MVP.
+- AI interpretation remains disabled/rule-based for now.
 
 ## Security
 
-See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, or cache files.
+See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
 

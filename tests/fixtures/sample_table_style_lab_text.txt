@@ -1,0 +1,12 @@
+Combined RFT Electrolytes LFT
+Test Name Result Unit Reference Range
+Hemoglobin Result 9.1 Unit g/dL Reference Range 13-17
+HGB Result 9.1 Unit g/dL Reference Range 13-17
+Creatinine Result 1.9 Unit mg/dL Reference Range 0.6-1.2
+Na Result 132 Unit mmol/L Reference Range 135-145
+K Result 5.4 Unit mmol/L Reference Range 3.5-5.0
+Total bilirubin Result 2.1 Unit mg/dL Reference Range 0.2-1.2
+SGOT Result 75 Unit U/L Reference Range 0-40
+SGPT Result 82 Unit U/L Reference Range 0-40
+CRP Result 96 Unit mg/L Reference Range 0-5
+
