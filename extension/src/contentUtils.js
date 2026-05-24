@@ -243,8 +243,35 @@
       transient_form_action: form ? resolveUrl(form.getAttribute("action") || "", root.location.href) : "",
       transient_form_method: form ? String(form.getAttribute("method") || "get").toLowerCase() : "get",
       transient_form_fields: form ? formFields(form) : {},
-      safe_form_structure: form ? safeFormStructure(form) : null
+      safe_form_structure: form ? safeFormStructure(form) : null,
+      safe_setpdf_template: getSafeSetPdfTemplate(doc || root.document)
     };
+  }
+
+  function getSafeSetPdfTemplate(doc) {
+    const frame = (doc || root.document).querySelector("iframe#setPdf");
+    const src = frame ? frame.getAttribute("src") || "" : "";
+    const resolved = resolveUrl(src, root.location.href);
+    if (!resolved) return null;
+    try {
+      const parsed = new URL(resolved);
+      const names = Array.from(parsed.searchParams.keys());
+      const modeParamName = names.find((name) => /^hmode$/i.test(name) && parsed.searchParams.get(name) === "PRINTREPORT") || "";
+      const argParamName = names.find((name) => /^filename$/i.test(name)) || "";
+      if (!modeParamName || !argParamName) return null;
+      return {
+        discovered: true,
+        endpoint: `${parsed.hostname}${parsed.pathname}`,
+        origin: parsed.origin,
+        pathname: parsed.pathname,
+        queryParamNames: names,
+        modeParamName,
+        modeParamValue: "PRINTREPORT",
+        argumentParameterName: argParamName
+      };
+    } catch {
+      return null;
+    }
   }
 
   function findReportRow(rowInfo, doc) {
@@ -525,6 +552,7 @@
     viewReportButtonIndex,
     getTransientPrintReportArg,
     getTransientReportRequestPayload,
+    getSafeSetPdfTemplate,
     safeRuntimeRow,
     safeFormStructure,
     selectRowsForMode,

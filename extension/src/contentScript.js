@@ -182,7 +182,7 @@
       await recordDirectTest({ ok: false, parsed: false, ...(fetched || {}), errors: [(fetched && fetched.error) || "Direct fetch mapping failed for this report."] });
       return [rowError(row, directFetchFailureMessage(fetched))];
     }
-    if (!["pdf_report", "text_report"].includes(fetched.classification || "")) {
+    if (!["pdf_report", "text_report", "html_report_content"].includes(fetched.classification || "")) {
       await recordDirectTest({ ok: false, parsed: false, ...fetched, errors: [`Direct fetch returned ${fetched.classification || "fetch_error"}`] });
       return [rowError(row, `Direct fetch returned ${fetched.classification || "fetch_error"}`)];
     }
