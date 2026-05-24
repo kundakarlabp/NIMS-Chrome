@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function bindActions() {
+  document.getElementById("testFirstReport").addEventListener("click", () => runSummaryFromBestFrame("test_first"));
   document.getElementById("runFast").addEventListener("click", () => runSummaryFromBestFrame("fast"));
   document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("cultures_only"));
   document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("full"));

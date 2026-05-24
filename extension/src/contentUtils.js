@@ -10,11 +10,13 @@
   function extractReportRows(doc, baseUrl) {
     const rows = [];
     const seen = new Set();
+    const viewReportButtons = Array.from(doc.querySelectorAll("a, button, input[type='button'], input[type='submit']"))
+      .filter((node) => /view\s*report/i.test(textOf(node) || node.value || ""));
     doc.querySelectorAll("tr").forEach((tr, index) => {
       const rowText = compactText(textOf(tr));
       if (!/view\s*report/i.test(rowText) || !isVisible(tr)) return;
       const cells = Array.from(tr.cells || []).map((cell) => compactText(textOf(cell)));
-      const urlInfo = extractUrlFromNode(tr, baseUrl);
+      const urlInfo = extractUrlFromNode(tr, baseUrl, viewReportButtons);
       const reportName = guessReportName(cells, rowText);
       const dateSent = guessDate(cells, rowText);
       const reportTags = inferReportTags(`${reportName} ${guessDepartment(cells)} ${rowText}`);
@@ -24,6 +26,7 @@
       seen.add(key);
       rows.push({
         row_index: index,
+        view_report_button_index: urlInfo.view_report_button_index,
         date_sent: dateSent,
         department: guessDepartment(cells),
         report_name: reportName,
@@ -49,7 +52,7 @@
     return sortRowsLatestFirst(rows);
   }
 
-  function extractUrlFromNode(row, baseUrl) {
+  function extractUrlFromNode(row, baseUrl, viewReportButtons) {
     const link = row.querySelector("a[href]");
     const href = link ? link.getAttribute("href") || "" : "";
     const absoluteHref = href ? resolveUrl(href, baseUrl) : "";
@@ -68,12 +71,21 @@
       onclick_function_name: onclickInfo.functionName,
       onclick_arg_count: onclickInfo.argCount,
       onclick_parse_status: onclickInfo.parseStatus,
+      view_report_button_index: viewReportButtonIndex(row, clickNode, viewReportButtons),
       global_form_present: Boolean(form),
       form_method: formMethod,
       post_workflow: false,
       unsupported_post_only: unsupportedPostOnly,
       nearby_input_names: nearbyInputNames(row)
     };
+  }
+
+  function viewReportButtonIndex(row, clickNode, viewReportButtons) {
+    const candidates = Array.isArray(viewReportButtons) ? viewReportButtons : [];
+    const button = clickNode || Array.from(row.querySelectorAll("a, button, input[type='button'], input[type='submit']"))
+      .find((node) => /view\s*report/i.test(textOf(node) || node.value || ""));
+    if (!button) return -1;
+    return candidates.indexOf(button);
   }
 
   function analyzeOnclick(onclick, sourceUrl) {
@@ -150,28 +162,31 @@
   function selectRowsForMode(rows, mode) {
     const sorted = sortRowsLatestFirst(dedupeRows(rows));
     if (mode === "full") return sorted;
+    if (mode === "test_first") return sorted.filter((row) => hasTag(row, "cbc")).slice(0, 1);
     if (mode === "cultures_only") return sorted.filter((row) => hasTag(row, "culture"));
 
-    const limits = { cbc: 5, rft: 5, electrolytes: 5, lft: 5, coagulation: 3 };
+    const limits = { cbc: 3, renal_liver_electrolytes: 3 };
     const counts = {};
     const selected = [];
     for (const row of sorted) {
+      if (selected.length >= 20) break;
       const tags = row.report_tags || inferReportTags(row.report_name || "");
       if (tags.includes("culture")) {
         selected.push(row);
         continue;
       }
-      if (tags.includes("inflammatory")) {
-        selected.push(row);
-        continue;
-      }
       let include = false;
-      for (const tag of tags) {
-        if (!Object.prototype.hasOwnProperty.call(limits, tag)) continue;
-        counts[tag] = counts[tag] || 0;
-        if (counts[tag] < limits[tag]) {
+      if (tags.includes("cbc")) {
+        counts.cbc = counts.cbc || 0;
+        if (counts.cbc < limits.cbc) {
           include = true;
-          counts[tag] += 1;
+          counts.cbc += 1;
+        }
+      } else if (tags.includes("rft") || tags.includes("lft") || tags.includes("electrolytes")) {
+        counts.renal_liver_electrolytes = counts.renal_liver_electrolytes || 0;
+        if (counts.renal_liver_electrolytes < limits.renal_liver_electrolytes) {
+          include = true;
+          counts.renal_liver_electrolytes += 1;
         }
       }
       if (include) selected.push(row);
@@ -199,6 +214,8 @@
         date_sent: row.date_sent || "",
         department: row.department || "",
         report_name: row.report_name || "",
+        row_index: Number.isFinite(Number(row.row_index)) ? Number(row.row_index) : -1,
+        view_report_button_index: Number.isFinite(Number(row.view_report_button_index)) ? Number(row.view_report_button_index) : -1,
         report_type: row.report_type || firstReportType(row.report_tags || []),
         report_tags: row.report_tags || [],
         status: row.status || "",
@@ -388,6 +405,7 @@
     parseFunctionCall,
     splitArgs,
     nearbyInputNames,
+    viewReportButtonIndex,
     selectRowsForMode,
     sanitizeState,
     sanitizeRows,

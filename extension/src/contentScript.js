@@ -18,6 +18,7 @@
     toolbar.id = "nims-fast-summary-toolbar";
     toolbar.innerHTML = `
       <strong>NIMS Fast Summary</strong>
+      <button class="nims-summary-button" data-mode="test_first">Test First Report</button>
       <button class="nims-summary-button" data-mode="fast">Fast Summary</button>
       <button class="nims-summary-button" data-mode="cultures_only">Cultures Only</button>
       <button class="nims-summary-button" data-mode="full">Full Summary</button>
@@ -64,9 +65,9 @@
       for (let index = 0; index < selected.length; index += 1) {
         const row = selected[index];
         if (row.source_url) {
-          setProgress(`Fetching selected report ${index + 1}/${selected.length}`);
+          setProgress(`Opening report ${index + 1}/${selected.length}`);
         } else if (row.onclick_present || row.onclick_function_name) {
-          setProgress(`Fetching selected report ${index + 1}/${selected.length}`);
+          setProgress(`Opening report ${index + 1}/${selected.length}`);
         } else if (row.unsupported_post_only) {
           parsedReports.push(rowError(row, "NIMS onclick/form workflow needs specific mapping"));
           continue;
@@ -79,6 +80,7 @@
           parsedReports.push(rowError(row, fetched.error || "unable to parse / verify source report"));
           continue;
         }
+        setProgress("Capturing report content");
         setProgress(`Parsing report ${index + 1}/${selected.length}`);
         const parsed = await parseReport(row, fetched);
         parsedReports.push(parsed);
