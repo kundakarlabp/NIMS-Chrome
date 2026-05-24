@@ -15,10 +15,16 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function bindActions() {
-  document.getElementById("testFirstReport").addEventListener("click", () => runSummaryFromBestFrame("test_first"));
-  document.getElementById("runFast").addEventListener("click", () => runSummaryFromBestFrame("fast"));
-  document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("cultures_only"));
-  document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("full"));
+  document.getElementById("discoverMapping").addEventListener("click", discoverMappingFromBestFrame);
+  document.getElementById("testDirectFetch").addEventListener("click", () => runSummaryFromBestFrame("test_direct"));
+  document.getElementById("runFast").addEventListener("click", () => runSummaryFromBestFrame("bulk_fast"));
+  document.getElementById("runCultures").addEventListener("click", () => runSummaryFromBestFrame("bulk_cultures_only"));
+  document.getElementById("runFull").addEventListener("click", () => runSummaryFromBestFrame("bulk_full"));
+  document.getElementById("clearMapping").addEventListener("click", clearDirectMapping);
+  document.getElementById("manualPopupFallback").addEventListener("click", () => {
+    document.getElementById("status").textContent = "Manual popup fallback may open reports one by one and be slow.";
+    runSummaryFromBestFrame("manual_fallback");
+  });
   document.getElementById("diagnosePage").addEventListener("click", diagnosePage);
   document.getElementById("copyMappingDiagnostics").addEventListener("click", copySafeMappingDiagnostics);
   document.getElementById("copySummary").addEventListener("click", copySummary);
@@ -30,8 +36,37 @@ function bindActions() {
     });
   });
   document.getElementById("retryFailed").addEventListener("click", async () => {
-    await runSummaryFromBestFrame("full");
+    await runSummaryFromBestFrame("bulk_full");
   });
+}
+
+async function discoverMappingFromBestFrame() {
+  const status = document.getElementById("status");
+  try {
+    status.textContent = "Discovering direct report mapping";
+    const { tab, diagnostic } = await prepareAndDiagnoseActiveTab();
+    renderDiagnostics(diagnostic);
+    const best = sidepanelUtils.selectBestFrameDiagnostic(diagnostic.frames);
+    if (!best || !best.hasSummary || Number(best.viewReportRows || 0) <= 0) {
+      status.textContent = "No frame with View Report rows found";
+      return;
+    }
+    const injections = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [best.frameId] },
+      func: () => window.NimsFastSummary && window.NimsFastSummary.discoverMapping()
+    });
+    const response = injections && injections[0] && await injections[0].result;
+    status.textContent = response && response.ok
+      ? `Direct mapping ready: ${response.summary.method} ${response.summary.endpoint}`
+      : ((response && response.error) || "Direct fetch mapping failed for this report.");
+  } catch (error) {
+    status.textContent = `Error: ${error.message}`;
+  }
+}
+
+async function clearDirectMapping() {
+  const response = await chrome.runtime.sendMessage({ type: "NIMS_CLEAR_DIRECT_MAPPING" });
+  document.getElementById("status").textContent = response && response.ok ? "Direct mapping cleared" : "Clear mapping failed";
 }
 
 async function runSummaryFromBestFrame(mode) {

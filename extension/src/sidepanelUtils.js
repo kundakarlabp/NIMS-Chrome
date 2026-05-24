@@ -1,6 +1,6 @@
 (function (root) {
   const ALLOWED_NIMS_HOSTS = new Set(["nimsts.edu.in", "www.nimsts.edu.in"]);
-  const FORBIDDEN_KEYS = new Set(["raw_row_text", "onclick", "href", "source_url", "raw_text_preview"]);
+  const FORBIDDEN_KEYS = new Set(["raw_row_text", "onclick", "href", "source_url", "raw_text_preview", "transient_print_report_arg", "transient_form_fields", "transient_form_action"]);
 
   function isAllowedNimsUrl(url) {
     try {
@@ -33,7 +33,7 @@
     if (value && typeof value === "object") {
       const out = {};
       for (const [key, inner] of Object.entries(value)) {
-        if (FORBIDDEN_KEYS.has(key)) continue;
+        if (FORBIDDEN_KEYS.has(key) || /^transient_/i.test(key) || /print_report_arg/i.test(key)) continue;
         out[key] = sanitizeDiagnosticValue(inner);
       }
       return out;

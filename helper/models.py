@@ -68,3 +68,13 @@ class SummarizeRequest(BaseModel):
     mode: Literal["fast", "cultures_only", "full"] = "fast"
     reports: list[ParsedReport | dict[str, Any]] = Field(default_factory=list)
 
+
+class CacheLookupItem(BaseModel):
+    report_key: str
+    report_name: str = ""
+    date_sent: str = ""
+
+
+class CacheLookupRequest(BaseModel):
+    reports: list[CacheLookupItem] = Field(default_factory=list)
+
