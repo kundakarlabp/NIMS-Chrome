@@ -173,6 +173,35 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
     assert "copyDirectFetchDiagnostics" in js
 
 
+def test_side_panel_culture_columns_and_exports_present() -> None:
+    js = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
+    for label in (
+        "Collection date",
+        "Reporting date",
+        "Culture no.",
+        "Specimen no.",
+        "Site/specimen",
+        "Culture type",
+        "Bottle/set",
+        "Growth",
+        "Organism",
+        "Comment",
+        "Sensitivity summary",
+    ):
+        assert label in js
+    for field in (
+        "culture_no",
+        "specimen_no",
+        "collection_date",
+        "reporting_date",
+        "culture_type",
+        "bottle_set",
+        "growth_quantity",
+        "sensitivity_summary",
+    ):
+        assert field in js
+
+
 def test_background_helper_routes_and_content_script_avoids_localhost_fetch() -> None:
     background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
     content_script = (ROOT / "extension" / "src" / "contentScript.js").read_text(encoding="utf-8")

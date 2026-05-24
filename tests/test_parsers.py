@@ -82,6 +82,158 @@ def test_culture_pending_and_table_sensitivity() -> None:
     assert "Ciprofloxacin" in table.sensitivity_summary["intermediate"]
 
 
+def test_nims_blood_culture_48_hour_no_growth_fields() -> None:
+    text = """
+    Fan Blood Culture - First Bottle of first Set (48 Hrs Report)
+    Sample Processed : Blood
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    FINAL REPORT AFTER 5 DAYS OF INCUBATION.
+    Lab/Study No. : B18598
+    Requisition Date: 13-May-2026 19:32
+    Coll./Study Date : 13-May-2026 19:35
+    Sample Type/No : Any Other
+    Specimen/26IBC07738
+    Reporting Date : 15-May-2026 15:07
+    """
+    culture = parse_culture(text)
+    assert culture.culture_no == "B18598"
+    assert culture.culture_number == "B18598"
+    assert culture.specimen_no == "26IBC07738"
+    assert culture.sample_processed == "Blood"
+    assert culture.site_specimen == "Blood"
+    assert culture.result == "no_growth"
+    assert culture.result_status == "no_growth"
+    assert culture.organism == ""
+    assert culture.growth_quantity == ""
+    assert culture.report_status == "48_hour"
+    assert culture.bottle_set == "set_1_bottle_1"
+    assert culture.collection_date == "13-May-2026 19:35"
+    assert culture.reporting_date == "15-May-2026 15:07"
+
+
+def test_nims_sputum_positive_aerobic_culture_fields() -> None:
+    text = """
+    Sample Processed: SPUTUM
+    AEROBIC CULTURE
+    CULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.
+    COLONIZATION OR CONTAMINATION ? PLEASE REPEAT IF NECESSARY.
+    Lab/Study No. : E7654
+    Requisition Date: 08-May-2026 18:45
+    Coll./Study Date : 08-May-2026 19:04
+    Specimen/26BCT08916
+    Reporting Date : 09-May-2026 13:26
+    """
+    culture = parse_culture(text)
+    assert culture.culture_no == "E7654"
+    assert culture.specimen_no == "26BCT08916"
+    assert culture.site_specimen == "Sputum"
+    assert culture.culture_type == "Aerobic culture"
+    assert culture.result == "positive"
+    assert culture.growth_quantity == "scanty"
+    assert culture.organism == "Gram negative bacilli"
+    assert "Possible colonization/contamination" in culture.comment
+    assert "repeat if necessary" in culture.comment
+    assert culture.sensitivity_summary == {"sensitive": [], "resistant": [], "intermediate": []}
+
+
+def test_nims_multi_section_blood_culture_creates_bottle_rows() -> None:
+    from parsers.culture_parser import parse_cultures
+
+    common = """
+    Sample Processed : Blood
+    Lab/Study No. : B18598
+    Requisition Date: 13-May-2026 19:32
+    Coll./Study Date : 13-May-2026 19:35
+    Specimen/26IBC07738
+    Reporting Date : 15-May-2026 15:07
+    """
+    text = common + """
+    Fan Blood Culture - First Bottle of first Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - Second Bottle of first Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - First Bottle of Second Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    Fan Blood Culture - Second Bottle of Second Set (48 Hrs Report)
+    CULTURE SHOWS NO GROWTH AEROBICALLY AFTER INCUBATION FOR ABOUT 36to 48 HOURS.
+    """
+    cultures = parse_cultures(text)
+    assert len(cultures) == 4
+    assert {culture.bottle_set for culture in cultures} == {
+        "set_1_bottle_1",
+        "set_1_bottle_2",
+        "set_2_bottle_1",
+        "set_2_bottle_2",
+    }
+    assert {culture.culture_no for culture in cultures} == {"B18598"}
+    assert {culture.specimen_no for culture in cultures} == {"26IBC07738"}
+    assert all(culture.result == "no_growth" for culture in cultures)
+
+
+def test_nims_common_organism_casing() -> None:
+    culture = parse_culture("AEROBIC CULTURE\nCULTURE SHOWS HEAVY GROWTH OF KLEBSIELLA PNEUMONIAE")
+    assert culture.growth_quantity == "heavy"
+    assert culture.organism == "Klebsiella pneumoniae"
+    assert culture.result == "positive"
+
+
+def test_nims_culture_object_excludes_phi_fields() -> None:
+    culture = parse_culture(
+        """
+        Patient Name : Test Patient
+        CR No : 123456
+        Age/Sex : 50/M
+        Ward : ICU
+        Clinician : Doctor
+        Sample Processed: SPUTUM
+        CULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.
+        """
+    )
+    data = culture.model_dump()
+    assert "patient_name" not in data
+    assert "cr_no" not in data
+    assert "age" not in data
+    assert "ward" not in data
+    assert "clinician" not in data
+
+
+def test_nims_no_susceptibility_defaults() -> None:
+    client = TestClient(app)
+    parsed = {
+        "report_id": "culture-1",
+        "report_name": "Sputum culture",
+        "date_sent": "09-May-2026",
+        "report_type": "culture",
+        "report_tags": ["culture"],
+        "parameters": [],
+        "culture_results": [
+            parse_culture("Sample Processed: SPUTUM\nCULTURE SHOWS SCANTY GROWTH OF GRAM NEGATIVE BACILLI.").model_dump()
+        ],
+        "errors": [],
+    }
+    summary = client.post("/summarize", json={"mode": "cultures_only", "reports": [parsed]}).json()
+    row = summary["culture_table"][0]
+    assert row["sensitivity_summary"] == "No susceptibility table found"
+    assert row["susceptible_antibiotics"] == []
+    assert row["resistant_antibiotics"] == []
+    assert row["intermediate_antibiotics"] == []
+
+
+def test_nims_simple_susceptibility_table() -> None:
+    culture = parse_culture(
+        """
+        Sample Processed: URINE
+        CULTURE SHOWS HEAVY GROWTH OF KLEBSIELLA PNEUMONIAE.
+        Amikacin S
+        Ceftriaxone R
+        Meropenem S
+        """
+    )
+    assert "Amikacin" in culture.susceptible_antibiotics
+    assert "Meropenem" in culture.susceptible_antibiotics
+    assert "Ceftriaxone" in culture.resistant_antibiotics
+
+
 def test_table_and_newline_style_lab_parsing() -> None:
     table_params = {p.canonical_name: p for p in parse_lab_parameters(read_fixture("sample_table_style_lab_text.txt"), "19-May-2026")}
     assert table_params["Hb"].value == "9.1"

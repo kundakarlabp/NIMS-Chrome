@@ -271,9 +271,22 @@ function renderCultures(rows) {
     return;
   }
   target.innerHTML = table(
-    ["Date sent", "Culture no.", "Site/specimen", "Result", "Organism", "Sensitivity summary", "Status"],
+    ["Date sent", "Collection date", "Reporting date", "Culture no.", "Specimen no.", "Site/specimen", "Culture type", "Bottle/set", "Status", "Result", "Growth", "Organism", "Comment", "Sensitivity summary"],
     rows.map((row) => [
-      row.date_sent, row.culture_number, row.site_specimen, row.result, row.organism, row.sensitivity_summary, row.status
+      row.date_sent,
+      row.collection_date,
+      row.reporting_date,
+      row.culture_no || row.culture_number,
+      row.specimen_no,
+      row.site_specimen,
+      row.culture_type,
+      row.bottle_set,
+      row.status || row.report_status,
+      row.result,
+      row.growth || row.growth_quantity,
+      row.organism,
+      row.comment,
+      row.sensitivity_summary
     ])
   );
 }
@@ -410,7 +423,24 @@ function toCsv(state) {
     lines.push(csv(["Lab", "", row.parameter, (row.values || []).join(" | "), row.trend]));
   }
   for (const row of result.culture_table || []) {
-    lines.push(csv(["Culture", row.date_sent, row.culture_number, row.result, `${row.organism} ${row.sensitivity_summary}`]));
+    lines.push(csv([
+      "Culture",
+      row.date_sent,
+      row.culture_no || row.culture_number,
+      row.result,
+      [
+        row.collection_date && `collection=${row.collection_date}`,
+        row.reporting_date && `reporting=${row.reporting_date}`,
+        row.specimen_no && `specimen=${row.specimen_no}`,
+        row.site_specimen,
+        row.culture_type,
+        row.bottle_set,
+        row.growth || row.growth_quantity,
+        row.organism,
+        row.comment,
+        row.sensitivity_summary
+      ].filter(Boolean).join(" | ")
+    ]));
   }
   return lines.join("\n");
 }
@@ -431,7 +461,22 @@ function toCopyText(state) {
   }
   lines.push("", "Cultures");
   for (const row of result.culture_table || []) {
-    lines.push([row.date_sent, row.culture_number, row.site_specimen, row.result, row.organism, row.sensitivity_summary, row.status].filter(Boolean).join(" | "));
+    lines.push([
+      row.date_sent,
+      row.collection_date,
+      row.reporting_date,
+      row.culture_no || row.culture_number,
+      row.specimen_no,
+      row.site_specimen,
+      row.culture_type,
+      row.bottle_set,
+      row.status || row.report_status,
+      row.result,
+      row.growth || row.growth_quantity,
+      row.organism,
+      row.comment,
+      row.sensitivity_summary
+    ].filter(Boolean).join(" | "));
   }
   lines.push("", "Interpretation");
   for (const item of result.interpretation || []) lines.push(`- ${item}`);

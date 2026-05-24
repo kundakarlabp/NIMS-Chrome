@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cache import clear_cache, get_cached, is_safe_report_key, make_cache_key, set_cached
 from models import CacheLookupRequest, ParsedReport, ParseReportRequest, SummarizeRequest
-from parsers.culture_parser import parse_culture
+from parsers.culture_parser import parse_cultures
 from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_parameters
 from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, extract_text_from_bytes
 
@@ -72,7 +72,8 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
     report_tags = infer_report_tags(payload.report_name, text)
     report_type = infer_report_type(payload.report_name, text)
     parameters = parse_lab_parameters(text, payload.date_sent)
-    culture = parse_culture(text) if "culture" in report_tags else None
+    culture_results = parse_cultures(text, payload.date_sent) if "culture" in report_tags else []
+    culture = culture_results[0] if culture_results else None
     preview = deidentify(text)[:500]
 
     parsed = ParsedReport(
@@ -83,6 +84,7 @@ def parse_report(payload: ParseReportRequest) -> dict[str, Any]:
         report_tags=report_tags,
         parameters=parameters,
         culture=culture,
+        culture_results=culture_results,
         raw_text_preview=preview,
         errors=errors,
     ).model_dump()
@@ -211,42 +213,62 @@ def build_lab_trend_table(reports: list[dict[str, Any]]) -> dict[str, Any]:
     return {"columns": dates, "rows": rows}
 
 
-def build_culture_table(reports: list[dict[str, Any]]) -> list[dict[str, str]]:
+def build_culture_table(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for report in reports:
-        culture = report.get("culture")
-        if not culture:
-            continue
-        sensitivity = culture.get("sensitivity_summary") or {}
-        rows.append(
-            {
-                "date_sent": report.get("date_sent", ""),
-                "culture_number": culture.get("culture_number", ""),
-                "site_specimen": " / ".join(
-                    part for part in [culture.get("site", ""), culture.get("specimen", "")] if part
-                ),
-                "result": culture.get("result_status", "unknown"),
-                "organism": ", ".join(culture.get("organisms") or []),
-                "sensitivity_summary": format_sensitivity(sensitivity),
-                "status": culture.get("report_status", "unknown"),
-            }
-        )
-    return sorted(rows, key=lambda r: date_key(r["date_sent"]), reverse=True)
+        for culture in culture_items(report):
+            sensitivity = culture.get("sensitivity_summary") or {}
+            organisms = culture.get("organisms") or []
+            organism = culture.get("organism") or ", ".join(organisms)
+            site_specimen = culture.get("site_specimen") or " / ".join(
+                part for part in [culture.get("site", ""), culture.get("specimen", "")] if part
+            )
+            rows.append(
+                {
+                    "date_sent": culture.get("date_sent") or report.get("date_sent", ""),
+                    "requisition_date": culture.get("requisition_date", ""),
+                    "collection_date": culture.get("collection_date", ""),
+                    "reporting_date": culture.get("reporting_date", ""),
+                    "culture_no": culture.get("culture_no") or culture.get("culture_number", ""),
+                    "culture_number": culture.get("culture_no") or culture.get("culture_number", ""),
+                    "specimen_no": culture.get("specimen_no", ""),
+                    "sample_processed": culture.get("sample_processed", ""),
+                    "site_specimen": site_specimen,
+                    "culture_type": culture.get("culture_type", ""),
+                    "bottle_set": display_bottle_set(culture.get("bottle_set", "")),
+                    "bottle_set_code": culture.get("bottle_set", ""),
+                    "status": culture.get("report_status", "unknown"),
+                    "report_status": culture.get("report_status", "unknown"),
+                    "result": culture.get("result") or culture.get("result_status", "unknown"),
+                    "growth": culture.get("growth_quantity", ""),
+                    "growth_quantity": culture.get("growth_quantity", ""),
+                    "organism": organism,
+                    "comment": culture.get("comment", ""),
+                    "sensitivity_summary": format_sensitivity(sensitivity),
+                    "susceptible_antibiotics": culture.get("susceptible_antibiotics", []),
+                    "resistant_antibiotics": culture.get("resistant_antibiotics", []),
+                    "intermediate_antibiotics": culture.get("intermediate_antibiotics", []),
+                    "raw_evidence_short": culture.get("raw_evidence_short", ""),
+                }
+            )
+    return sorted(
+        rows,
+        key=lambda r: (date_key(r.get("reporting_date") or r.get("date_sent", "")), r.get("culture_no", ""), r.get("bottle_set_code", "")),
+        reverse=True,
+    )
 
 
 def build_interpretation(reports: list[dict[str, Any]]) -> list[str]:
     trend_table = build_lab_trend_table(reports)
     bullets: list[str] = []
+    for item in microbiology_interpretation(build_culture_table(reports)):
+        bullets.append(item)
+        if len(bullets) >= 5:
+            break
     for row in trend_table["rows"]:
         if row["trend"] in {"rising", "falling", "variable"}:
             bullets.append(f"{row['parameter']} trend is {row['trend']} across available reports.")
         if len(bullets) >= 4:
-            break
-    for row in build_culture_table(reports):
-        if row["result"] in {"positive", "no_growth", "pending"}:
-            organism = f" ({row['organism']})" if row["organism"] else ""
-            bullets.append(f"Culture on {row['date_sent']} is {row['result']}{organism}.")
-        if len(bullets) >= 7:
             break
     if not bullets:
         bullets.append("AI interpretation disabled; structured tables generated locally.")
@@ -286,14 +308,58 @@ def infer_trend(date_map: dict[str, dict[str, Any]], dates: list[str]) -> str:
     return "variable"
 
 
-def format_sensitivity(sensitivity: dict[str, list[str]]) -> str:
+def format_sensitivity(sensitivity: dict[str, list[str]] | str) -> str:
+    if isinstance(sensitivity, str):
+        return sensitivity or "No susceptibility table found"
     parts = []
-    labels = [("S", "sensitive"), ("R", "resistant"), ("I", "intermediate")]
+    labels = [("Sensitive", "sensitive"), ("Resistant", "resistant"), ("Intermediate", "intermediate")]
     for label, key in labels:
         values = sensitivity.get(key) or []
         if values:
             parts.append(f"{label}: {', '.join(values)}")
-    return "; ".join(parts) if parts else "See report; sensitivity parsing incomplete"
+    return "; ".join(parts) if parts else "No susceptibility table found"
+
+
+def culture_items(report: dict[str, Any]) -> list[dict[str, Any]]:
+    items = report.get("culture_results") or []
+    if items:
+        return [dict(item) for item in items if item]
+    culture = report.get("culture")
+    return [dict(culture)] if culture else []
+
+
+def display_bottle_set(value: str) -> str:
+    match = re.match(r"set_(\d+)_bottle_(\d+)$", value or "")
+    if not match:
+        return value or ""
+    return f"Set {match.group(1)} Bottle {match.group(2)}"
+
+
+def microbiology_interpretation(rows: list[dict[str, Any]]) -> list[str]:
+    bullets: list[str] = []
+    for row in rows:
+        if row.get("result") != "positive":
+            continue
+        site = row.get("site_specimen") or "culture"
+        date = row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "available date"
+        growth = f"{row.get('growth')} growth of " if row.get("growth") else "growth of "
+        organism = row.get("organism") or "an organism"
+        comment = f"; {row.get('comment')}" if row.get("comment") else ""
+        bullets.append(f"{site} culture on {date}: reported {growth}{organism}{comment}.")
+    blood_no_growth: defaultdict[str, int] = defaultdict(int)
+    for row in rows:
+        if row.get("result") == "no_growth" and "blood" in (row.get("site_specimen", "") + row.get("culture_type", "")).lower():
+            key = row.get("collection_date") or row.get("date_sent") or row.get("reporting_date") or "available date"
+            blood_no_growth[key] += 1
+    for date, count in blood_no_growth.items():
+        suffix = "report" if count == 1 else "bottle/set reports"
+        bullets.append(f"Blood cultures on {date}: no aerobic growth reported across {count} {suffix}.")
+    for row in rows:
+        if row.get("result") == "pending":
+            site = row.get("site_specimen") or "Culture"
+            date = row.get("collection_date") or row.get("date_sent") or ""
+            bullets.append(f"{site} culture on {date}: result pending.")
+    return bullets[:5]
 
 
 def has_tag(report: dict[str, Any], tag: str) -> bool:
@@ -302,7 +368,7 @@ def has_tag(report: dict[str, Any], tag: str) -> bool:
 
 def date_key(value: str) -> datetime:
     value = (value or "").strip()
-    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+    for fmt in ("%d-%b-%Y %H:%M", "%d-%b-%y %H:%M", "%d-%b-%Y", "%d-%b-%y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
         try:
             return datetime.strptime(value, fmt)
         except ValueError:

@@ -38,6 +38,27 @@ class Parameter(BaseModel):
 
 
 class CultureResult(BaseModel):
+    date_sent: str = ""
+    requisition_date: str = ""
+    collection_date: str = ""
+    reporting_date: str = ""
+    culture_no: str = ""
+    specimen_no: str = ""
+    sample_processed: str = ""
+    site_specimen: str = ""
+    culture_type: str = ""
+    bottle_set: str = ""
+    result: Literal[
+        "positive", "negative", "no_growth", "pending", "contaminant", "possible_contaminant", "unknown"
+    ] = "unknown"
+    growth_quantity: str = ""
+    organism: str = ""
+    comment: str = ""
+    susceptible_antibiotics: list[str] = Field(default_factory=list)
+    resistant_antibiotics: list[str] = Field(default_factory=list)
+    intermediate_antibiotics: list[str] = Field(default_factory=list)
+    raw_evidence_short: str = ""
+    culture_parser_version: int = 2
     culture_number: str = ""
     site: str = ""
     specimen: str = ""
@@ -59,6 +80,7 @@ class ParsedReport(BaseModel):
     report_tags: list[str] = Field(default_factory=list)
     parameters: list[Parameter] = Field(default_factory=list)
     culture: CultureResult | None = None
+    culture_results: list[CultureResult] = Field(default_factory=list)
     raw_text_preview: str = ""
     errors: list[str] = Field(default_factory=list)
     cached: bool = False
