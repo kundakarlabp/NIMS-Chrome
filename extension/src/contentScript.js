@@ -64,7 +64,9 @@
 
       const parsedReports = mode === "manual_fallback"
         ? await runManualFallback(selected, setProgress)
-        : await runDirectBulk(selected, setProgress);
+        : mode === "test_direct"
+          ? await runTestDirectFetch(selected, setProgress)
+          : await runDirectBulk(selected, setProgress);
 
       setProgress("Creating tables");
       const summary = await callHelper("NIMS_HELPER_SUMMARIZE", { mode: helperSummaryMode(mode), reports: parsedReports });
@@ -100,9 +102,11 @@
   }
 
   async function runDirectBulk(selected, setProgress) {
+    const helper = await chrome.runtime.sendMessage({ type: "NIMS_HELPER_HEALTH" });
+    if (!helper || !helper.ok) throw new Error("Helper status is not ok. Start the helper and retry.");
     const mapping = await chrome.runtime.sendMessage({ type: "NIMS_GET_MAPPING_SUMMARY" });
-    if (!mapping || !mapping.ok || !mapping.summary || mapping.summary.status !== "ready") {
-      throw new Error("Direct report mapping not discovered. Click Discover Mapping first.");
+    if (!isValidatedMapping(mapping && mapping.summary)) {
+      throw new Error("Direct report mapping is not validated. Run Discover Mapping, then Test Direct Fetch first.");
     }
 
     const payloads = [];
@@ -163,6 +167,50 @@
     return parsedReports.filter(Boolean);
   }
 
+  async function runTestDirectFetch(selected, setProgress) {
+    const mapping = await chrome.runtime.sendMessage({ type: "NIMS_GET_MAPPING_SUMMARY" });
+    if (!mapping || !mapping.ok || !mapping.summary || !["candidate", "failed", "validated"].includes(mapping.summary.status)) {
+      throw new Error("Direct report mapping not discovered. Click Discover Mapping first.");
+    }
+    const row = selected[0];
+    if (!row) throw new Error("No View Report button found for row");
+    const payload = await buildTransientPayload(row);
+    if (!payload.ok) throw new Error(payload.error || "No View Report button found for row");
+    setProgress("Direct fetching 1/1");
+    const fetched = await chrome.runtime.sendMessage({ type: "NIMS_FETCH_REPORT_DIRECT", rowPayload: payload });
+    if (!fetched || !fetched.ok) {
+      await recordDirectTest({ ok: false, parsed: false, ...(fetched || {}), errors: [(fetched && fetched.error) || "Direct fetch mapping failed for this report."] });
+      return [rowError(row, directFetchFailureMessage(fetched))];
+    }
+    if (!["pdf_report", "text_report"].includes(fetched.classification || "")) {
+      await recordDirectTest({ ok: false, parsed: false, ...fetched, errors: [`Direct fetch returned ${fetched.classification || "fetch_error"}`] });
+      return [rowError(row, `Direct fetch returned ${fetched.classification || "fetch_error"}`)];
+    }
+    setProgress("Parsing 1/1");
+    const parsed = await parseReport(payload.row, fetched);
+    const parameterCount = (parsed.parameters || []).length;
+    const hasCulture = Boolean(parsed.culture);
+    const parseErrors = parsed.errors || [];
+    const fatalErrors = fatalParseErrors(parseErrors);
+    const parsedOk = fatalErrors.length === 0 && (parameterCount > 0 || hasCulture);
+    const errors = parsedOk
+      ? []
+      : [fatalErrors.length ? fatalErrors.join("; ") : "Report fetched but parser extracted no values. Parser tuning needed."];
+    await recordDirectTest({
+      ok: true,
+      parsed: parsedOk,
+      status: fetched.status,
+      contentType: fetched.contentType,
+      finalUrlSafeHostPath: fetched.finalUrlSafeHostPath,
+      classification: fetched.classification,
+      parameterCount,
+      hasCulture,
+      reportTags: parsed.report_tags || [],
+      errors
+    });
+    return parsedOk ? [parsed] : [{ ...parsed, errors }];
+  }
+
   async function runManualFallback(selected, setProgress) {
     const parsedReports = [];
     for (let index = 0; index < selected.length; index += 1) {
@@ -177,6 +225,30 @@
       parsedReports.push(await parseReport(row, fetched));
     }
     return parsedReports;
+  }
+
+  function isValidatedMapping(summary) {
+    return Boolean(
+      summary
+      && summary.status === "validated"
+      && summary.lastTestDirectFetch
+      && summary.lastTestDirectFetch.ok === true
+      && summary.lastTestDirectFetch.parsed === true
+    );
+  }
+
+  async function recordDirectTest(result) {
+    return chrome.runtime.sendMessage({ type: "NIMS_RECORD_DIRECT_TEST", result });
+  }
+
+  function directFetchFailureMessage(fetched) {
+    if (!fetched) return "Direct fetch mapping failed for this report.";
+    if (fetched.classification) return `Direct fetch returned ${fetched.classification}`;
+    return fetched.error || "Direct fetch mapping failed for this report.";
+  }
+
+  function fatalParseErrors(errors) {
+    return (errors || []).filter((error) => /empty report|ocr disabled|unable to extract|session expired|html response|not a recognizable report/i.test(error || ""));
   }
 
   async function fetchReport(row) {

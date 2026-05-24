@@ -242,7 +242,8 @@
       transient_print_report_arg: transientArg,
       transient_form_action: form ? resolveUrl(form.getAttribute("action") || "", root.location.href) : "",
       transient_form_method: form ? String(form.getAttribute("method") || "get").toLowerCase() : "get",
-      transient_form_fields: form ? formFields(form) : {}
+      transient_form_fields: form ? formFields(form) : {},
+      safe_form_structure: form ? safeFormStructure(form) : null
     };
   }
 
@@ -273,6 +274,25 @@
       fields[name] = field.value == null ? "" : String(field.value);
     });
     return fields;
+  }
+
+  function safeFormStructure(form) {
+    return {
+      form_method: String(form.getAttribute("method") || "get").toLowerCase(),
+      form_action_host_path: safeHostPath(resolveUrl(form.getAttribute("action") || "", root.location.href)),
+      field_names: Array.from(form.querySelectorAll("input, select, textarea"))
+        .map((field) => field.getAttribute("name") || field.getAttribute("id") || "")
+        .filter(Boolean)
+    };
+  }
+
+  function safeHostPath(url) {
+    try {
+      const parsed = new URL(url || "");
+      return `${parsed.hostname}${parsed.pathname}`;
+    } catch {
+      return "";
+    }
   }
 
   function safeRuntimeRow(row) {
@@ -506,6 +526,7 @@
     getTransientPrintReportArg,
     getTransientReportRequestPayload,
     safeRuntimeRow,
+    safeFormStructure,
     selectRowsForMode,
     sanitizeState,
     sanitizeRows,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import textwrap
 from pathlib import Path
 
 
@@ -14,6 +15,51 @@ def run_node(script: str) -> dict:
         cwd=ROOT,
         check=True,
         text=True,
+        capture_output=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def run_background_node(script: str) -> dict:
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    wrapped = f"""
+    const vm = require('vm');
+    const context = {{
+      module: {{ exports: {{}} }},
+      exports: {{}},
+      console,
+      URL,
+      URLSearchParams,
+      TextDecoder,
+      TextEncoder,
+      Uint8Array,
+      setTimeout,
+      clearTimeout,
+      btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
+      chrome: {{
+        runtime: {{ onInstalled: {{ addListener: () => {{}} }}, onMessage: {{ addListener: () => {{}} }} }},
+        sidePanel: {{ setPanelBehavior: () => Promise.resolve() }},
+        tabs: {{ onCreated: {{ addListener: () => {{}}, removeListener: () => {{}} }} }},
+        webRequest: {{
+          onBeforeRequest: {{ addListener: () => {{}}, removeListener: () => {{}} }},
+          onHeadersReceived: {{ addListener: () => {{}}, removeListener: () => {{}} }},
+          onCompleted: {{ addListener: () => {{}}, removeListener: () => {{}} }}
+        }},
+        webNavigation: {{ onCommitted: {{ addListener: () => {{}}, removeListener: () => {{}} }} }},
+        storage: {{ local: {{ get: async () => ({{}}), set: async () => {{}}, remove: async () => {{}} }}, session: {{ get: async () => ({{}}), set: async () => {{}}, remove: async () => {{}} }} }}
+      }}
+    }};
+    context.context = context;
+    vm.createContext(context);
+    vm.runInContext({json.dumps(background)}, context);
+    vm.runInContext({json.dumps(script)}, context);
+    """
+    completed = subprocess.run(
+        ["node"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        input=wrapped,
         capture_output=True,
     )
     return json.loads(completed.stdout)
@@ -103,6 +149,7 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
         "clearMapping",
         "manualPopupFallback",
         "copyMappingDiagnostics",
+        "copyDirectFetchDiagnostics",
     ):
         assert f'id="{button_id}"' in html
     assert "Discover Mapping" in html
@@ -110,6 +157,7 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
     assert "Bulk Fast Summary" in html
     assert "Bulk Full Summary" in html
     assert "Manual Popup Fallback" in html
+    assert "Copy Direct Fetch Diagnostics" in html
     assert 'runSummaryFromBestFrame("test_direct")' in js
     assert 'runSummaryFromBestFrame("bulk_fast")' in js
     assert 'runSummaryFromBestFrame("bulk_full")' in js
@@ -122,6 +170,7 @@ def test_side_panel_buttons_and_frame_execution_present() -> None:
     assert "NIMS_HELPER_HEALTH" in js
     assert "Helper status" in js
     assert "copySafeMappingDiagnostics" in js
+    assert "copyDirectFetchDiagnostics" in js
 
 
 def test_background_helper_routes_and_content_script_avoids_localhost_fetch() -> None:
@@ -338,19 +387,26 @@ def test_direct_bulk_static_contract_and_no_default_popup_fallback() -> None:
     assert 'method: "POST"' in background
     assert 'method: "GET"' in background
     assert "Direct mapping not discovered. Click Discover Mapping first." in background
-    assert "Report response was login/session page." in background
+    assert "html_login_or_session" in background
     assert "Required dynamic form field missing in current NIMS page." in background
-    assert "Report response was empty." in background
-    assert "Report response was not PDF or recognizable report." in background
+    assert "Direct fetch returned empty response." in background
+    assert "Direct fetch returned generic HTML page." in background
     assert "chrome.storage.session" in background
     assert "safeHostPath" in background
     assert "runDirectBulk" in content_script
+    assert "runTestDirectFetch" in content_script
     assert "NIMS_FETCH_REPORT_DIRECT" in content_script
     assert "runManualFallback" in content_script
     assert 'mode === "manual_fallback"' in content_script
     assert "captureReportByClick(row, sender)" not in content_script
     assert "transient_print_report_arg" in sidepanel_utils
     assert "print_report_arg" in sidepanel_utils
+    assert "Direct report mapping is not validated. Run Discover Mapping, then Test Direct Fetch first." in content_script
+    assert 'summary.status === "validated"' in content_script
+    assert "summary.lastTestDirectFetch.ok === true" in content_script
+    assert "summary.lastTestDirectFetch.parsed === true" in content_script
+    assert 'mapping.status = mapping.validated ? "validated" : "failed"' in background
+    assert "mapping.validated = Boolean(safe.ok && safe.parsed)" in background
 
 
 def test_transient_printreport_arg_and_safe_report_key_static_contract() -> None:
@@ -368,3 +424,44 @@ def test_transient_printreport_arg_and_safe_report_key_static_contract() -> None
     assert "Using cached result" in content_script
     assert "runQueue(misses, 3" in content_script
     assert "Math.min(Math.max(Number(concurrency) || 3, 1), 5)" in content_script
+
+
+def test_direct_response_classifier_cases() -> None:
+    script = r"""
+    const c = context.module.exports.classifyReportResponse;
+    const enc = new TextEncoder();
+    const out = {
+      pdf: c(enc.encode('%PDF-1.4 body'), 'application/pdf', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
+      empty: c(new ArrayBuffer(0), 'application/pdf', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
+      login: c(enc.encode('<html><input type="password"> session expired captcha</html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
+      viewer: c(enc.encode('<html><iframe src="/HISInvestigationG5/report.pdf"></iframe><script>window.print()</script></html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/viewer').classification,
+      duplicate: c(enc.encode('<html>Duplicate Result Report</html>'), 'text/html', 200, 'www.nimsts.edu.in/HISInvestigationG5/invDuplicateResultReportPrinting.cnt').classification,
+      textReport: c(enc.encode('Hemoglobin 8.9 g/dL Platelet 150000 report'), 'text/plain', 200, 'www.nimsts.edu.in/HISInvestigationG5/report').classification,
+      wrong: c(enc.encode('not found content that is long enough'), 'text/html', 404, 'www.nimsts.edu.in/HISInvestigationG5/missing').classification
+    };
+    console.log(JSON.stringify(out));
+    """
+    out = run_background_node(script)
+    assert out == {
+        "pdf": "pdf_report",
+        "empty": "empty_response",
+        "login": "html_login_or_session",
+        "viewer": "html_report_viewer",
+        "duplicate": "html_duplicate_report_page",
+        "textReport": "text_report",
+        "wrong": "wrong_endpoint",
+    }
+
+
+def test_direct_diagnostics_are_safe_static_contract() -> None:
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    sidepanel = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
+    assert "NIMS_GET_DIRECT_DIAGNOSTICS" in background
+    assert "safeDiagnosticsForMapping" in background
+    assert "safeRequestDiagnostic" in background
+    assert "queryParamNames" in background
+    assert "postFieldNames" in background
+    assert "responseSize" in background
+    assert "toDirectFetchDiagnosticsText" in sidepanel
+    assert "raw_text_preview" not in sidepanel
+    assert "transient_print_report_arg" not in sidepanel

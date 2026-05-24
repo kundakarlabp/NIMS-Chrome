@@ -39,8 +39,8 @@ source .venv/bin/activate
 12. Confirm the `HISInvestigationG5` iframe has `View Report` rows.
 13. Confirm helper status shows `ok`.
 14. Click `Discover Mapping`. This performs one controlled `View Report` click to learn the current NIMS `printReport(...)` network request shape.
-15. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF.
-16. Click `Bulk Fast Summary` or `Bulk Full Summary`.
+15. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF and validate the mapping only if the helper parses at least one value or culture.
+16. Only after `Test Direct Fetch` succeeds, click `Bulk Fast Summary` or `Bulk Full Summary`.
 17. Verify the generated values against source reports before clinical decisions.
 
 ## Test With Mock Page
@@ -71,6 +71,8 @@ After mock testing, test only on de-identified real PDF/report output before any
 - Side-panel run buttons and `Diagnose Page` for iframe-based NIMS report pages
 - Direct silent bulk fetching after `Discover Mapping`, without opening each PDF one by one
 - `Test Direct Fetch` for validating the discovered mapping on one report before bulk runs
+- Safe direct-fetch response classification for PDF, text report, login/session HTML, report viewer HTML, duplicate-report pages, generic HTML, empty responses, wrong endpoints, and unsupported content
+- `Copy Direct Fetch Diagnostics` for safe endpoint/path, method, field-name, status, content-type, classification, and parse-count details
 - Separate `Manual Popup Fallback` for slow one-by-one visible popup capture when direct mapping fails
 - Background-mediated helper calls for health, parsing, summarizing, and cache clearing so NIMS iframes do not directly call localhost
 - Safe onclick/form workflow diagnostics for NIMS rows with `onclick=yes` and `href=no`
@@ -87,7 +89,7 @@ After mock testing, test only on de-identified real PDF/report output before any
 
 ## Direct Bulk Workflow
 
-`Bulk Fast Summary` and `Bulk Full Summary` use direct silent fetch only. They do not use the popup/open-close fallback by default. If no direct mapping is available, they stop with `Direct report mapping not discovered. Click Discover Mapping first.`
+`Bulk Fast Summary` and `Bulk Full Summary` use direct silent fetch only. They do not use the popup/open-close fallback by default. If the mapping is not validated by a successful `Test Direct Fetch` in the current session, they stop with `Direct report mapping is not validated. Run Discover Mapping, then Test Direct Fetch first.`
 
 `Bulk Fast Summary` initially selects latest 3 CBC reports, latest 3 renal/liver/electrolyte reports, all culture reports, CRP/procalcitonin when present, and caps the run at 20 reports. `Bulk Full Summary` processes all visible rows with concurrency 3, capped internally at 5.
 
@@ -95,10 +97,12 @@ After mock testing, test only on de-identified real PDF/report output before any
 
 The first full run can still take time depending on NIMS response speed. Repeat runs should be faster when safe parsed-report cache keys are available.
 
+If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text intentionally includes only host/path, method, response status, content-type, response classification, parameter names, POST field names, selected report name/date/department, parse count, and parse errors. It excludes raw URLs, query strings, hidden values, raw `onclick`, raw `printReport` arguments, cookies, tokens, CR number, identifiers, raw HTML, raw PDFs, and raw report text.
+
 ## Known Limitations
 
-- Direct request mapping is inferred from one controlled live report click. If NIMS changes its report request shape, click `Clear Mapping`, then `Discover Mapping` again.
-- If direct fetch mapping cannot be inferred safely, the extension reports a precise mapping failure instead of faking success.
+- Direct request mapping is inferred as a candidate from one controlled live report click. It is marked validated only after `Test Direct Fetch` retrieves and parses one report.
+- If direct fetch returns viewer HTML or a duplicate-report page, the extension classifies that result and reports that second-stage mapping may be needed.
 - `Diagnose Page` shows only sanitized host/path frame information and row previews; it strips query strings and does not show raw row text, onclick code, cookies, tokens, or credentials.
 - Bulk modes do not silently fall back to popup capture.
 - If a fetched page is login/session-expired HTML, it is reported as failed and is not parsed as a lab report.
