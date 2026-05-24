@@ -72,7 +72,7 @@ The extension still performs direct NIMS report fetching in the browser session.
 
 ### Android WebView Mobile Mode
 
-The planned mobile app lives under `mobile/android/` when built. The intended workflow is:
+The mobile app scaffold lives under `mobile/android/`. It is a single-activity Kotlin WebView app that loads NIMS, uses manual login only, injects controlled shared JavaScript from `shared/nims-web/nimsReportCore.js`, fetches reports with the active WebView cookie session, and posts report content to the configured Railway helper.
 
 1. Install the debug APK on the phone.
 2. Enter the Railway helper URL and API key.
@@ -82,6 +82,16 @@ The planned mobile app lives under `mobile/android/` when built. The intended wo
 6. Run `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
 
 The Android app must use the active WebView/NIMS session for report fetching and must not store NIMS credentials or bypass captcha/OTP/session controls.
+
+Android build steps:
+
+```bash
+cd mobile/android
+./gradlew test
+./gradlew assembleDebug
+```
+
+If opening in Android Studio, open the `mobile/android/` folder, let Gradle sync, then run the `app` debug configuration. The helper API key is stored through Android Keystore-backed encryption. NIMS credentials are not stored by the app.
 
 ## Railway Deployment
 

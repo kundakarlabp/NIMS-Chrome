@@ -550,3 +550,49 @@ def test_setpdf_template_extraction_and_static_direct_request_contract() -> None
     background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
     assert "fileName" in background
     assert "mode=PRINTREPORT" not in background
+
+
+def test_shared_mobile_js_setpdf_template_and_selection() -> None:
+    script = r"""
+    const core = require('./shared/nims-web/nimsReportCore.js');
+    globalThis.location = { href: 'https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt' };
+    const doc = {
+      querySelector: (selector) => selector === 'iframe#setPdf' ? {
+        getAttribute: (name) => name === 'src' ? '/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=SECRET-FILE' : ''
+      } : null,
+      querySelectorAll: () => []
+    };
+    const template = core.discoverSetPdfTemplate(doc);
+    const url = core.buildReportUrl(template, 'ABC 123');
+    const selected = core.selectRowsForMode([
+      { date_sent: '10-May-2026', report_name: 'CBC', report_tags: ['cbc'] },
+      { date_sent: '11-May-2026', report_name: 'Blood Culture', report_tags: ['culture'] },
+      { date_sent: '12-May-2026', report_name: 'RFT LFT Electrolytes', report_tags: ['rft', 'lft', 'electrolytes'] }
+    ], 'bulk_fast');
+    console.log(JSON.stringify({ template, url, selectedCount: selected.length }));
+    """
+    out = run_node(script)
+    assert out["template"]["endpoint"] == "www.nimsts.edu.in/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt"
+    assert out["template"]["queryParamNames"] == ["hmode", "fileName"]
+    assert "hmode=PRINTREPORT" in out["url"]
+    assert "fileName=ABC+123" in out["url"]
+    assert "SECRET-FILE" not in json.dumps(out)
+    assert out["selectedCount"] == 3
+
+
+def test_android_project_static_security_contract() -> None:
+    manifest = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    main_activity = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "MainActivity.kt").read_text(encoding="utf-8")
+    settings = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "SecureSettings.kt").read_text(encoding="utf-8")
+    client = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "HelperApiClient.kt").read_text(encoding="utf-8")
+    assert 'android:usesCleartextTraffic="false"' in manifest
+    assert "javaScriptEnabled = true" in main_activity
+    assert "allowFileAccess = false" in main_activity
+    assert "allowUniversalAccessFromFileURLs = false" in main_activity
+    assert "MIXED_CONTENT_NEVER_ALLOW" in main_activity
+    assert "loginLogin.action" in main_activity
+    assert "CookieManager.getInstance().getCookie" in main_activity
+    assert "X-NIMS-HELPER-KEY" in client
+    assert "AndroidKeyStore" in settings
+    assert "username" not in main_activity.lower()
+    assert "password" not in main_activity.lower()
