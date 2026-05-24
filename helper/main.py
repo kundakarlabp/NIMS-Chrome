@@ -9,8 +9,8 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from cache import clear_cache, get_cached, make_cache_key, set_cached
-from models import ParsedReport, ParseReportRequest, SummarizeRequest
+from cache import clear_cache, get_cached, is_safe_report_key, make_cache_key, set_cached
+from models import CacheLookupRequest, ParsedReport, ParseReportRequest, SummarizeRequest
 from parsers.culture_parser import parse_culture
 from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_parameters
 from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, extract_text_from_bytes
@@ -107,6 +107,24 @@ def summarize(payload: SummarizeRequest) -> dict[str, Any]:
         "interpretation": build_interpretation(selected),
         "ai_note": ai_note(),
     }
+
+
+@app.post("/cache-lookup")
+def cache_lookup(payload: CacheLookupRequest) -> dict[str, Any]:
+    hits: dict[str, Any] = {}
+    misses: list[str] = []
+    for item in payload.reports:
+        report_key = item.report_key.strip()
+        if not is_safe_report_key(report_key):
+            misses.append(report_key)
+            continue
+        cached = get_cached(report_key)
+        if cached:
+            cached["cached"] = True
+            hits[report_key] = cached
+        else:
+            misses.append(report_key)
+    return {"hits": hits, "misses": misses}
 
 
 @app.post("/clear-cache")

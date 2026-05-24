@@ -125,6 +125,23 @@
     return args;
   }
 
+  function parseFunctionArgs(onclick) {
+    const match = String(onclick || "").match(/([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)/);
+    if (!match) return { functionName: "", args: [] };
+    return {
+      functionName: match[1],
+      args: splitArgs(match[2]).map(unquoteArg)
+    };
+  }
+
+  function unquoteArg(value) {
+    const text = String(value || "").trim();
+    if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"') && text.endsWith('"'))) {
+      return text.slice(1, -1).replace(/\\(['"\\])/g, "$1");
+    }
+    return text;
+  }
+
   function parseUrlFromOnclick(onclick, baseUrl) {
     if (!onclick) return "";
     const absolute = onclick.match(/https?:\/\/[^'")\s]+|data:[^'")\s]+/i);
@@ -161,9 +178,9 @@
 
   function selectRowsForMode(rows, mode) {
     const sorted = sortRowsLatestFirst(dedupeRows(rows));
-    if (mode === "full") return sorted;
-    if (mode === "test_first") return sorted.filter((row) => hasTag(row, "cbc")).slice(0, 1);
-    if (mode === "cultures_only") return sorted.filter((row) => hasTag(row, "culture"));
+    if (mode === "full" || mode === "bulk_full" || mode === "manual_fallback") return sorted;
+    if (mode === "test_first" || mode === "test_direct") return selectOneTestRow(sorted);
+    if (mode === "cultures_only" || mode === "bulk_cultures_only") return sorted.filter((row) => hasTag(row, "culture"));
 
     const limits = { cbc: 3, renal_liver_electrolytes: 3 };
     const counts = {};
@@ -172,6 +189,10 @@
       if (selected.length >= 20) break;
       const tags = row.report_tags || inferReportTags(row.report_name || "");
       if (tags.includes("culture")) {
+        selected.push(row);
+        continue;
+      }
+      if (tags.includes("inflammatory")) {
         selected.push(row);
         continue;
       }
@@ -192,6 +213,80 @@
       if (include) selected.push(row);
     }
     return selected;
+  }
+
+  function selectOneTestRow(rows) {
+    return rows.filter((row) => hasTag(row, "cbc")).slice(0, 1).concat(rows.slice(0, 1)).slice(0, 1);
+  }
+
+  function getTransientPrintReportArg(rowOrButton) {
+    const button = rowOrButton && rowOrButton.matches && rowOrButton.matches("[onclick]")
+      ? rowOrButton
+      : firstPrintReportButton(rowOrButton);
+    if (!button) return "";
+    const parsed = parseFunctionArgs(button.getAttribute("onclick") || "");
+    if (parsed.functionName !== "printReport" || parsed.args.length !== 1) return "";
+    return parsed.args[0] || "";
+  }
+
+  function getTransientReportRequestPayload(rowInfo, doc) {
+    const row = findReportRow(rowInfo, doc || root.document);
+    if (!row) return { ok: false, error: "No View Report button found for row" };
+    const button = firstPrintReportButton(row);
+    const transientArg = getTransientPrintReportArg(button);
+    if (!button || !transientArg) return { ok: false, error: "No View Report button found for row" };
+    const form = row.closest("form") || row.querySelector("form") || (doc || root.document).querySelector("form");
+    return {
+      ok: true,
+      row: safeRuntimeRow(rowInfo),
+      transient_print_report_arg: transientArg,
+      transient_form_action: form ? resolveUrl(form.getAttribute("action") || "", root.location.href) : "",
+      transient_form_method: form ? String(form.getAttribute("method") || "get").toLowerCase() : "get",
+      transient_form_fields: form ? formFields(form) : {}
+    };
+  }
+
+  function findReportRow(rowInfo, doc) {
+    const rows = Array.from((doc || root.document).querySelectorAll("tr"));
+    const index = Number(rowInfo && rowInfo.row_index);
+    if (Number.isFinite(index) && rows[index] && /view\s*report/i.test(textOf(rows[index]))) return rows[index];
+    const buttons = Array.from((doc || root.document).querySelectorAll("a, button, input[type='button'], input[type='submit']"))
+      .filter((node) => /view\s*report/i.test(textOf(node) || node.value || ""));
+    const buttonIndex = Number(rowInfo && rowInfo.view_report_button_index);
+    const button = Number.isFinite(buttonIndex) ? buttons[buttonIndex] : null;
+    return button ? button.closest("tr") : null;
+  }
+
+  function firstPrintReportButton(row) {
+    if (!row) return null;
+    return Array.from(row.querySelectorAll("[onclick]")).find((node) => {
+      const parsed = parseFunctionCall(node.getAttribute("onclick") || "");
+      return parsed.functionName === "printReport" && parsed.argCount === 1;
+    }) || null;
+  }
+
+  function formFields(form) {
+    const fields = {};
+    Array.from(form.querySelectorAll("input, select, textarea")).forEach((field) => {
+      const name = field.getAttribute("name") || "";
+      if (!name) return;
+      fields[name] = field.value == null ? "" : String(field.value);
+    });
+    return fields;
+  }
+
+  function safeRuntimeRow(row) {
+    return {
+      row_index: Number(row && row.row_index),
+      view_report_button_index: Number(row && row.view_report_button_index),
+      date_sent: (row && row.date_sent) || "",
+      department: (row && row.department) || "",
+      report_name: (row && row.report_name) || "",
+      report_type: (row && row.report_type) || firstReportType((row && row.report_tags) || []),
+      report_tags: (row && row.report_tags) || [],
+      onclick_function_name: (row && row.onclick_function_name) || "",
+      onclick_arg_count: Number((row && row.onclick_arg_count) || 0)
+    };
   }
 
   function sanitizeState(state, debugMode) {
@@ -260,6 +355,7 @@
     if (!result) return null;
     return JSON.parse(JSON.stringify(result, (key, value) => {
       if (["raw_row_text", "onclick", "href", "source_url", "raw_text_preview"].includes(key)) return undefined;
+      if (/^transient_/i.test(key) || /print_report_arg/i.test(key) || key === "hiddenValues") return undefined;
       return value;
     }));
   }
@@ -403,9 +499,13 @@
     detectPostWorkflow,
     analyzeOnclick,
     parseFunctionCall,
+    parseFunctionArgs,
     splitArgs,
     nearbyInputNames,
     viewReportButtonIndex,
+    getTransientPrintReportArg,
+    getTransientReportRequestPayload,
+    safeRuntimeRow,
     selectRowsForMode,
     sanitizeState,
     sanitizeRows,

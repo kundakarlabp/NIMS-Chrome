@@ -31,6 +31,8 @@ def make_cache_key(
     date_sent: str,
     report_name: str,
 ) -> str:
+    if is_safe_report_key(report_id):
+        return report_id or ""
     if pdf_bytes:
         return "sha256:" + hashlib.sha256(pdf_bytes).hexdigest()
     if is_safe_report_id(report_id):
@@ -51,6 +53,11 @@ def is_safe_report_id(report_id: str | None) -> bool:
     if re.fullmatch(r"\d{1,3}", value):
         return False
     return bool(re.search(r"[A-Za-z0-9]", value)) and len(value) >= 4
+
+
+def is_safe_report_key(report_id: str | None) -> bool:
+    value = (report_id or "").strip()
+    return bool(re.fullmatch(r"report_key:[a-f0-9]{64}", value))
 
 
 def get_cached(cache_key: str) -> dict[str, Any] | None:

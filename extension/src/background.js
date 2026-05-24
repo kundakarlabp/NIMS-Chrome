@@ -1,4 +1,11 @@
 const HELPER = "http://127.0.0.1:8765";
+const NIMS_URL_FILTERS = [
+  "https://nimsts.edu.in/AHIMSG5/*",
+  "https://www.nimsts.edu.in/AHIMSG5/*",
+  "https://nimsts.edu.in/HISInvestigationG5/*",
+  "https://www.nimsts.edu.in/HISInvestigationG5/*"
+];
+let privateDirectMapping = null;
 
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -27,6 +34,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NIMS_DISCOVER_MAPPING") {
+    discoverDirectMapping(message.rowPayload, sender).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_GET_MAPPING_SUMMARY") {
+    getDirectMappingSummary().then((summary) => sendResponse({ ok: true, summary }));
+    return true;
+  }
+
+  if (message.type === "NIMS_CLEAR_DIRECT_MAPPING") {
+    clearDirectMapping().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_FETCH_REPORT_DIRECT") {
+    fetchReportDirect(message.rowPayload).then(sendResponse);
+    return true;
+  }
+
   if (message.type === "NIMS_HELPER_HEALTH") {
     callHelper("/health").then(sendResponse);
     return true;
@@ -43,6 +70,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "NIMS_HELPER_SUMMARIZE") {
     callHelper("/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message.body || {})
+    }).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_HELPER_CACHE_LOOKUP") {
+    callHelper("/cache-lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.body || {})
@@ -77,6 +113,275 @@ async function callHelper(path, options = {}) {
       error: `Local helper is not reachable at 127.0.0.1:8765. Start the helper and retry. Details: ${error.message}`
     };
   }
+}
+
+async function discoverDirectMapping(rowPayload, sender) {
+  const tabId = sender && sender.tab && sender.tab.id;
+  const frameId = sender && typeof sender.frameId === "number" ? sender.frameId : 0;
+  if (!tabId || !rowPayload || !rowPayload.transient_print_report_arg) {
+    return { ok: false, error: "Direct fetch mapping failed for this report." };
+  }
+
+  const observed = [];
+  const popupPromise = waitForPopupTab(tabId);
+  const requestPromise = observePrintReportRequests(tabId, rowPayload.transient_print_report_arg, observed);
+  try {
+    const clickResult = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      world: "MAIN",
+      func: clickNimsPrintReportRow,
+      args: [safeClickLocator(rowPayload.row)]
+    });
+    const clicked = clickResult && clickResult[0] && clickResult[0].result;
+    if (!clicked || clicked.ok === false) {
+      return { ok: false, error: (clicked && clicked.error) || "No View Report button found for row" };
+    }
+    const popupTab = await popupPromise;
+    const candidates = await requestPromise;
+    if (popupTab && popupTab.id) chrome.tabs.remove(popupTab.id).catch(() => {});
+    const mapping = inferDirectMapping(candidates, rowPayload);
+    if (!mapping) return { ok: false, error: "Direct fetch mapping failed for this report." };
+    privateDirectMapping = mapping.privateMapping;
+    await storeDirectMapping(privateDirectMapping, mapping.safeMappingSummary);
+    return { ok: true, summary: mapping.safeMappingSummary };
+  } catch {
+    return { ok: false, error: "Direct fetch mapping failed for this report." };
+  }
+}
+
+function observePrintReportRequests(tabId, transientArg, observed) {
+  return new Promise((resolve) => {
+    const relatedTabIds = new Set([tabId]);
+    const timeout = setTimeout(done, 10000);
+    function done() {
+      clearTimeout(timeout);
+      chrome.tabs.onCreated.removeListener(onTabCreated);
+      chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequest);
+      chrome.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
+      chrome.webNavigation.onCommitted.removeListener(onNavigation);
+      resolve(observed);
+    }
+    function onTabCreated(tab) {
+      if (tab && tab.openerTabId === tabId && tab.id) relatedTabIds.add(tab.id);
+    }
+    function onBeforeRequest(details) {
+      if (!relatedTabIds.has(details.tabId) && details.tabId !== -1) return;
+      if (!isAllowedNimsUrl(details.url)) return;
+      const candidate = {
+        method: details.method || "GET",
+        url: details.url,
+        type: details.type || "",
+        formData: details.requestBody && details.requestBody.formData ? details.requestBody.formData : {},
+        argMatch: requestContainsArg(details, transientArg),
+        contentType: ""
+      };
+      observed.push(candidate);
+      if (candidate.argMatch) setTimeout(done, 400);
+    }
+    function onHeadersReceived(details) {
+      const item = observed.find((candidate) => candidate.url === details.url);
+      if (!item) return;
+      const header = (details.responseHeaders || []).find((inner) => /^content-type$/i.test(inner.name));
+      if (header) item.contentType = header.value || "";
+    }
+    function onNavigation(details) {
+      if (relatedTabIds.has(details.tabId) && isAllowedNimsUrl(details.url)) {
+        observed.push({ method: "GET", url: details.url, type: "navigation", formData: {}, argMatch: String(details.url).includes(transientArg), contentType: "" });
+      }
+    }
+    chrome.tabs.onCreated.addListener(onTabCreated);
+    chrome.webRequest.onBeforeRequest.addListener(onBeforeRequest, { urls: NIMS_URL_FILTERS }, ["requestBody"]);
+    chrome.webRequest.onHeadersReceived.addListener(onHeadersReceived, { urls: NIMS_URL_FILTERS }, ["responseHeaders"]);
+    chrome.webNavigation.onCommitted.addListener(onNavigation);
+  });
+}
+
+function requestContainsArg(details, transientArg) {
+  const arg = String(transientArg || "");
+  if (!arg) return false;
+  if (String(details.url || "").includes(encodeURIComponent(arg)) || String(details.url || "").includes(arg)) return true;
+  const formData = details.requestBody && details.requestBody.formData ? details.requestBody.formData : {};
+  return Object.values(formData).some((values) => (values || []).some((value) => String(value) === arg));
+}
+
+function inferDirectMapping(candidates, rowPayload) {
+  const arg = rowPayload.transient_print_report_arg;
+  const currentFields = rowPayload.transient_form_fields || {};
+  const ranked = [...candidates].reverse().filter((candidate) => isAllowedNimsUrl(candidate.url));
+  const matched = ranked.find((candidate) => candidate.argMatch) || ranked.find((candidate) => /report|print|pdf|process/i.test(safePath(candidate.url)));
+  if (!matched) return null;
+  const parsed = new URL(matched.url);
+  const method = String(matched.method || "GET").toUpperCase();
+  const privateMapping = {
+    method,
+    origin: parsed.origin,
+    pathname: parsed.pathname,
+    argumentParameterName: "",
+    requiredFieldNames: [],
+    discoveredAt: new Date().toISOString()
+  };
+
+  if (method === "POST") {
+    const formData = matched.formData || {};
+    for (const [name, values] of Object.entries(formData)) {
+      if ((values || []).some((value) => String(value) === arg)) privateMapping.argumentParameterName = name;
+      else privateMapping.requiredFieldNames.push(name);
+    }
+    if (!privateMapping.argumentParameterName) privateMapping.argumentParameterName = inferArgumentFieldFromCurrentFields(currentFields);
+  } else {
+    for (const [name, value] of parsed.searchParams.entries()) {
+      if (value === arg) privateMapping.argumentParameterName = name;
+      else if (Object.prototype.hasOwnProperty.call(currentFields, name)) privateMapping.requiredFieldNames.push(name);
+    }
+  }
+  if (!privateMapping.argumentParameterName) return null;
+  privateMapping.requiredFieldNames = unique(privateMapping.requiredFieldNames.filter((name) => name !== privateMapping.argumentParameterName));
+  return {
+    privateMapping,
+    safeMappingSummary: safeMappingSummary(privateMapping, "ready")
+  };
+}
+
+function inferArgumentFieldFromCurrentFields(currentFields) {
+  const names = Object.keys(currentFields || {});
+  return names.find((name) => /lab|req|requisition|report|sample|accession|test/i.test(name)) || "";
+}
+
+async function fetchReportDirect(rowPayload) {
+  const mapping = await getPrivateDirectMapping();
+  if (!mapping) return { ok: false, error: "Direct mapping not discovered. Click Discover Mapping first." };
+  if (!rowPayload || !rowPayload.transient_print_report_arg) {
+    return { ok: false, error: "Direct fetch mapping failed for this report." };
+  }
+  const fields = rowPayload.transient_form_fields || {};
+  const missing = (mapping.requiredFieldNames || []).filter((name) => !Object.prototype.hasOwnProperty.call(fields, name));
+  if (missing.length) return { ok: false, error: "Required dynamic form field missing in current NIMS page." };
+  try {
+    const request = buildDirectRequest(mapping, rowPayload.transient_print_report_arg, fields);
+    const response = await fetch(request.url, request.options);
+    const contentType = response.headers.get("content-type") || "";
+    const buffer = await response.arrayBuffer();
+    const reportError = await detectDirectReportFailure(buffer, contentType);
+    if (reportError) return { ok: false, error: reportError, status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType };
+    if (!response.ok) return { ok: false, error: "Direct fetch mapping failed for this report.", status: response.status, finalUrlSafeHostPath: safeHostPath(response.url), contentType };
+    return {
+      ok: true,
+      status: response.status,
+      contentType,
+      finalUrlSafeHostPath: safeHostPath(response.url),
+      base64: arrayBufferToBase64(buffer)
+    };
+  } catch {
+    return { ok: false, error: "Direct fetch mapping failed for this report." };
+  }
+}
+
+function buildDirectRequest(mapping, transientArg, fields) {
+  const method = String(mapping.method || "GET").toUpperCase();
+  const url = new URL(mapping.pathname || "/", mapping.origin);
+  const params = new URLSearchParams();
+  for (const name of mapping.requiredFieldNames || []) params.set(name, fields[name] || "");
+  params.set(mapping.argumentParameterName, transientArg);
+  if (method === "POST") {
+    return {
+      url: url.href,
+      options: {
+        method: "POST",
+        credentials: "include",
+        redirect: "follow",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      }
+    };
+  }
+  url.search = params.toString();
+  return { url: url.href, options: { method: "GET", credentials: "include", redirect: "follow" } };
+}
+
+async function detectDirectReportFailure(buffer, contentType) {
+  if (!buffer || buffer.byteLength === 0) return "Report response was empty.";
+  const ctype = (contentType || "").toLowerCase();
+  if (ctype.includes("pdf")) return "";
+  if (ctype.includes("text/html") || ctype.includes("text/plain")) {
+    const text = new TextDecoder("utf-8").decode(buffer.slice(0, 5000)).toLowerCase();
+    if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
+      return "Report response was login/session page.";
+    }
+    if (/\b(hemoglobin|creatinine|culture|bilirubin|platelet|sodium|potassium|report)\b/.test(text)) return "";
+    return "Report response was not PDF or recognizable report.";
+  }
+  return "";
+}
+
+async function storeDirectMapping(privateMapping, summary) {
+  if (chrome.storage.session) {
+    await chrome.storage.session.set({ nimsDirectPrivateMapping: privateMapping });
+  }
+  await chrome.storage.local.set({ nimsDirectMappingSummary: summary });
+}
+
+async function getPrivateDirectMapping() {
+  if (privateDirectMapping) return privateDirectMapping;
+  if (!chrome.storage.session) return null;
+  const data = await chrome.storage.session.get("nimsDirectPrivateMapping");
+  privateDirectMapping = data.nimsDirectPrivateMapping || null;
+  return privateDirectMapping;
+}
+
+async function getDirectMappingSummary() {
+  const mapping = await getPrivateDirectMapping();
+  if (mapping) return safeMappingSummary(mapping, "ready");
+  const data = await chrome.storage.local.get("nimsDirectMappingSummary");
+  return data.nimsDirectMappingSummary || { status: "failed" };
+}
+
+async function clearDirectMapping() {
+  privateDirectMapping = null;
+  if (chrome.storage.session) await chrome.storage.session.remove("nimsDirectPrivateMapping");
+  await chrome.storage.local.remove("nimsDirectMappingSummary");
+  return { ok: true };
+}
+
+function safeMappingSummary(mapping, status) {
+  return {
+    status,
+    method: mapping.method || "",
+    endpoint: safeHostPath(`${mapping.origin || ""}${mapping.pathname || ""}`),
+    argumentParameterName: mapping.argumentParameterName || "",
+    requiredFieldNames: mapping.requiredFieldNames || [],
+    discoveredAt: mapping.discoveredAt || new Date().toISOString()
+  };
+}
+
+function safeHostPath(url) {
+  try {
+    const parsed = new URL(url || "");
+    return `${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
+function safePath(url) {
+  try {
+    return new URL(url || "").pathname;
+  } catch {
+    return "";
+  }
+}
+
+function isAllowedNimsUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return parsed.protocol === "https:" && ["nimsts.edu.in", "www.nimsts.edu.in"].includes(parsed.hostname)
+      && (/^\/AHIMSG5\//.test(parsed.pathname) || /^\/HISInvestigationG5\//.test(parsed.pathname));
+  } catch {
+    return false;
+  }
+}
+
+function unique(values) {
+  return Array.from(new Set(values));
 }
 
 async function fetchReportWithSession(row, sender) {

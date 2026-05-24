@@ -3,7 +3,7 @@
   "name": "NIMS Fast Summary",
   "version": "0.1.0",
   "description": "Local fast summary tables for NIMS HIS reports after manual login.",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel", "webRequest", "webNavigation"],
   "host_permissions": [
     "https://nimsts.edu.in/AHIMSG5/*",
     "https://www.nimsts.edu.in/AHIMSG5/*",

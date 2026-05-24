@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "helper"
 sys.path.insert(0, str(HELPER))
 
-from cache import clear_cache, is_safe_report_id, make_cache_key  # noqa: E402
+from cache import clear_cache, is_safe_report_id, is_safe_report_key, make_cache_key  # noqa: E402
 from main import app  # noqa: E402
 from parsers.culture_parser import parse_culture  # noqa: E402
 from parsers.lab_parser import infer_report_tags, infer_report_type, parse_lab_parameters  # noqa: E402
@@ -106,6 +106,10 @@ def test_unsafe_row_cache_prevention() -> None:
     assert make_cache_key("row-1", b"first", "mock://same", "19-May-2026", "CBC").startswith("sha256:")
     assert make_cache_key("row-1", b"first", "mock://same", "19-May-2026", "CBC") != make_cache_key("row-1", b"second", "mock://same", "19-May-2026", "CBC")
     assert make_cache_key("LAB-2026-ABC", b"", "mock://same", "19-May-2026", "CBC").startswith("report_id:")
+    safe_key = "report_key:" + ("a" * 64)
+    assert is_safe_report_key(safe_key)
+    assert not is_safe_report_key("report_key:row-1")
+    assert make_cache_key(safe_key, b"first", "mock://same", "19-May-2026", "CBC") == safe_key
 
 
 def test_two_different_row_one_payloads_do_not_reuse_cache() -> None:
@@ -133,6 +137,35 @@ def test_two_different_row_one_payloads_do_not_reuse_cache() -> None:
     ).json()
     assert first["parameters"][0]["value"] == "8.9"
     assert second["parameters"][0]["value"] == "11.2"
+
+
+def test_cache_lookup_reuses_safe_report_key_before_download() -> None:
+    clear_cache()
+    client = TestClient(app)
+    report_key = "report_key:" + ("b" * 64)
+    parsed = client.post(
+        "/parse-report",
+        json={
+            "report_id": report_key,
+            "report_name": "CBC",
+            "date_sent": "19-May-2026",
+            "source_url": "",
+            "pdf_base64": base64.b64encode(b"Hemoglobin 8.9 g/dL range 13-17").decode("ascii"),
+        },
+    ).json()
+    assert parsed["report_id"] == report_key
+    lookup = client.post(
+        "/cache-lookup",
+        json={
+            "reports": [
+                {"report_key": report_key, "report_name": "CBC", "date_sent": "19-May-2026"},
+                {"report_key": "row-1", "report_name": "CBC", "date_sent": "19-May-2026"},
+            ]
+        },
+    ).json()
+    assert report_key in lookup["hits"]
+    assert lookup["hits"][report_key]["cached"] is True
+    assert "row-1" in lookup["misses"]
 
 
 def test_session_expired_html_detection() -> None:

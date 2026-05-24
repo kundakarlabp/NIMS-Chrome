@@ -80,6 +80,9 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
         "http://127.0.0.1:8765/*",
     }
     assert expected_hosts.issubset(set(manifest["host_permissions"]))
+    assert "<all_urls>" not in json.dumps(manifest)
+    assert {"webRequest", "webNavigation"}.issubset(set(manifest["permissions"]))
+    assert set(manifest["host_permissions"]) == expected_hosts
     script = manifest["content_scripts"][0]
     assert script["all_frames"] is True
     assert script["js"] == ["src/contentUtils.js", "src/contentScript.js"]
@@ -90,10 +93,29 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
 def test_side_panel_buttons_and_frame_execution_present() -> None:
     html = (ROOT / "extension" / "src" / "sidepanel.html").read_text(encoding="utf-8")
     js = (ROOT / "extension" / "src" / "sidepanel.js").read_text(encoding="utf-8")
-    for button_id in ("testFirstReport", "runFast", "runCultures", "runFull", "diagnosePage", "copyMappingDiagnostics"):
+    for button_id in (
+        "diagnosePage",
+        "discoverMapping",
+        "testDirectFetch",
+        "runFast",
+        "runCultures",
+        "runFull",
+        "clearMapping",
+        "manualPopupFallback",
+        "copyMappingDiagnostics",
+    ):
         assert f'id="{button_id}"' in html
-    assert "Test First Report" in html
-    assert 'runSummaryFromBestFrame("test_first")' in js
+    assert "Discover Mapping" in html
+    assert "Test Direct Fetch" in html
+    assert "Bulk Fast Summary" in html
+    assert "Bulk Full Summary" in html
+    assert "Manual Popup Fallback" in html
+    assert 'runSummaryFromBestFrame("test_direct")' in js
+    assert 'runSummaryFromBestFrame("bulk_fast")' in js
+    assert 'runSummaryFromBestFrame("bulk_full")' in js
+    assert 'runSummaryFromBestFrame("manual_fallback")' in js
+    assert "discoverMappingFromBestFrame" in js
+    assert "clearDirectMapping" in js
     assert "allFrames: true" in js
     assert "frameIds: [best.frameId]" in js
     assert "collectFrameDiagnostic" in js
@@ -262,6 +284,7 @@ def test_printreport_rows_have_safe_locator_and_are_not_failed_immediately() -> 
     serialized = json.dumps(out["sanitized"])
     assert "SECRET-ARG" not in serialized
     assert "printReport('SECRET-ARG')" not in serialized
+    assert "transient_print_report_arg" not in serialized
 
 
 def test_fast_summary_selection_is_capped_and_test_first_selects_latest_cbc() -> None:
@@ -272,7 +295,7 @@ def test_fast_summary_selection_is_capped_and_test_first_selects_latest_cbc() ->
     for (let i = 1; i <= 10; i += 1) rows.push({ date_sent: `${String(i).padStart(2, '0')}-May-2026`, report_name: `RFT LFT Electrolytes ${i}`, report_tags: ['rft', 'lft', 'electrolytes'] });
     for (let i = 1; i <= 30; i += 1) rows.push({ date_sent: `${String(i).padStart(2, '0')}-May-2026`, report_name: `Blood Culture ${i}`, report_tags: ['culture'] });
     const fast = utils.selectRowsForMode(rows, 'fast');
-    const testFirst = utils.selectRowsForMode(rows, 'test_first');
+    const testFirst = utils.selectRowsForMode(rows, 'test_direct');
     console.log(JSON.stringify({ fastCount: fast.length, cbcCount: fast.filter(r => r.report_tags.includes('cbc')).length, rleCount: fast.filter(r => r.report_tags.includes('rft')).length, testFirst }));
     """
     out = run_node(script)
@@ -297,6 +320,51 @@ def test_background_printreport_click_capture_static_contract() -> None:
     assert "Report popup opened but content could not be fetched" in background
     assert "Session expired or login page returned" in background
     assert "Unable to capture NIMS printReport output" in background
-    assert "NIMS onclick/form workflow needs specific mapping" in content_script
+    assert 'mode === "manual_fallback"' in content_script
     assert "Opening report" in content_script
     assert "Parsing report" in content_script
+
+
+def test_direct_bulk_static_contract_and_no_default_popup_fallback() -> None:
+    background = (ROOT / "extension" / "src" / "background.js").read_text(encoding="utf-8")
+    content_script = (ROOT / "extension" / "src" / "contentScript.js").read_text(encoding="utf-8")
+    sidepanel_utils = (ROOT / "extension" / "src" / "sidepanelUtils.js").read_text(encoding="utf-8")
+    assert "NIMS_DISCOVER_MAPPING" in background
+    assert "chrome.webRequest.onBeforeRequest.addListener" in background
+    assert "chrome.webRequest.onHeadersReceived.addListener" in background
+    assert "chrome.webNavigation.onCommitted.addListener" in background
+    assert "NIMS_FETCH_REPORT_DIRECT" in background
+    assert "buildDirectRequest" in background
+    assert 'method: "POST"' in background
+    assert 'method: "GET"' in background
+    assert "Direct mapping not discovered. Click Discover Mapping first." in background
+    assert "Report response was login/session page." in background
+    assert "Required dynamic form field missing in current NIMS page." in background
+    assert "Report response was empty." in background
+    assert "Report response was not PDF or recognizable report." in background
+    assert "chrome.storage.session" in background
+    assert "safeHostPath" in background
+    assert "runDirectBulk" in content_script
+    assert "NIMS_FETCH_REPORT_DIRECT" in content_script
+    assert "runManualFallback" in content_script
+    assert 'mode === "manual_fallback"' in content_script
+    assert "captureReportByClick(row, sender)" not in content_script
+    assert "transient_print_report_arg" in sidepanel_utils
+    assert "print_report_arg" in sidepanel_utils
+
+
+def test_transient_printreport_arg_and_safe_report_key_static_contract() -> None:
+    content_utils = (ROOT / "extension" / "src" / "contentUtils.js").read_text(encoding="utf-8")
+    content_script = (ROOT / "extension" / "src" / "contentScript.js").read_text(encoding="utf-8")
+    assert "parseFunctionArgs" in content_utils
+    assert "getTransientPrintReportArg" in content_utils
+    assert "getTransientReportRequestPayload" in content_utils
+    assert "transient_print_report_arg" in content_utils
+    assert "sanitizeState" in content_utils
+    assert "print_report_arg" in content_utils
+    assert "makeSafeReportKey" in content_script
+    assert "crypto.subtle.digest" in content_script
+    assert "report_key:" in content_script
+    assert "Using cached result" in content_script
+    assert "runQueue(misses, 3" in content_script
+    assert "Math.min(Math.max(Number(concurrency) || 3, 1), 5)" in content_script
