@@ -12,6 +12,8 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Railway must not log in to NIMS, store NIMS credentials, store NIMS cookies, store NIMS session tokens, or bypass captcha/OTP/session controls.
 - Remote helper CORS must be configured with explicit `NIMS_HELPER_ALLOWED_ORIGINS`; wildcard CORS is not used in remote mode.
 - Remote helper cache is disabled by default unless `NIMS_HELPER_CACHE_ENABLED=true`.
+- Remote helper raw text previews are disabled; `raw_text_preview` is always empty in `NIMS_HELPER_REMOTE_MODE=true`.
+- Remote helper rate limiting is process-local and enabled by default in remote mode.
 - Raw PDFs are parsed in memory and are not permanently stored.
 - Raw report HTML/text is parsed in memory and is not permanently stored by default.
 - Helper cache stores parsed JSON only. It must not store raw PDFs, raw HTML, raw text, cookies, tokens, or credentials.
@@ -37,6 +39,7 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Android mobile mode uses manual NIMS login in a WebView. The app does not add credential fields, does not store NIMS usernames/passwords, does not auto-fill credentials, does not export cookies, and must not bypass captcha/OTP/session controls.
 - Android report fetching uses the active WebView cookie session and sends report content to the configured helper only for parsing. NIMS cookies stay on the device and are not posted to Railway.
 - Android helper API keys are stored with Android Keystore-backed encryption. Clear settings controls are available.
+- Do not use Google Drive or any cloud file store as a parser backend. Google Drive may be used only for manual export storage if the user chooses.
 
 To clear local parsed cache, use the extension `Clear cache` button or delete `helper/cache.db`.
 
