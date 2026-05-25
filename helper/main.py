@@ -7,7 +7,9 @@ import secrets
 import time
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -22,6 +24,10 @@ from parsers.pdf_text import decode_report_bytes, detect_non_report_payload, ext
 
 
 logger = logging.getLogger("nims_helper")
+APP_VERSION = os.getenv("NIMS_HELPER_VERSION", "0.1.0")
+PARSER_VERSION = 1
+PROTECTED_PATHS = {"/parse-report", "/summarize", "/cache-lookup", "/clear-cache"}
+_RATE_BUCKETS: dict[str, list[float]] = defaultdict(list)
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -35,18 +41,48 @@ def remote_mode() -> bool:
     return env_flag("NIMS_HELPER_REMOTE_MODE", False)
 
 
+@dataclass(frozen=True)
+class RuntimeSettings:
+    remote_mode: bool
+    api_key_configured: bool
+    cache_enabled: bool
+    max_body_mb: int
+    allowed_origins: list[str]
+    disable_raw_logs: bool
+    rate_limit_per_minute: int
+    version: str
+
+
+def runtime_settings() -> RuntimeSettings:
+    is_remote = remote_mode()
+    max_mb = parse_int_env("NIMS_HELPER_MAX_BODY_MB", 25, minimum=1)
+    rate_default = 60 if is_remote else 0
+    return RuntimeSettings(
+        remote_mode=is_remote,
+        api_key_configured=bool(os.getenv("NIMS_HELPER_API_KEY", "")),
+        cache_enabled=env_flag("NIMS_HELPER_CACHE_ENABLED", not is_remote),
+        max_body_mb=max_mb,
+        allowed_origins=allowed_origins(),
+        disable_raw_logs=env_flag("NIMS_HELPER_DISABLE_RAW_LOGS", is_remote),
+        rate_limit_per_minute=parse_int_env("NIMS_HELPER_RATE_LIMIT_PER_MINUTE", rate_default, minimum=0),
+        version=os.getenv("NIMS_HELPER_VERSION", APP_VERSION),
+    )
+
+
+def parse_int_env(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(value, minimum)
+
+
 def cache_enabled() -> bool:
-    if remote_mode():
-        return env_flag("NIMS_HELPER_CACHE_ENABLED", False)
-    return env_flag("NIMS_HELPER_CACHE_ENABLED", True)
+    return runtime_settings().cache_enabled
 
 
 def max_body_bytes() -> int:
-    try:
-        megabytes = int(os.getenv("NIMS_HELPER_MAX_BODY_MB", "25"))
-    except ValueError:
-        megabytes = 25
-    return max(megabytes, 1) * 1024 * 1024
+    return runtime_settings().max_body_mb * 1024 * 1024
 
 
 def allowed_origins() -> list[str]:
@@ -74,7 +110,26 @@ def require_api_key(x_nims_helper_key: str | None = Header(default=None)) -> Non
     raise HTTPException(status_code=401, detail="unauthorized")
 
 
-app = FastAPI(title="NIMS Fast Summary Helper", version="0.1.0")
+def rate_limit_response(request: Request, request_id: str, settings: RuntimeSettings) -> JSONResponse | None:
+    if request.url.path not in PROTECTED_PATHS or settings.rate_limit_per_minute <= 0:
+        return None
+    now = time.time()
+    key_material = request.headers.get("x-nims-helper-key") or (request.client.host if request.client else "unknown")
+    key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
+    window = [stamp for stamp in _RATE_BUCKETS[key_hash] if now - stamp < 60]
+    if len(window) >= settings.rate_limit_per_minute:
+        _RATE_BUCKETS[key_hash] = window
+        return JSONResponse(
+            status_code=429,
+            content={"ok": False, "error": "rate limit exceeded", "request_id": request_id},
+            headers={"X-Request-ID": request_id},
+        )
+    window.append(now)
+    _RATE_BUCKETS[key_hash] = window
+    return None
+
+
+app = FastAPI(title="NIMS Fast Summary Helper", version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins(),
@@ -88,6 +143,7 @@ app.add_middleware(
 async def safety_middleware(request: Request, call_next):
     request_id = str(uuid.uuid4())
     start = time.perf_counter()
+    settings = runtime_settings()
     content_length = request.headers.get("content-length")
     try:
         length_value = int(content_length or "0")
@@ -99,6 +155,9 @@ async def safety_middleware(request: Request, call_next):
             content={"ok": False, "error": "request body too large", "request_id": request_id},
             headers={"X-Request-ID": request_id},
         )
+    rate_response = rate_limit_response(request, request_id, settings)
+    if rate_response is not None:
+        return rate_response
     try:
         response = await call_next(request)
     except HTTPException:
@@ -119,15 +178,25 @@ async def safety_middleware(request: Request, call_next):
         )
     response.headers["X-Request-ID"] = request_id
     duration_ms = round((time.perf_counter() - start) * 1000)
-    logger.info(
-        "helper_request request_id=%s endpoint=%s status=%s content_type=%s payload_size=%s duration_ms=%s",
-        request_id,
-        request.url.path,
-        response.status_code,
-        request.headers.get("content-type", ""),
-        length_value,
-        duration_ms,
-    )
+    if settings.disable_raw_logs:
+        logger.info(
+            "helper_request request_id=%s endpoint=%s status=%s payload_size=%s duration_ms=%s",
+            request_id,
+            request.url.path,
+            response.status_code,
+            length_value,
+            duration_ms,
+        )
+    else:
+        logger.info(
+            "helper_request request_id=%s endpoint=%s status=%s content_type=%s payload_size=%s duration_ms=%s",
+            request_id,
+            request.url.path,
+            response.status_code,
+            request.headers.get("content-type", ""),
+            length_value,
+            duration_ms,
+        )
     return response
 
 
@@ -139,8 +208,32 @@ async def http_exception_handler(_request: Request, exc: HTTPException):
 
 
 @app.get("/health")
-def health() -> dict[str, bool]:
-    return {"ok": True}
+def health() -> dict[str, Any]:
+    settings = runtime_settings()
+    return {
+        "ok": True,
+        "service": "nims-fast-summary-helper",
+        "version": settings.version,
+        "remote_mode": settings.remote_mode,
+        "cache_enabled": settings.cache_enabled,
+        "api_key_configured": settings.api_key_configured,
+        "max_body_mb": settings.max_body_mb,
+    }
+
+
+@app.get("/version")
+def version() -> dict[str, Any]:
+    settings = runtime_settings()
+    return {
+        "ok": True,
+        "service": "nims-fast-summary-helper",
+        "version": settings.version,
+        "parser_version": PARSER_VERSION,
+        "build": {
+            "commit_sha": os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA", ""),
+            "deployed_at": os.getenv("RAILWAY_DEPLOYMENT_ID", ""),
+        },
+    }
 
 
 @app.post("/parse-report")
@@ -181,7 +274,7 @@ def parse_report(payload: ParseReportRequest, _auth: None = Depends(require_api_
     parameters = parse_lab_parameters(text, payload.date_sent)
     culture_results = parse_cultures(text, payload.date_sent) if "culture" in report_tags else []
     culture = culture_results[0] if culture_results else None
-    preview = deidentify(text)[:500]
+    preview = "" if remote_mode() else deidentify(text)[:500]
 
     parsed = ParsedReport(
         report_id=payload.report_id or cache_key,
@@ -566,10 +659,16 @@ def date_key(value: str) -> datetime:
 
 
 def deidentify(text: str) -> str:
-    masked = re.sub(r"\bCR\s*(?:No|Number)?\s*[:\-]?\s*\d+\b", "CR No: [MASKED]", text, flags=re.I)
-    masked = re.sub(r"\b\d{10}\b", "[PHONE MASKED]", masked)
+    masked = re.sub(
+        r"\b(CR\s*(?:No|Number)?|UHID|MRD|Registration\s*No|Patient\s*ID)\s*[:\-]?\s*[A-Za-z0-9/-]+\b",
+        lambda match: f"{match.group(1)}: [MASKED]",
+        text,
+        flags=re.I,
+    )
+    masked = re.sub(r"\b(?:\+?91[-\s]?)?[6-9]\d{9}\b", "[PHONE MASKED]", masked)
     masked = re.sub(r"(?im)^(patient\s*name|name)\s*[:\-].*$", r"\1: [MASKED]", masked)
-    masked = re.sub(r"(?im)^address\s*[:\-].*$", "Address: [MASKED]", masked)
+    masked = re.sub(r"(?im)^(age\s*/?\s*sex)\s*[:\-].*$", r"\1: [MASKED]", masked)
+    masked = re.sub(r"(?im)^(address|addr)\s*[:\-].*$", r"\1: [MASKED]", masked)
     return masked
 
 

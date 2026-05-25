@@ -596,3 +596,54 @@ def test_android_project_static_security_contract() -> None:
     assert "AndroidKeyStore" in settings
     assert "username" not in main_activity.lower()
     assert "password" not in main_activity.lower()
+    assert "raw response" not in client.lower()
+
+
+def test_android_bulk_gating_queue_and_threading_contract() -> None:
+    main_activity = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "MainActivity.kt").read_text(encoding="utf-8")
+    queue = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "ReportFetchQueue.kt").read_text(encoding="utf-8")
+    template = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "NimsReportTemplate.kt").read_text(encoding="utf-8")
+    validator = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "HelperSettingsValidator.kt").read_text(encoding="utf-8")
+    assert "private var mappingValidated = false" in main_activity
+    assert "mappingValidated = false" in main_activity
+    assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
+    assert "Run Test Direct Fetch successfully before Bulk Summary." in main_activity
+    assert "ReportFetchQueue(concurrency = 3)" in main_activity
+    assert "concurrency.coerceIn(1, 5)" in queue
+    assert "private var webViewUserAgent = \"\"" in main_activity
+    assert "webViewUserAgent = webView.settings.userAgentString" in main_activity
+    assert 'setRequestProperty("User-Agent", webViewUserAgent)' in main_activity
+    assert "setRequestProperty(\"User-Agent\", webView.settings.userAgentString)" not in main_activity
+    assert "Set Railway helper URL first." in validator
+    assert "Set Railway helper API key first." in main_activity
+    assert "responseCode >= 400" in main_activity
+    assert "errorStream" in main_activity
+    assert "ByteArrayOutputStream" in main_activity
+    assert "raw" not in main_activity.lower()
+    assert 'uri.scheme == "https"' in template
+    assert 'uri.path.startsWith("/AHIMSG5/")' in template
+    assert 'uri.path.startsWith("/HISInvestigationG5/")' in template
+    assert "http://" not in template
+
+
+def test_android_primary_summary_is_readable_not_raw_json_only() -> None:
+    main_activity = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "MainActivity.kt").read_text(encoding="utf-8")
+    for section in (
+        "Summary",
+        "Source Reports",
+        "Failed Reports",
+        "Lab Trends",
+        "Cultures",
+        "Interpretation",
+    ):
+        assert f'appendLine("{section}")' in main_activity
+    assert "summary.toString(2)" not in main_activity
+
+
+def test_android_gradle_wrapper_present() -> None:
+    assert (ROOT / "mobile" / "android" / "gradlew").exists()
+    assert (ROOT / "mobile" / "android" / "gradlew.bat").exists()
+    assert (ROOT / "mobile" / "android" / "gradle" / "wrapper" / "gradle-wrapper.properties").exists()
+    wrapper_jar = ROOT / "mobile" / "android" / "gradle" / "wrapper" / "gradle-wrapper.jar"
+    assert wrapper_jar.exists()
+    assert wrapper_jar.stat().st_size > 10_000

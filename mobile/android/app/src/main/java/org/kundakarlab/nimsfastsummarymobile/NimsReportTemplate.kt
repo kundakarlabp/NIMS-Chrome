@@ -23,7 +23,8 @@ object NimsReportTemplate {
         return try {
             val uri = URI(url)
             uri.scheme == "https" &&
-                (uri.host == "nimsts.edu.in" || uri.host == "www.nimsts.edu.in")
+                (uri.host == "nimsts.edu.in" || uri.host == "www.nimsts.edu.in") &&
+                (uri.path.startsWith("/AHIMSG5/") || uri.path.startsWith("/HISInvestigationG5/"))
         } catch (_: Exception) {
             false
         }

@@ -1,8 +1,18 @@
 # NIMS Fast Summary
 
-NIMS Fast Summary is a local Chrome extension plus Python helper for summarizing NIMS e-Sushrut/HIS report-list pages after you have logged in manually.
+NIMS Fast Summary summarizes NIMS e-Sushrut/HIS report-list pages after the user logs in manually. It does not automate login, store credentials, bypass captcha/OTP/session expiry, or call external AI services.
 
-This is the V2 safety-improved MVP. It does not automate login, store credentials, bypass captcha/OTP, or send patient identifiers to external AI services. The main value is accurate local tables; do not use output for clinical decisions until manually verified against source reports.
+Recommended modes:
+
+1. Android WebView + Railway helper: no laptop runtime MVP. The phone logs in to NIMS manually, fetches reports with the WebView session, and sends report content to Railway helper for parsing.
+2. Chrome extension + Railway helper: desktop browser session fetches reports, Railway parses/summarizes.
+3. Local helper: development and fully local desktop use.
+
+Railway removes the laptop-hosted Python dependency, but it does not replace manual NIMS login/session access. Railway receives report content for parsing, so verify source reports before clinical decisions.
+
+Deployment and mobile docs:
+- [Railway deployment](docs/RAILWAY_DEPLOYMENT.md)
+- [Android WebView app](docs/ANDROID_WEBVIEW.md)
 
 ## Setup
 
@@ -62,7 +72,7 @@ NIMS_HELPER_ALLOWED_ORIGINS=<your chrome-extension:// origin if needed>
 NIMS_HELPER_MAX_BODY_MB=25
 ```
 
-4. Confirm the public Railway `/health` URL returns `{"ok": true}`.
+4. Confirm the public Railway `/health` URL returns safe service metadata.
 5. In the extension side panel, set `Helper mode` to `Remote Railway`.
 6. Enter the Railway helper URL and API key.
 7. Click `Test Helper Connection`.

@@ -16,13 +16,19 @@ class SecureSettings(context: Context) {
     fun helperUrl(): String = prefs.getString("helper_url", "") ?: ""
 
     fun saveHelperUrl(value: String) {
-        prefs.edit().putString("helper_url", value.trim()).apply()
+        prefs.edit().putString("helper_url", HelperSettingsValidator.normalizeUrl(value)).apply()
     }
 
     fun apiKey(): String = decrypt(prefs.getString("helper_key", "") ?: "")
 
+    fun hasApiKey(): Boolean = prefs.getString("helper_key", "").orEmpty().isNotBlank() && apiKey().isNotBlank()
+
     fun saveApiKey(value: String) {
         if (value.isNotBlank()) prefs.edit().putString("helper_key", encrypt(value)).apply()
+    }
+
+    fun clearApiKey() {
+        prefs.edit().remove("helper_key").apply()
     }
 
     fun clear() {
@@ -46,6 +52,7 @@ class SecureSettings(context: Context) {
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
         } catch (_: Exception) {
+            clearApiKey()
             ""
         }
     }
