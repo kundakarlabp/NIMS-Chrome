@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class NimsReportTemplateTest {
     @Test
@@ -38,7 +39,7 @@ class NimsReportTemplateTest {
     @Test
     fun helperUrlNormalizationRequiresHttpsOutsideDebugLocal() {
         assertEquals("https://example.up.railway.app", HelperSettingsValidator.normalizeUrl(" https://example.up.railway.app/ ", debugBuild = false))
-        assertEquals("http://10.0.2.2:8765", HelperSettingsValidator.normalizeUrl("http://10.0.2.2:8765/", debugBuild = true))
+        assertTrue(runCatching { HelperSettingsValidator.normalizeUrl("http://10.0.2.2:8765/", debugBuild = true) }.isFailure)
         assertTrue(runCatching { HelperSettingsValidator.normalizeUrl("http://example.com", debugBuild = false) }.isFailure)
     }
 
@@ -49,5 +50,25 @@ class NimsReportTemplateTest {
         assertEquals("html_login_or_session", ReportResponseClassifier.classify(200, "text/html", "<input type=password> captcha".toByteArray()))
         assertEquals("html_report_content", ReportResponseClassifier.classify(200, "text/html", "<table><td>Hemoglobin</td><td>8.9</td></table>".toByteArray()))
         assertEquals("wrong_endpoint", ReportResponseClassifier.classify(404, "text/html", "not found".toByteArray()))
+    }
+
+    @Test
+    fun reportResponseClassificationOnlyDecodesNonPdfPrefix() {
+        val loginInPrefix = ByteArray(140 * 1024) { 'a'.code.toByte() }
+        "password captcha".toByteArray().copyInto(loginInPrefix, destinationOffset = 1024)
+        assertEquals("html_login_or_session", ReportResponseClassifier.classify(200, "text/plain", loginInPrefix))
+
+        val loginAfterPrefix = ByteArray(140 * 1024) { 'a'.code.toByte() }
+        "password captcha".toByteArray().copyInto(loginAfterPrefix, destinationOffset = 129 * 1024)
+        assertEquals("unsupported_content_type", ReportResponseClassifier.classify(200, "text/plain", loginAfterPrefix))
+    }
+
+    @Test
+    fun androidAssetSourceIncludesSharedWebCore() {
+        val repoRoot = generateSequence(File(System.getProperty("user.dir")).absoluteFile) { it.parentFile }
+            .first { File(it, "shared/nims-web/nimsReportCore.js").isFile }
+        assertTrue(File(repoRoot, "shared/nims-web/nimsReportCore.js").isFile)
+        val buildGradle = File(repoRoot, "mobile/android/app/build.gradle.kts").readText()
+        assertTrue(buildGradle.contains("\"../../../shared/nims-web\""))
     }
 }

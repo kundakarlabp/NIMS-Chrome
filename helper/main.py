@@ -28,6 +28,7 @@ APP_VERSION = os.getenv("NIMS_HELPER_VERSION", "0.1.0")
 PARSER_VERSION = 1
 PROTECTED_PATHS = {"/parse-report", "/summarize", "/cache-lookup", "/clear-cache"}
 _RATE_BUCKETS: dict[str, list[float]] = defaultdict(list)
+_RATE_BUCKET_LIMIT = 1000
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -114,6 +115,7 @@ def rate_limit_response(request: Request, request_id: str, settings: RuntimeSett
     if request.url.path not in PROTECTED_PATHS or settings.rate_limit_per_minute <= 0:
         return None
     now = time.time()
+    prune_rate_buckets(now)
     key_material = request.headers.get("x-nims-helper-key") or (request.client.host if request.client else "unknown")
     key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
     window = [stamp for stamp in _RATE_BUCKETS[key_hash] if now - stamp < 60]
@@ -127,6 +129,26 @@ def rate_limit_response(request: Request, request_id: str, settings: RuntimeSett
     window.append(now)
     _RATE_BUCKETS[key_hash] = window
     return None
+
+
+def prune_rate_buckets(now: float | None = None) -> None:
+    if len(_RATE_BUCKETS) <= _RATE_BUCKET_LIMIT:
+        return
+    current = time.time() if now is None else now
+    for key, stamps in list(_RATE_BUCKETS.items()):
+        active = [stamp for stamp in stamps if current - stamp < 60]
+        if active:
+            _RATE_BUCKETS[key] = active
+        else:
+            _RATE_BUCKETS.pop(key, None)
+    if len(_RATE_BUCKETS) <= _RATE_BUCKET_LIMIT:
+        return
+    oldest_keys = sorted(
+        _RATE_BUCKETS,
+        key=lambda key: max(_RATE_BUCKETS[key]) if _RATE_BUCKETS[key] else 0,
+    )
+    for key in oldest_keys[: len(_RATE_BUCKETS) - _RATE_BUCKET_LIMIT]:
+        _RATE_BUCKETS.pop(key, None)
 
 
 app = FastAPI(title="NIMS Fast Summary Helper", version=APP_VERSION)
