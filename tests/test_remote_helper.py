@@ -4,6 +4,7 @@ import base64
 import logging
 from pathlib import Path
 import sys
+import time
 
 from fastapi.testclient import TestClient
 
@@ -185,6 +186,23 @@ def test_remote_rate_limit_returns_429(monkeypatch) -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.json()["error"] == "rate limit exceeded"
+
+
+def test_rate_limit_prunes_inactive_buckets(monkeypatch) -> None:
+    remote_env(monkeypatch)
+    now = time.time()
+    for index in range(1005):
+        _RATE_BUCKETS[f"old-{index}"] = [now - 120]
+    _RATE_BUCKETS["active"] = [now]
+    response = TestClient(app).post(
+        "/summarize",
+        headers={"X-NIMS-HELPER-KEY": "secret-key"},
+        json={"mode": "fast", "reports": []},
+    )
+    assert response.status_code == 200
+    assert "active" in _RATE_BUCKETS
+    assert all(not key.startswith("old-") for key in _RATE_BUCKETS)
+    assert len(_RATE_BUCKETS) <= 1000
 
 
 def test_raw_report_content_not_logged_on_parse_error(monkeypatch, caplog) -> None:

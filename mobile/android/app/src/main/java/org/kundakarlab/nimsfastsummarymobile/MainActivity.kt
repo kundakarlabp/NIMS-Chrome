@@ -171,27 +171,55 @@ class MainActivity : Activity() {
             evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedText ->
                 val selectedAll = JSONArray(selectedText)
                 val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                    JSONArray().put(selectedAll.getJSONObject(0))
+                    JSONArray().apply {
+                        selectedAll.optJSONObject(0)?.let { put(it) }
+                    }
                 } else {
                     selectedAll
                 }
                 log("Selected ${selected.length()} reports")
-                Thread { fetchParseSummarize(mode, selected, currentMapping) }.start()
+                prepareReportRequests(selected, currentMapping) { prepared ->
+                    Thread { fetchParseSummarize(mode, prepared) }.start()
+                }
             }
         }
     }
 
-    private fun fetchParseSummarize(mode: String, selected: JSONArray, template: ReportTemplate) {
+    private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
+        val prepared = mutableListOf<PreparedReportRequest>()
+        fun step(index: Int) {
+            if (index >= selected.length()) {
+                callback(prepared)
+                return
+            }
+            val row = selected.optJSONObject(index)
+            if (row == null) {
+                step(index + 1)
+                return
+            }
+            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))") { payload ->
+                val transient = payload.optString("transientPrintReportArg")
+                if (transient.isBlank()) {
+                    log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
+                } else {
+                    prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
+                }
+                step(index + 1)
+            }
+        }
+        step(0)
+    }
+
+    private fun fetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
         setState(AppState.FETCHING, "Fetching reports")
         val parsedReports = JSONArray()
-        val rows = (0 until selected.length()).map { selected.getJSONObject(it) }
         if (mode == "test_direct") {
-            val row = rows.firstOrNull()
-            if (row == null) {
+            val request = prepared.firstOrNull()
+            if (request == null) {
                 runOnUiThread { log("No report selected for Test Direct Fetch") }
                 return
             }
-            val report = fetchAndParseOne(row, 0, 1, template)
+            val report = fetchAndParseOne(request, 0, 1)
             parsedReports.put(report)
             val valid = isParsedReportValid(report)
             mappingValidated = valid
@@ -201,8 +229,8 @@ class MainActivity : Activity() {
                 return
             }
         } else {
-            val results = ReportFetchQueue(concurrency = 3).run(rows.withIndex().toList()) { indexed ->
-                fetchAndParseOne(indexed.value, indexed.index, rows.size, template)
+            val results = ReportFetchQueue(concurrency = 3).run(prepared.withIndex().toList()) { indexed ->
+                fetchAndParseOne(indexed.value, indexed.index, prepared.size)
             }
             results.forEach { result ->
                 parsedReports.put(result.getOrElse { errorReport(JSONObject(), it.message ?: "direct fetch failed") })
@@ -213,20 +241,28 @@ class MainActivity : Activity() {
             "bulk_cultures_only" -> "cultures_only"
             else -> "fast"
         }
-        runOnUiThread { log("Parsing ${parsedReports.length()}/${selected.length()}") }
-        val summary = helper().summarize(JSONObject().put("mode", summaryMode).put("reports", parsedReports))
-        runOnUiThread {
-            renderSummary(summary)
-            setState(AppState.SUMMARY_READY, "Done")
+        runOnUiThread { log("Parsing ${parsedReports.length()}/${prepared.size}") }
+        runCatching {
+            helper().summarize(JSONObject().put("mode", summaryMode).put("reports", parsedReports))
         }
+            .onSuccess { summary ->
+                runOnUiThread {
+                    renderSummary(summary)
+                    setState(AppState.SUMMARY_READY, "Done")
+                }
+            }
+            .onFailure { error ->
+                runOnUiThread { setState(AppState.ERROR, "Summary failed: ${error.message ?: "unknown error"}") }
+            }
     }
 
-    private fun fetchAndParseOne(row: JSONObject, index: Int, total: Int, template: ReportTemplate): JSONObject {
+    private fun fetchAndParseOne(request: PreparedReportRequest, index: Int, total: Int): JSONObject {
+        val row = request.row
         return runCatching {
             validateHelperSettings()
             runOnUiThread { log("Fetching ${index + 1}/$total") }
-            val transient = transientArgFor(row)
-            val url = NimsReportTemplate.directReportUrl(template, transient)
+            val transient = request.transientArg
+            val url = request.directUrl
             val response = fetchWithWebViewCookies(url)
             val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
             if (classification == "html_login_or_session") throw IllegalStateException("Session expired. Login again in NIMS WebView.")
@@ -243,21 +279,6 @@ class MainActivity : Activity() {
         }.getOrElse {
             errorReport(row, it.message ?: "direct fetch failed")
         }
-    }
-
-    private fun transientArgFor(row: JSONObject): String {
-        var arg = ""
-        val script = "JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))"
-        val latch = java.util.concurrent.CountDownLatch(1)
-        runOnUiThread {
-            evaluateCore(script) { payload ->
-                arg = payload.optString("transientPrintReportArg")
-                latch.countDown()
-            }
-        }
-        latch.await()
-        if (arg.isBlank()) throw IllegalStateException("Required report argument missing")
-        return arg
     }
 
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
@@ -334,7 +355,7 @@ class MainActivity : Activity() {
         val failed = JSONArray()
         val source = summary.optJSONArray("source_reports") ?: JSONArray()
         for (i in 0 until source.length()) {
-            val row = source.getJSONObject(i)
+            val row = source.optJSONObject(i) ?: continue
             if (row.optString("status") == "error" || row.optString("notes").isNotBlank()) failed.put(row)
         }
         appendRows(builder, failed, listOf("date_sent", "report_name", "notes"))
@@ -357,7 +378,7 @@ class MainActivity : Activity() {
             return
         }
         for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
+            val row = rows.optJSONObject(i) ?: continue
             builder.appendLine(keys.mapNotNull { key ->
                 val value = row.optString(key)
                 if (value.isBlank()) null else "$key=$value"
@@ -420,4 +441,10 @@ data class ReportFetchResult(
     val statusCode: Int,
     val finalUrlSafe: String,
     val bytes: ByteArray
+)
+
+data class PreparedReportRequest(
+    val row: JSONObject,
+    val transientArg: String,
+    val directUrl: String
 )

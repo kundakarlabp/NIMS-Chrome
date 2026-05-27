@@ -17,7 +17,7 @@ android {
     }
 
     sourceSets {
-        getByName("main").assets.srcDirs("src/main/assets", "../../../../shared/nims-web")
+        getByName("main").assets.srcDirs("src/main/assets", "../../../shared/nims-web")
     }
 
     buildFeatures {
