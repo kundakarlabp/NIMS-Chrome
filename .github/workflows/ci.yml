@@ -26,6 +26,8 @@ jobs:
           java-version: "17"
       - run: ./gradlew test
         working-directory: mobile/android
+      - run: ./gradlew assembleDebug
+        working-directory: mobile/android
 
   docker:
     runs-on: ubuntu-latest

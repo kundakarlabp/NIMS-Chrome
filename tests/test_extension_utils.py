@@ -607,7 +607,7 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "private var mappingValidated = false" in main_activity
     assert "mappingValidated = false" in main_activity
     assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
-    assert "Run Test Direct Fetch successfully before Bulk Summary." in main_activity
+    assert "Run Test One Report successfully before bulk summary." in main_activity
     assert "ReportFetchQueue(concurrency = 3)" in main_activity
     assert "concurrency.coerceIn(1, 5)" in queue
     assert "private var webViewUserAgent = \"\"" in main_activity
@@ -628,15 +628,13 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
 
 def test_android_primary_summary_is_readable_not_raw_json_only() -> None:
     main_activity = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "MainActivity.kt").read_text(encoding="utf-8")
-    for section in (
-        "Summary",
-        "Source Reports",
-        "Failed Reports",
-        "Lab Trends",
-        "Cultures",
-        "Interpretation",
-    ):
-        assert f'appendLine("{section}")' in main_activity
+    formatter = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "ui" / "formatters" / "ClinicalSummaryFormatter.kt").read_text(encoding="utf-8")
+    for section in ("NIMS Fast Summary", "Key labs", "Cultures", "Interpretation", "Physician note"):
+        assert section in formatter
+    assert "ReportsScreen(" in main_activity
+    assert "TrendsScreen(" in main_activity
+    assert "CulturesScreen(" in main_activity
+    assert "SummaryScreen(" in main_activity
     assert "summary.toString(2)" not in main_activity
 
 

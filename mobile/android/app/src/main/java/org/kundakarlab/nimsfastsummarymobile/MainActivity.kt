@@ -1,113 +1,243 @@
 package org.kundakarlab.nimsfastsummarymobile
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.util.Base64
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
+import android.webkit.WebViewClient
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONArray
 import org.json.JSONObject
+import org.kundakarlab.nimsfastsummarymobile.ui.formatters.ClinicalSummaryFormatter
+import org.kundakarlab.nimsfastsummarymobile.ui.mappers.SummaryJsonMapper
+import org.kundakarlab.nimsfastsummarymobile.ui.models.Abnormality
+import org.kundakarlab.nimsfastsummarymobile.ui.models.UiCultureRow
+import org.kundakarlab.nimsfastsummarymobile.ui.models.UiLabTrendRow
+import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSourceReport
+import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
-    private lateinit var output: TextView
-    private lateinit var helperUrl: EditText
-    private lateinit var helperKey: EditText
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
     private var webViewUserAgent = ""
-    private var appState = AppState.NEED_HELPER_SETTINGS
+
+    private var appStateValue by mutableStateOf(AppState.NEED_HELPER_SETTINGS)
+    private var statusMessage by mutableStateOf("Open NIMS and login manually.")
+    private var currentPage by mutableStateOf("NIMS login")
+    private var loadProgress by mutableIntStateOf(0)
+    private var helperUrlInput by mutableStateOf("")
+    private var helperKeyInput by mutableStateOf("")
+    private var logText by mutableStateOf("")
+    private var showSettings by mutableStateOf(false)
+    private var selectedTab by mutableIntStateOf(0)
+    private var uiSummary by mutableStateOf<UiSummary?>(null)
+    private var sanitizedSummaryText by mutableStateOf("")
+    private var physicianNote by mutableStateOf("")
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = SecureSettings(this)
+        helperUrlInput = settings.helperUrl()
+        physicianNote = settings.physicianNote()
+        loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
-        webView = WebView(this).apply {
+        webView = createWebView()
+        webViewUserAgent = webView.settings.userAgentString
+        setState(
+            if (settings.helperUrl().isBlank() || !settings.hasApiKey()) AppState.NEED_HELPER_SETTINGS else AppState.HELPER_READY,
+            if (settings.helperUrl().isBlank() || !settings.hasApiKey()) "Add Railway helper URL and API key." else "Helper ready. Login to NIMS manually."
+        )
+        setContent {
+            NimsTheme {
+                NimsFastSummaryApp(
+                    webView = webView,
+                    state = appStateValue,
+                    statusMessage = statusMessage,
+                    currentPage = currentPage,
+                    loadProgress = loadProgress,
+                    selectedTab = selectedTab,
+                    onTabSelected = { selectedTab = it },
+                    helperUrl = helperUrlInput,
+                    helperKey = helperKeyInput,
+                    onHelperUrlChange = { helperUrlInput = it },
+                    onHelperKeyChange = { helperKeyInput = it },
+                    showSettings = showSettings,
+                    onShowSettings = { showSettings = true },
+                    onDismissSettings = { showSettings = false },
+                    onSaveHelper = { saveHelperSettings() },
+                    onTestHelper = { testHelper() },
+                    onClearHelper = { clearHelperSettings() },
+                    onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
+                    onBack = { if (webView.canGoBack()) webView.goBack() },
+                    onForward = { if (webView.canGoForward()) webView.goForward() },
+                    onReload = { webView.reload() },
+                    onZoomIn = { webView.zoomIn() },
+                    onZoomOut = { webView.zoomOut() },
+                    onDiagnose = { diagnosePage() },
+                    onDiscover = { discoverMapping() },
+                    onTestOne = { runMode("test_direct") },
+                    onFast = { runMode("bulk_fast") },
+                    onCulturesOnly = { runMode("bulk_cultures_only") },
+                    onFull = { runMode("bulk_full") },
+                    summary = uiSummary,
+                    physicianNote = physicianNote,
+                    onPhysicianNoteChange = { updatePhysicianNote(it) },
+                    logText = logText,
+                    onCopySummary = { copyCleanSummary() },
+                    onCopyJson = { copyText("NIMS Fast Summary JSON", sanitizedSummaryText.ifBlank { "{}" }) },
+                    onExportText = { shareText("NIMS Fast Summary", cleanSummaryText()) },
+                    onClearResults = { clearResults() }
+                )
+            }
+        }
+        webView.loadUrl(NIMS_LOGIN_URL)
+        webView.requestFocus()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(): WebView {
+        return WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
+            settings.javaScriptCanOpenWindowsAutomatically = true
+            settings.setSupportMultipleWindows(true)
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.builtInZoomControls = true
+            settings.displayZoomControls = false
+            settings.textZoom = 100
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            webViewClient = NimsWebViewClient()
-        }
-        webViewUserAgent = webView.settings.userAgentString
-        output = TextView(this).apply { textSize = 12f }
-        helperUrl = EditText(this).apply {
-            hint = "https://your-service.up.railway.app"
-            setText(settings.helperUrl())
-        }
-        helperKey = EditText(this).apply {
-            hint = if (settings.apiKey().isBlank()) "Helper API key" else "API key saved; enter only to replace"
-        }
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setInitialScale(85)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    loadProgress = newProgress
+                }
 
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(helperUrl)
-            addView(helperKey)
-            addButton("Save Helper") { saveHelperSettings() }
-            addButton("Test Helper") { testHelper() }
-            addButton("Diagnose Page") { diagnosePage() }
-            addButton("Discover Mapping") { discoverMapping() }
-            addButton("Test Direct Fetch") { runMode("test_direct") }
-            addButton("Bulk Fast Summary") { runMode("bulk_fast") }
-            addButton("Bulk Cultures Only") { runMode("bulk_cultures_only") }
-            addButton("Bulk Full Summary") { runMode("bulk_full") }
-            addButton("Clear Mapping") { mapping = null; mappingValidated = false; log("Mapping cleared") }
-            addButton("Copy Text") { copyOutput() }
-            addButton("Clear Output") { output.text = ""; setState(AppState.NIMS_LOGIN, "Output cleared") }
-            addButton("Clear Helper Settings") { settings.clear(); helperUrl.setText(""); helperKey.setText(""); log("Helper settings cleared") }
-        }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(webView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(controls)
-            addView(ScrollView(this@MainActivity).apply { addView(output) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 260))
-        }
-        setContentView(root)
-        setState(if (settings.helperUrl().isBlank() || !settings.hasApiKey()) AppState.NEED_HELPER_SETTINGS else AppState.HELPER_READY, "Open NIMS and login manually.")
-        webView.loadUrl(NIMS_LOGIN_URL)
-    }
+                override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                    val popup = WebView(view.context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
+                                webView.loadUrl(request.url.toString())
+                                return true
+                            }
 
-    private fun LinearLayout.addButton(label: String, onClick: () -> Unit) {
-        addView(Button(context).apply {
-            text = label
-            setOnClickListener { onClick() }
-        })
+                            override fun onPageFinished(popupView: WebView, url: String) {
+                                if (url.isNotBlank() && url != "about:blank") webView.loadUrl(url)
+                            }
+                        }
+                    }
+                    val transport = resultMsg.obj as WebView.WebViewTransport
+                    transport.webView = popup
+                    resultMsg.sendToTarget()
+                    return true
+                }
+            }
+            webViewClient = NimsWebViewClient { safeUrl ->
+                currentPage = safeUrl.ifBlank { "NIMS" }
+            }
+        }
     }
 
     private fun saveHelperSettings() {
         runCatching {
-            settings.saveHelperUrl(helperUrl.text.toString())
-            if (helperKey.text.toString().isBlank() && !settings.hasApiKey()) {
-                throw IllegalArgumentException("Set Railway helper API key first.")
-            }
-            settings.saveApiKey(helperKey.text.toString())
+            settings.saveHelperUrl(helperUrlInput)
+            if (helperKeyInput.isBlank() && !settings.hasApiKey()) throw IllegalArgumentException("Set Railway helper API key first.")
+            settings.saveApiKey(helperKeyInput)
         }.onFailure {
             setState(AppState.ERROR, it.message ?: "Helper settings invalid")
             return
         }
-        helperKey.setText("")
-        helperKey.hint = "API key saved; enter only to replace"
-        setState(AppState.HELPER_READY, "Helper settings saved")
+        helperKeyInput = ""
+        showSettings = false
+        setState(AppState.HELPER_READY, "Helper settings saved. Login to NIMS manually.")
+    }
+
+    private fun clearHelperSettings() {
+        settings.clear()
+        helperUrlInput = ""
+        helperKeyInput = ""
+        uiSummary = null
+        sanitizedSummaryText = ""
+        physicianNote = ""
+        setState(AppState.NEED_HELPER_SETTINGS, "Helper settings cleared.")
     }
 
     private fun testHelper() {
@@ -124,6 +254,10 @@ class MainActivity : Activity() {
 
     private fun diagnosePage() {
         evaluateCore("JSON.stringify(NimsReportCore.diagnosePage(document))") { json ->
+            val rows = json.optInt("viewReportRowCount", json.optInt("view_report_rows"))
+            if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+                setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
+            }
             log("Diagnosis: ${safeJson(json)}")
         }
     }
@@ -132,25 +266,25 @@ class MainActivity : Activity() {
         mappingValidated = false
         evaluateCore("JSON.stringify(NimsReportCore.clickFirstReportForMode('test_direct', document))") { click ->
             if (!click.optBoolean("ok")) {
-                log(click.optString("error", "No View Report button found for row"))
+                setState(AppState.ERROR, click.optString("error", "No View Report button found for row"))
                 return@evaluateCore
             }
-            log("Waiting for setPdf template")
+            log("Waiting for report mapping")
             Handler(Looper.getMainLooper()).postDelayed({
                 evaluateCore("JSON.stringify(NimsReportCore.discoverSetPdfTemplate(document))") { template ->
                     if (!template.optBoolean("discovered")) {
-                        log("setPdf template not discovered")
+                        setState(AppState.ERROR, "Mapping not discovered. Open the report page and retry.")
                         return@evaluateCore
                     }
                     mapping = ReportTemplate(
-                        origin = template.getString("origin"),
-                        pathname = template.getString("pathname"),
+                        origin = template.optString("origin"),
+                        pathname = template.optString("pathname"),
                         modeParamName = template.optString("modeParamName", "hmode"),
                         modeParamValue = template.optString("modeParamValue", "PRINTREPORT"),
                         argumentParameterName = template.optString("argumentParameterName", "fileName")
                     )
                     mappingValidated = false
-                    setState(AppState.MAPPING_DISCOVERED, "Mapping ready: ${template.optString("endpoint")} params=${template.optJSONArray("queryParamNames")}")
+                    setState(AppState.MAPPING_DISCOVERED, "Mapping ready. Run Test One Report.")
                 }
             }, 1200)
         }
@@ -159,11 +293,11 @@ class MainActivity : Activity() {
     private fun runMode(mode: String) {
         val currentMapping = mapping
         if (currentMapping == null) {
-            log("Run Discover Mapping first")
+            setState(AppState.ERROR, "Mapping not discovered. Tap Discover after opening the report list.")
             return
         }
         if (mode != "test_direct" && !mappingValidated) {
-            log("Run Test Direct Fetch successfully before Bulk Summary.")
+            setState(AppState.ERROR, "Run Test One Report successfully before bulk summary.")
             return
         }
         evaluateJson("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rowsText ->
@@ -171,38 +305,64 @@ class MainActivity : Activity() {
             evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedText ->
                 val selectedAll = JSONArray(selectedText)
                 val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                    JSONArray().put(selectedAll.getJSONObject(0))
+                    JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
                 } else {
                     selectedAll
                 }
                 log("Selected ${selected.length()} reports")
-                Thread { fetchParseSummarize(mode, selected, currentMapping) }.start()
+                prepareReportRequests(selected, currentMapping) { prepared ->
+                    Thread { fetchParseSummarize(mode, prepared) }.start()
+                }
             }
         }
     }
 
-    private fun fetchParseSummarize(mode: String, selected: JSONArray, template: ReportTemplate) {
-        setState(AppState.FETCHING, "Fetching reports")
-        val parsedReports = JSONArray()
-        val rows = (0 until selected.length()).map { selected.getJSONObject(it) }
-        if (mode == "test_direct") {
-            val row = rows.firstOrNull()
-            if (row == null) {
-                runOnUiThread { log("No report selected for Test Direct Fetch") }
+    private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
+        val prepared = mutableListOf<PreparedReportRequest>()
+        fun step(index: Int) {
+            if (index >= selected.length()) {
+                callback(prepared)
                 return
             }
-            val report = fetchAndParseOne(row, 0, 1, template)
+            val row = selected.optJSONObject(index)
+            if (row == null) {
+                step(index + 1)
+                return
+            }
+            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))") { payload ->
+                val transient = payload.optString("transientPrintReportArg")
+                if (transient.isBlank()) {
+                    log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
+                } else {
+                    prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
+                }
+                step(index + 1)
+            }
+        }
+        step(0)
+    }
+
+    private fun fetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
+        setState(AppState.FETCHING, "Fetching and parsing reports...")
+        val parsedReports = JSONArray()
+        if (mode == "test_direct") {
+            val request = prepared.firstOrNull()
+            if (request == null) {
+                setState(AppState.ERROR, "No report selected for Test One Report.")
+                return
+            }
+            val report = fetchAndParseOne(request, 0, 1)
             parsedReports.put(report)
             val valid = isParsedReportValid(report)
             mappingValidated = valid
             if (!valid) {
                 mappingValidated = false
-                runOnUiThread { log(report.optJSONArray("errors")?.optString(0) ?: "Test Direct Fetch did not parse a report") }
+                setState(AppState.ERROR, report.optJSONArray("errors")?.optString(0) ?: "Test One Report did not parse a report.")
                 return
             }
         } else {
-            val results = ReportFetchQueue(concurrency = 3).run(rows.withIndex().toList()) { indexed ->
-                fetchAndParseOne(indexed.value, indexed.index, rows.size, template)
+            val results = ReportFetchQueue(concurrency = 3).run(prepared.withIndex().toList()) { indexed ->
+                fetchAndParseOne(indexed.value, indexed.index, prepared.size)
             }
             results.forEach { result ->
                 parsedReports.put(result.getOrElse { errorReport(JSONObject(), it.message ?: "direct fetch failed") })
@@ -213,25 +373,36 @@ class MainActivity : Activity() {
             "bulk_cultures_only" -> "cultures_only"
             else -> "fast"
         }
-        runOnUiThread { log("Parsing ${parsedReports.length()}/${selected.length()}") }
-        val summary = helper().summarize(JSONObject().put("mode", summaryMode).put("reports", parsedReports))
-        runOnUiThread {
-            renderSummary(summary)
-            setState(AppState.SUMMARY_READY, "Done")
+        log("Summarizing ${parsedReports.length()}/${prepared.size}")
+        runCatching {
+            helper().summarize(JSONObject().put("mode", summaryMode).put("reports", parsedReports))
         }
+            .onSuccess { summary ->
+                runOnUiThread {
+                    sanitizedSummaryText = summary.toString()
+                    settings.saveLastSummaryJson(sanitizedSummaryText)
+                    uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary, physicianNote)
+                    selectedTab = 4
+                    setState(AppState.SUMMARY_READY, "Summary ready.")
+                }
+            }
+            .onFailure { error ->
+                setState(AppState.ERROR, "Summary failed: ${error.message ?: "unknown error"}")
+            }
     }
 
-    private fun fetchAndParseOne(row: JSONObject, index: Int, total: Int, template: ReportTemplate): JSONObject {
+    private fun fetchAndParseOne(request: PreparedReportRequest, index: Int, total: Int): JSONObject {
+        val row = request.row
         return runCatching {
             validateHelperSettings()
-            runOnUiThread { log("Fetching ${index + 1}/$total") }
-            val transient = transientArgFor(row)
-            val url = NimsReportTemplate.directReportUrl(template, transient)
+            log("Fetching selected report ${index + 1}/$total")
+            val transient = request.transientArg
+            val url = request.directUrl
             val response = fetchWithWebViewCookies(url)
             val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
-            if (classification == "html_login_or_session") throw IllegalStateException("Session expired. Login again in NIMS WebView.")
+            if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
             if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
-            runOnUiThread { log("Parsing ${index + 1}/$total") }
+            log("Parsing report ${index + 1}/$total")
             val payload = JSONObject()
                 .put("report_id", safeReportKey(transient, row))
                 .put("report_name", row.optString("report_name"))
@@ -243,21 +414,6 @@ class MainActivity : Activity() {
         }.getOrElse {
             errorReport(row, it.message ?: "direct fetch failed")
         }
-    }
-
-    private fun transientArgFor(row: JSONObject): String {
-        var arg = ""
-        val script = "JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))"
-        val latch = java.util.concurrent.CountDownLatch(1)
-        runOnUiThread {
-            evaluateCore(script) { payload ->
-                arg = payload.optString("transientPrintReportArg")
-                latch.countDown()
-            }
-        }
-        latch.await()
-        if (arg.isBlank()) throw IllegalStateException("Required report argument missing")
-        return arg
     }
 
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
@@ -298,7 +454,7 @@ class MainActivity : Activity() {
     }
 
     private fun publicHelper(): HelperApiClient {
-        val url = HelperSettingsValidator.normalizeUrl(helperUrl.text.toString().ifBlank { settings.helperUrl() })
+        val url = HelperSettingsValidator.normalizeUrl(helperUrlInput.ifBlank { settings.helperUrl() })
         return HelperApiClient(url) { settings.apiKey() }
     }
 
@@ -318,52 +474,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun decodeJsString(value: String): String {
-        return JSONArray("[$value]").getString(0)
-    }
-
+    private fun decodeJsString(value: String): String = JSONArray("[$value]").getString(0)
     private fun safeJson(json: JSONObject): String = json.toString(2)
-
-    private fun renderSummary(summary: JSONObject) {
-        val builder = StringBuilder()
-        builder.appendLine("Summary")
-        builder.appendLine("Source Reports")
-        appendRows(builder, summary.optJSONArray("source_reports"), listOf("date_sent", "report_name", "type", "status", "notes"))
-        builder.appendLine()
-        builder.appendLine("Failed Reports")
-        val failed = JSONArray()
-        val source = summary.optJSONArray("source_reports") ?: JSONArray()
-        for (i in 0 until source.length()) {
-            val row = source.getJSONObject(i)
-            if (row.optString("status") == "error" || row.optString("notes").isNotBlank()) failed.put(row)
-        }
-        appendRows(builder, failed, listOf("date_sent", "report_name", "notes"))
-        builder.appendLine()
-        builder.appendLine("Lab Trends")
-        appendRows(builder, summary.optJSONObject("lab_trend_table")?.optJSONArray("rows"), listOf("parameter", "trend"))
-        builder.appendLine()
-        builder.appendLine("Cultures")
-        appendRows(builder, summary.optJSONArray("culture_table"), listOf("collection_date", "culture_no", "specimen_no", "site_specimen", "status", "result", "growth", "organism", "comment", "sensitivity_summary"))
-        builder.appendLine()
-        builder.appendLine("Interpretation")
-        val interpretation = summary.optJSONArray("interpretation") ?: JSONArray()
-        for (i in 0 until interpretation.length()) builder.appendLine("- ${interpretation.optString(i)}")
-        output.text = builder.toString()
-    }
-
-    private fun appendRows(builder: StringBuilder, rows: JSONArray?, keys: List<String>) {
-        if (rows == null || rows.length() == 0) {
-            builder.appendLine("No data")
-            return
-        }
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            builder.appendLine(keys.mapNotNull { key ->
-                val value = row.optString(key)
-                if (value.isBlank()) null else "$key=$value"
-            }.joinToString(" | "))
-        }
-    }
 
     private fun isParsedReportValid(report: JSONObject): Boolean {
         val parameters = report.optJSONArray("parameters")?.length() ?: 0
@@ -394,19 +506,67 @@ class MainActivity : Activity() {
         return "report_key:$hash"
     }
 
+    private fun loadPersistedSummary() {
+        val saved = settings.lastSummaryJson()
+        sanitizedSummaryText = saved
+        if (saved.isNotBlank()) {
+            runCatching { uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(JSONObject(saved), physicianNote) }
+        }
+    }
+
+    private fun updatePhysicianNote(value: String) {
+        physicianNote = value
+        settings.savePhysicianNote(value)
+        uiSummary = uiSummary?.copy(editableNote = value)
+    }
+
+    private fun cleanSummaryText(): String {
+        return ClinicalSummaryFormatter.cleanText((uiSummary ?: UiSummary()).copy(editableNote = physicianNote))
+    }
+
+    private fun copyCleanSummary() {
+        copyText("NIMS Fast Summary", cleanSummaryText())
+    }
+
+    private fun copyText(label: String, text: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        log("Copied: $label")
+    }
+
+    private fun shareText(title: String, text: String) {
+        startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, title)
+                    putExtra(Intent.EXTRA_TEXT, text)
+                },
+                title
+            )
+        )
+    }
+
+    private fun clearResults() {
+        settings.clearResults()
+        sanitizedSummaryText = ""
+        uiSummary = null
+        physicianNote = ""
+        setState(AppState.HELPER_READY, "Results cleared.")
+    }
+
     private fun log(message: String) {
-        runOnUiThread { output.text = "${output.text}\n$message" }
+        runOnUiThread {
+            logText = (logText + "\n" + message).trim().takeLast(8000)
+        }
     }
 
     private fun setState(state: AppState, message: String) {
-        appState = state
-        log("${state.name}: $message")
-    }
-
-    private fun copyOutput() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS Fast Summary", output.text))
-        log("Output copied")
+        runOnUiThread {
+            appStateValue = state
+            statusMessage = message
+            logText = (logText + "\n${state.name}: $message").trim().takeLast(8000)
+        }
     }
 
     companion object {
@@ -415,9 +575,422 @@ class MainActivity : Activity() {
     }
 }
 
+@Composable
+private fun NimsTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = Color(0xFF0F4C81),
+            secondary = Color(0xFF006B5F),
+            tertiary = Color(0xFF7A4D00),
+            error = Color(0xFFB3261E)
+        ),
+        content = content
+    )
+}
+
+@Composable
+private fun NimsFastSummaryApp(
+    webView: WebView,
+    state: AppState,
+    statusMessage: String,
+    currentPage: String,
+    loadProgress: Int,
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit,
+    helperUrl: String,
+    helperKey: String,
+    onHelperUrlChange: (String) -> Unit,
+    onHelperKeyChange: (String) -> Unit,
+    showSettings: Boolean,
+    onShowSettings: () -> Unit,
+    onDismissSettings: () -> Unit,
+    onSaveHelper: () -> Unit,
+    onTestHelper: () -> Unit,
+    onClearHelper: () -> Unit,
+    onNimsLogin: () -> Unit,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    onReload: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onDiagnose: () -> Unit,
+    onDiscover: () -> Unit,
+    onTestOne: () -> Unit,
+    onFast: () -> Unit,
+    onCulturesOnly: () -> Unit,
+    onFull: () -> Unit,
+    summary: UiSummary?,
+    physicianNote: String,
+    onPhysicianNoteChange: (String) -> Unit,
+    logText: String,
+    onCopySummary: () -> Unit,
+    onCopyJson: () -> Unit,
+    onExportText: () -> Unit,
+    onClearResults: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            AppHeader(state, statusMessage, currentPage, loadProgress, onShowSettings)
+        },
+        bottomBar = {
+            NavigationBar {
+                listOf("NIMS", "Reports", "Trends", "Cultures", "Summary").forEachIndexed { index, label ->
+                    NavigationBarItem(
+                        selected = selectedTab == index,
+                        onClick = { onTabSelected(index) },
+                        icon = { Text(label.take(1)) },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        }
+    ) { padding ->
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+        when (selectedTab) {
+            0 -> NimsWebViewScreen(
+                modifier = contentModifier,
+                webView = webView,
+                state = state,
+                onNimsLogin = onNimsLogin,
+                onBack = onBack,
+                onForward = onForward,
+                onReload = onReload,
+                onZoomIn = onZoomIn,
+                onZoomOut = onZoomOut,
+                onDiagnose = onDiagnose,
+                onDiscover = onDiscover,
+                onTestOne = onTestOne,
+                onFast = onFast,
+                onCulturesOnly = onCulturesOnly,
+                onFull = onFull,
+                logText = logText
+            )
+            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
+            2 -> TrendsScreen(contentModifier, summary?.labTrends.orEmpty())
+            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty())
+            else -> SummaryScreen(
+                modifier = contentModifier,
+                summary = summary,
+                physicianNote = physicianNote,
+                onPhysicianNoteChange = onPhysicianNoteChange,
+                onCopySummary = onCopySummary,
+                onCopyJson = onCopyJson,
+                onExportText = onExportText,
+                onClearResults = onClearResults
+            )
+        }
+    }
+    if (showSettings) {
+        SettingsDialog(
+            helperUrl = helperUrl,
+            helperKey = helperKey,
+            onHelperUrlChange = onHelperUrlChange,
+            onHelperKeyChange = onHelperKeyChange,
+            onSave = onSaveHelper,
+            onTest = onTestHelper,
+            onClear = onClearHelper,
+            onDismiss = onDismissSettings
+        )
+    }
+}
+
+@Composable
+private fun AppHeader(state: AppState, message: String, currentPage: String, progress: Int, onSettings: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primary)
+            .padding(14.dp, 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("NIMS Fast Summary", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(currentPage, color = Color(0xFFD7E8FF), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onSettings) { Text("Settings", color = Color.White) }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("${state.name}: $message", color = Color.White, style = MaterialTheme.typography.bodySmall)
+        Text(if (progress >= 100) "Loaded" else "Loading $progress%", color = Color(0xFFD7E8FF), style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun NimsWebViewScreen(
+    modifier: Modifier,
+    webView: WebView,
+    state: AppState,
+    onNimsLogin: () -> Unit,
+    onBack: () -> Unit,
+    onForward: () -> Unit,
+    onReload: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onDiagnose: () -> Unit,
+    onDiscover: () -> Unit,
+    onTestOne: () -> Unit,
+    onFast: () -> Unit,
+    onCulturesOnly: () -> Unit,
+    onFull: () -> Unit,
+    logText: String
+) {
+    Column(modifier) {
+        StatusCard(state)
+        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { OutlinedButton(onClick = onBack) { Text("Back") } }
+            item { OutlinedButton(onClick = onForward) { Text("Forward") } }
+            item { OutlinedButton(onClick = onReload) { Text("Reload") } }
+            item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
+            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
+            item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+            item { Button(onClick = onDiagnose) { Text("Diagnose") } }
+            item { Button(onClick = onDiscover) { Text("Discover") } }
+            item { Button(onClick = onTestOne) { Text("Test One") } }
+            item { Button(onClick = onFast) { Text("Fast") } }
+            item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
+            item { Button(onClick = onFull) { Text("Full") } }
+        }
+        AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
+        if (logText.isNotBlank()) {
+            Text(
+                logText.takeLast(1200),
+                Modifier
+                    .fillMaxWidth()
+                    .height(96.dp)
+                    .background(Color(0xFFF7F9FC))
+                    .padding(8.dp),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { SectionTitle("Source reports", "${reports.size} reports") }
+        if (reports.isEmpty()) item { EmptyCard("No reports parsed yet.") }
+        items(reports) { report ->
+            ResultCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(report.reportName, fontWeight = FontWeight.Bold)
+                        Text(report.dateSent.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Badge(report.type.uppercase())
+                    Spacer(Modifier.width(6.dp))
+                    Badge(report.status, if (report.hasError) Color(0xFFFFE2E0) else Color(0xFFE6F4EA))
+                }
+                if (report.notes.isNotBlank()) Text(report.notes, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { SectionTitle("Lab trends", "${rows.size} parameters") }
+        if (rows.isEmpty()) item { EmptyCard("Run Fast Summary to view lab trends.") }
+        items(rows) { row ->
+            ResultCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(row.parameter, fontWeight = FontWeight.Bold)
+                        Text(row.latestDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(row.latestValue.ifBlank { "-" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Badge(row.trendText)
+                    Badge(row.abnormality.name, abnormalityColor(row.abnormality))
+                    if (!row.previousValue.isNullOrBlank()) Badge("Prev ${row.previousValue}")
+                }
+                Text(row.history.take(5).joinToString(" | ") { "${it.first}: ${it.second}" }, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { SectionTitle("Cultures", "${rows.size} rows") }
+        if (rows.isEmpty()) item { EmptyCard("No culture data parsed yet.") }
+        items(rows) { row ->
+            ResultCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(row.organism.ifBlank { row.status.ifBlank { "Culture" } }, fontWeight = FontWeight.Bold)
+                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Badge(row.status, if (row.status.contains("positive", true)) Color(0xFFFFE8CC) else Color(0xFFE6F4EA))
+                }
+                Text(row.site.ifBlank { row.specimen }.ifBlank { "Site/specimen not parsed" })
+                if (row.sensitivitySummary.isNotBlank()) Text(row.sensitivitySummary, style = MaterialTheme.typography.bodySmall)
+                if (row.comment.isNotBlank()) Text(row.comment, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryScreen(
+    modifier: Modifier,
+    summary: UiSummary?,
+    physicianNote: String,
+    onPhysicianNoteChange: (String) -> Unit,
+    onCopySummary: () -> Unit,
+    onCopyJson: () -> Unit,
+    onExportText: () -> Unit,
+    onClearResults: () -> Unit
+) {
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { SectionTitle("Clinical summary", summary?.dateRange ?: "No summary") }
+        item {
+            ResultCard {
+                Text("Snapshot", fontWeight = FontWeight.Bold)
+                Text("Reports: ${summary?.sourceReports?.size ?: 0}")
+                Text("Failed: ${summary?.failedReportCount ?: 0}")
+                Text("Cultures: ${summary?.cultures?.size ?: 0}")
+            }
+        }
+        item {
+            ResultCard {
+                Text("Interpretation", fontWeight = FontWeight.Bold)
+                val bullets = summary?.interpretation.orEmpty()
+                if (bullets.isEmpty()) Text("No interpretation available")
+                bullets.take(8).forEach { Text("- $it") }
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = physicianNote,
+                onValueChange = onPhysicianNoteChange,
+                label = { Text("Editable physician note") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 4
+            )
+        }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Button(onClick = onCopySummary) { Text("Copy summary") } }
+                item { OutlinedButton(onClick = onExportText) { Text("Share text") } }
+                item { OutlinedButton(onClick = onCopyJson) { Text("Copy JSON") } }
+                item { OutlinedButton(onClick = onClearResults) { Text("Clear results") } }
+            }
+        }
+        item {
+            Text(
+                "Auto-parsed summary. Verify with source NIMS reports before clinical decisions.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsDialog(
+    helperUrl: String,
+    helperKey: String,
+    onHelperUrlChange: (String) -> Unit,
+    onHelperKeyChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onTest: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { Button(onClick = onSave) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("Settings and security") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Railway helper URL") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onTest) { Text("Test helper") }
+                    OutlinedButton(onClick = onClear) { Text("Clear") }
+                }
+                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content for parsing only.")
+            }
+        }
+    )
+}
+
+@Composable
+private fun StatusCard(state: AppState) {
+    ResultCard {
+        Text("Next action", fontWeight = FontWeight.Bold)
+        Text(
+            when (state) {
+                AppState.NEED_HELPER_SETTINGS -> "Add Railway helper URL and API key."
+                AppState.HELPER_READY -> "Login to NIMS manually."
+                AppState.NIMS_LOGIN -> "Open the report page after login."
+                AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."
+                AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
+                AppState.FETCHING -> "Fetching and parsing reports..."
+                AppState.SUMMARY_READY -> "Summary ready."
+                AppState.ERROR -> "Review error and retry the relevant step."
+            }
+        )
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String, subtitle: String) {
+    Column {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color.DarkGray)
+    }
+}
+
+@Composable
+private fun ResultCard(content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun EmptyCard(text: String) {
+    ResultCard { Text(text, color = Color.DarkGray) }
+}
+
+@Composable
+private fun Badge(text: String, color: Color = Color(0xFFE8EEF7)) {
+    AssistChip(onClick = {}, label = { Text(text.ifBlank { "unknown" }) }, modifier = Modifier.fillMaxHeight(), leadingIcon = null)
+}
+
+private fun abnormalityColor(value: Abnormality): Color {
+    return when (value) {
+        Abnormality.HIGH -> Color(0xFFFFE8CC)
+        Abnormality.LOW -> Color(0xFFE4E7FF)
+        Abnormality.CRITICAL -> Color(0xFFFFDAD6)
+        Abnormality.NORMAL -> Color(0xFFE6F4EA)
+        Abnormality.UNKNOWN -> Color(0xFFE8EEF7)
+    }
+}
+
 data class ReportFetchResult(
     val contentType: String,
     val statusCode: Int,
     val finalUrlSafe: String,
     val bytes: ByteArray
+)
+
+data class PreparedReportRequest(
+    val row: JSONObject,
+    val transientArg: String,
+    val directUrl: String
 )
