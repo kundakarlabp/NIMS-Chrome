@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
                     onTestHelper = { testHelper() },
                     onClearHelper = { clearHelperSettings() },
                     onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
+                    onClearNimsSession = { clearNimsSession() },
                     onBack = { if (webView.canGoBack()) webView.goBack() },
                     onForward = { if (webView.canGoForward()) webView.goForward() },
                     onReload = { webView.reload() },
@@ -173,11 +175,13 @@ class MainActivity : ComponentActivity() {
             settings.displayZoomControls = false
             settings.textZoom = 100
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.loadsImagesAutomatically = true
+            settings.blockNetworkImage = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             isFocusable = true
             isFocusableInTouchMode = true
             setInitialScale(85)
@@ -210,9 +214,14 @@ class MainActivity : ComponentActivity() {
                     return true
                 }
             }
-            webViewClient = NimsWebViewClient { safeUrl ->
-                currentPage = safeUrl.ifBlank { "NIMS" }
-            }
+            webViewClient = NimsWebViewClient(
+                onPageChanged = { safeUrl ->
+                    currentPage = safeUrl.ifBlank { "NIMS" }
+                },
+                onMainFrameError = { error ->
+                    setState(AppState.ERROR, error)
+                }
+            )
         }
     }
 
@@ -228,6 +237,16 @@ class MainActivity : ComponentActivity() {
         helperKeyInput = ""
         showSettings = false
         setState(AppState.HELPER_READY, "Helper settings saved. Login to NIMS manually.")
+    }
+
+    private fun clearNimsSession() {
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush()
+            runOnUiThread {
+                webView.loadUrl(NIMS_LOGIN_URL)
+                setState(AppState.HELPER_READY, "NIMS WebView session cleared. Login manually.")
+            }
+        }
     }
 
     private fun clearHelperSettings() {
@@ -608,6 +627,7 @@ private fun NimsFastSummaryApp(
     onTestHelper: () -> Unit,
     onClearHelper: () -> Unit,
     onNimsLogin: () -> Unit,
+    onClearNimsSession: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
@@ -654,6 +674,7 @@ private fun NimsFastSummaryApp(
                 webView = webView,
                 state = state,
                 onNimsLogin = onNimsLogin,
+                onClearNimsSession = onClearNimsSession,
                 onBack = onBack,
                 onForward = onForward,
                 onReload = onReload,
@@ -702,7 +723,7 @@ private fun AppHeader(state: AppState, message: String, currentPage: String, pro
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.primary)
-            .padding(14.dp, 10.dp)
+            .padding(10.dp, 6.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -711,7 +732,7 @@ private fun AppHeader(state: AppState, message: String, currentPage: String, pro
             }
             TextButton(onClick = onSettings) { Text("Settings", color = Color.White) }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(3.dp))
         Text("${state.name}: $message", color = Color.White, style = MaterialTheme.typography.bodySmall)
         Text(if (progress >= 100) "Loaded" else "Loading $progress%", color = Color(0xFFD7E8FF), style = MaterialTheme.typography.labelSmall)
     }
@@ -723,6 +744,7 @@ private fun NimsWebViewScreen(
     webView: WebView,
     state: AppState,
     onNimsLogin: () -> Unit,
+    onClearNimsSession: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
@@ -737,12 +759,12 @@ private fun NimsWebViewScreen(
     logText: String
 ) {
     Column(modifier) {
-        StatusCard(state)
-        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             item { OutlinedButton(onClick = onBack) { Text("Back") } }
             item { OutlinedButton(onClick = onForward) { Text("Forward") } }
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
             item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
+            item { OutlinedButton(onClick = onClearNimsSession) { Text("Reset Login") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
@@ -752,13 +774,13 @@ private fun NimsWebViewScreen(
             item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
             item { Button(onClick = onFull) { Text("Full") } }
         }
-        AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
+        AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().heightIn(min = 360.dp).weight(1f))
         if (logText.isNotBlank()) {
             Text(
                 logText.takeLast(1200),
                 Modifier
                     .fillMaxWidth()
-                    .height(96.dp)
+                    .height(72.dp)
                     .background(Color(0xFFF7F9FC))
                     .padding(8.dp),
                 style = MaterialTheme.typography.bodySmall
@@ -929,8 +951,8 @@ private fun StatusCard(state: AppState) {
         Text(
             when (state) {
                 AppState.NEED_HELPER_SETTINGS -> "Add Railway helper URL and API key."
-                AppState.HELPER_READY -> "Login to NIMS manually."
-                AppState.NIMS_LOGIN -> "Open the report page after login."
+                AppState.HELPER_READY -> "Tap NIMS Login if needed, then login manually. Use zoom if the login image/form is small."
+                AppState.NIMS_LOGIN -> "Open the report page after manual login."
                 AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."
                 AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
                 AppState.FETCHING -> "Fetching and parsing reports..."
@@ -956,7 +978,7 @@ private fun ResultCard(content: @Composable () -> Unit) {
         shape = RoundedCornerShape(10.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             content()
         }
     }

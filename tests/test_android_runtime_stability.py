@@ -48,11 +48,23 @@ def test_android_webview_login_surface_is_optimized() -> None:
     assert "settings.loadWithOverviewMode = true" in source
     assert "settings.builtInZoomControls = true" in source
     assert "settings.displayZoomControls = false" in source
+    assert "settings.loadsImagesAutomatically = true" in source
+    assert "settings.blockNetworkImage = false" in source
+    assert "MIXED_CONTENT_COMPATIBILITY_MODE" in source
     assert "setAcceptThirdPartyCookies(this, true)" in source
+    assert "removeAllCookies" in source
+    assert "onClearNimsSession" in source
+    assert "Reset Login" in source
     assert "webView.requestFocus()" in source
     assert "NimsFastSummaryApp(" in source
     assert "SettingsDialog(" in source
     assert "AndroidView(factory = { webView }" in source
+    client = (
+        ANDROID_APP
+        / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsWebViewClient.kt"
+    ).read_text(encoding="utf-8")
+    assert "onReceivedSslError" in client
+    assert "handler.cancel()" in client
 
 
 def test_android_app_does_not_add_nims_credential_storage_or_login_automation() -> None:
