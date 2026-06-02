@@ -5,15 +5,23 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.util.Base64
+import android.view.View
+import android.webkit.WebChromeClient
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -28,6 +36,10 @@ class MainActivity : Activity() {
     private lateinit var output: TextView
     private lateinit var helperUrl: EditText
     private lateinit var helperKey: EditText
+    private lateinit var statusText: TextView
+    private lateinit var progressText: TextView
+    private lateinit var helperPanel: LinearLayout
+    private lateinit var logPanel: ScrollView
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
@@ -39,18 +51,80 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         settings = SecureSettings(this)
         CookieManager.getInstance().setAcceptCookie(true)
+        statusText = TextView(this).apply {
+            text = "NIMS Fast Summary"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setSingleLine(true)
+        }
+        progressText = TextView(this).apply {
+            text = "Ready"
+            textSize = 12f
+            setTextColor(Color.rgb(220, 235, 255))
+            setSingleLine(true)
+        }
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
+            settings.javaScriptCanOpenWindowsAutomatically = true
+            settings.setSupportMultipleWindows(true)
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.builtInZoomControls = true
+            settings.displayZoomControls = false
+            settings.textZoom = 100
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            webViewClient = NimsWebViewClient()
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setInitialScale(85)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    progressText.text = if (newProgress >= 100) "Loaded" else "Loading $newProgress%"
+                }
+
+                override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                    val popup = WebView(view.context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
+                                webView.loadUrl(request.url.toString())
+                                return true
+                            }
+
+                            override fun onPageFinished(popupView: WebView, url: String) {
+                                if (url.isNotBlank() && url != "about:blank") {
+                                    webView.loadUrl(url)
+                                }
+                            }
+                        }
+                    }
+                    val transport = resultMsg.obj as WebView.WebViewTransport
+                    transport.webView = popup
+                    resultMsg.sendToTarget()
+                    return true
+                }
+            }
+            webViewClient = NimsWebViewClient { safeUrl ->
+                statusText.text = safeUrl.ifBlank { "NIMS Fast Summary" }
+            }
         }
         webViewUserAgent = webView.settings.userAgentString
-        output = TextView(this).apply { textSize = 12f }
+        output = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.rgb(20, 28, 35))
+            setPadding(14, 10, 14, 10)
+        }
         helperUrl = EditText(this).apply {
             hint = "https://your-service.up.railway.app"
             setText(settings.helperUrl())
@@ -59,39 +133,95 @@ class MainActivity : Activity() {
             hint = if (settings.apiKey().isBlank()) "Helper API key" else "API key saved; enter only to replace"
         }
 
-        val controls = LinearLayout(this).apply {
+        helperPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(12, 8, 12, 8)
+            setBackgroundColor(Color.rgb(245, 248, 252))
             addView(helperUrl)
             addView(helperKey)
-            addButton("Save Helper") { saveHelperSettings() }
-            addButton("Test Helper") { testHelper() }
-            addButton("Diagnose Page") { diagnosePage() }
-            addButton("Discover Mapping") { discoverMapping() }
-            addButton("Test Direct Fetch") { runMode("test_direct") }
-            addButton("Bulk Fast Summary") { runMode("bulk_fast") }
-            addButton("Bulk Cultures Only") { runMode("bulk_cultures_only") }
-            addButton("Bulk Full Summary") { runMode("bulk_full") }
-            addButton("Clear Mapping") { mapping = null; mappingValidated = false; log("Mapping cleared") }
-            addButton("Copy Text") { copyOutput() }
-            addButton("Clear Output") { output.text = ""; setState(AppState.NIMS_LOGIN, "Output cleared") }
-            addButton("Clear Helper Settings") { settings.clear(); helperUrl.setText(""); helperKey.setText(""); log("Helper settings cleared") }
+            addButtonRow(
+                button("Save Helper") { saveHelperSettings() },
+                button("Test Helper") { testHelper() },
+                button("Clear Helper") { settings.clear(); helperUrl.setText(""); helperKey.setText(""); log("Helper settings cleared") }
+            )
+        }
+        logPanel = ScrollView(this).apply {
+            visibility = View.GONE
+            setBackgroundColor(Color.WHITE)
+            addView(output)
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(14, 8, 14, 8)
+            setBackgroundColor(Color.rgb(16, 45, 78))
+            addView(statusText)
+            addView(progressText)
+        }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(8, 6, 8, 6)
+            setBackgroundColor(Color.rgb(232, 238, 245))
+            addView(button("Back") { if (webView.canGoBack()) webView.goBack() })
+            addView(button("Forward") { if (webView.canGoForward()) webView.goForward() })
+            addView(button("Reload") { webView.reload() })
+            addView(button("NIMS Login") { webView.loadUrl(NIMS_LOGIN_URL) })
+            addView(button("Zoom -") { webView.zoomOut() })
+            addView(button("Zoom +") { webView.zoomIn() })
+            addView(button("Diagnose") { diagnosePage() })
+            addView(button("Discover") { discoverMapping() })
+            addView(button("Test Fetch") { runMode("test_direct") })
+            addView(button("Fast") { runMode("bulk_fast") })
+            addView(button("Cultures") { runMode("bulk_cultures_only") })
+            addView(button("Full") { runMode("bulk_full") })
+            addView(button("Helper") { togglePanel(helperPanel) })
+            addView(button("Log") { togglePanel(logPanel) })
+            addView(button("Copy") { copyOutput() })
+            addView(button("Clear Log") { output.text = ""; setState(AppState.NIMS_LOGIN, "Output cleared") })
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(250, 252, 255))
+            addView(header)
             addView(webView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-            addView(controls)
-            addView(ScrollView(this@MainActivity).apply { addView(output) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 260))
+            addView(HorizontalScrollView(this@MainActivity).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(actions)
+            })
+            addView(helperPanel)
+            addView(logPanel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 220))
         }
         setContentView(root)
         setState(if (settings.helperUrl().isBlank() || !settings.hasApiKey()) AppState.NEED_HELPER_SETTINGS else AppState.HELPER_READY, "Open NIMS and login manually.")
         webView.loadUrl(NIMS_LOGIN_URL)
+        webView.requestFocus()
     }
 
     private fun LinearLayout.addButton(label: String, onClick: () -> Unit) {
-        addView(Button(context).apply {
+        addView(button(label, onClick))
+    }
+
+    private fun button(label: String, onClick: () -> Unit): Button {
+        return Button(this).apply {
             text = label
+            textSize = 12f
+            minHeight = 42
+            minWidth = 0
+            isAllCaps = false
+            setPadding(16, 4, 16, 4)
             setOnClickListener { onClick() }
+        }
+    }
+
+    private fun LinearLayout.addButtonRow(vararg buttons: Button) {
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            buttons.forEach { addView(it) }
         })
+    }
+
+    private fun togglePanel(view: View) {
+        view.visibility = if (view.visibility == View.VISIBLE) View.GONE else View.VISIBLE
     }
 
     private fun saveHelperSettings() {

@@ -35,3 +35,36 @@ def test_android_rendering_uses_optional_json_objects() -> None:
     ).read_text(encoding="utf-8")
     assert ".getJSONObject(" not in source
     assert ".optJSONObject(" in source
+
+
+def test_android_webview_login_surface_is_optimized() -> None:
+    source = (
+        ANDROID_APP
+        / "src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt"
+    ).read_text(encoding="utf-8")
+    manifest = (ANDROID_APP / "src/main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    assert 'android:windowSoftInputMode="adjustResize"' in manifest
+    assert "settings.useWideViewPort = true" in source
+    assert "settings.loadWithOverviewMode = true" in source
+    assert "settings.builtInZoomControls = true" in source
+    assert "settings.displayZoomControls = false" in source
+    assert "setAcceptThirdPartyCookies(this, true)" in source
+    assert "webView.requestFocus()" in source
+    assert "helperPanel" in source and "visibility = View.GONE" in source
+    assert "logPanel" in source and "visibility = View.GONE" in source
+
+
+def test_android_app_does_not_add_nims_credential_storage_or_login_automation() -> None:
+    source = (
+        ANDROID_APP
+        / "src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt"
+    ).read_text(encoding="utf-8").lower()
+    secure_settings = (
+        ANDROID_APP
+        / "src/main/java/org/kundakarlab/nimsfastsummarymobile/SecureSettings.kt"
+    ).read_text(encoding="utf-8").lower()
+    combined = source + "\n" + secure_settings
+    assert "nims_password" not in combined
+    assert "nims_user" not in combined
+    assert "captcha" not in combined
+    assert "autologin" not in combined
