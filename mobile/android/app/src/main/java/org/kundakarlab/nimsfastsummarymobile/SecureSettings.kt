@@ -14,6 +14,8 @@ class SecureSettings(context: Context) {
     private val prefs = context.getSharedPreferences("nims_mobile_settings", Context.MODE_PRIVATE)
 
     fun helperUrl(): String = prefs.getString("helper_url", "") ?: ""
+    fun lastSummaryJson(): String = prefs.getString("last_summary_json", "") ?: ""
+    fun physicianNote(): String = prefs.getString("physician_note", "") ?: ""
 
     fun saveHelperUrl(value: String) {
         prefs.edit().putString("helper_url", HelperSettingsValidator.normalizeUrl(value)).apply()
@@ -25,6 +27,18 @@ class SecureSettings(context: Context) {
 
     fun saveApiKey(value: String) {
         if (value.isNotBlank()) prefs.edit().putString("helper_key", encrypt(value)).apply()
+    }
+
+    fun saveLastSummaryJson(value: String) {
+        prefs.edit().putString("last_summary_json", value).apply()
+    }
+
+    fun savePhysicianNote(value: String) {
+        prefs.edit().putString("physician_note", value).apply()
+    }
+
+    fun clearResults() {
+        prefs.edit().remove("last_summary_json").remove("physician_note").apply()
     }
 
     fun clearApiKey() {

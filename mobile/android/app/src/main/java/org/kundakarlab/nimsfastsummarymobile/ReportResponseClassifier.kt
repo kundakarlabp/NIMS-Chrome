@@ -8,7 +8,8 @@ object ReportResponseClassifier {
         if (lowerType.contains("application/pdf") || bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) {
             return "pdf_report"
         }
-        val text = bytes.decodeToString().lowercase()
+        val prefixSize = minOf(bytes.size, 128 * 1024)
+        val text = bytes.decodeToString(endIndex = prefixSize).lowercase()
         if (text.contains("password") || text.contains("captcha") || text.contains("otp") || text.contains("session expired") || text.contains("login")) {
             return "html_login_or_session"
         }
