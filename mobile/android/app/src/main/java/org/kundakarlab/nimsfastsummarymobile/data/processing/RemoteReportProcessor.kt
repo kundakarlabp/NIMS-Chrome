@@ -1,6 +1,5 @@
 package org.kundakarlab.nimsfastsummarymobile.data.processing
 
-import java.util.Base64
 import org.json.JSONObject
 import org.kundakarlab.nimsfastsummarymobile.HelperApiClient
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
@@ -11,14 +10,7 @@ class RemoteReportProcessor(private val clientProvider: () -> HelperApiClient) :
     override val capabilities = setOf(ProcessingCapability.HTML, ProcessingCapability.PLAIN_TEXT, ProcessingCapability.PDF, ProcessingCapability.LABS, ProcessingCapability.CULTURES, ProcessingCapability.SUMMARY)
 
     override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> = try {
-        val payload = JSONObject()
-            .put("report_id", input.reportId)
-            .put("report_name", input.reportName)
-            .put("date_sent", input.dateSent)
-            .put("source_url", input.safeSource)
-            .put("content_type", input.contentType)
-            .put("content_base64", Base64.getEncoder().encodeToString(input.bytes))
-            .put("pdf_base64", Base64.getEncoder().encodeToString(input.bytes))
+        val payload = RemotePayloadBuilder.build(input)
         val response = clientProvider().parseReport(payload)
         val (report, warnings) = RemoteReportMapper.toParsedReport(response, input, name)
         ProcessingResult.Success(report, name, warnings)
@@ -39,6 +31,7 @@ fun Throwable.toRemoteFailure(): ProcessingResult.Failure {
         "429" in message -> ProcessingResult.Failure("Railway helper is temporarily rate limited. Retry shortly.", "REMOTE_RATE_LIMITED", true, this)
         "timed out" in message.lowercase() || this is java.net.SocketTimeoutException -> ProcessingResult.Failure("Remote processing is temporarily unavailable.", "REMOTE_TIMEOUT", true, this)
         message.contains("json", true) -> ProcessingResult.Failure("Remote helper returned an invalid response.", "REMOTE_INVALID_RESPONSE", true, this)
+        this is RemotePayloadTooLargeException -> ProcessingResult.Failure(message.ifBlank { RemotePayloadBuilder.TOO_LARGE_MESSAGE }, "REMOTE_PAYLOAD_TOO_LARGE", false, this)
         else -> ProcessingResult.Failure("Remote processing is temporarily unavailable.", "REMOTE_UNAVAILABLE", true, this)
     }
 }

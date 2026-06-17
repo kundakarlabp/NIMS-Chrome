@@ -30,6 +30,7 @@ data class ParsedLabValue(
     val unit: String?,
     val referenceLow: Double?,
     val referenceHigh: Double?,
+    val referenceRangeText: String? = null,
     val abnormality: Abnormality,
     val resultDate: String?,
     val confidence: ParseConfidence,
@@ -90,6 +91,7 @@ private fun ParsedLabValue.toJson(): JSONObject = JSONObject()
     .put("value", numericValue ?: textValue.orEmpty())
     .put("unit", unit.orEmpty())
     .put("date", resultDate.orEmpty())
+    .put("reference_range", referenceRangeText.orEmpty())
     .put("abnormality", abnormality.name.lowercase())
     .put("confidence", confidence.name.lowercase())
 

@@ -88,7 +88,7 @@ object LabTextParser {
             unit == null -> ParseConfidence.MEDIUM
             else -> ParseConfidence.HIGH
         }
-        return ParsedLabValue(def.canonicalCode, def.displayName, line.substring(labelMatch.range.first, labelMatch.range.last + 1).trim(' ', ':'), value, null, unit, null, null, Abnormality.UNKNOWN, date, confidence, comparator)
+        return ParsedLabValue(CanonicalLabCodes.normalize(def.canonicalCode), def.displayName, line.substring(labelMatch.range.first, labelMatch.range.last + 1).trim(' ', ':'), value, null, unit, null, null, null, Abnormality.UNKNOWN, date, confidence, comparator)
     }
 }
 

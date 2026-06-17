@@ -73,6 +73,10 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
 import org.kundakarlab.nimsfastsummarymobile.data.processing.RemoteReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
 import kotlinx.coroutines.withContext
+import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
+import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.launch
@@ -95,6 +99,7 @@ import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import kotlin.coroutines.coroutineContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -117,6 +122,7 @@ class MainActivity : ComponentActivity() {
     private var physicianNote by mutableStateOf("")
     private var processingMode by mutableStateOf(ProcessingMode.AUTO)
     private var activeProcessingJob: Job? = null
+    private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
         ProcessingRouter(
             local = LocalTextReportProcessor(),
@@ -136,7 +142,7 @@ class MainActivity : ComponentActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
         webViewUserAgent = webView.settings.userAgentString
-        val initial = deriveInitialState(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+        val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
         setState(initial.state, initial.message)
         setContent {
             NimsTheme {
@@ -172,6 +178,7 @@ class MainActivity : ComponentActivity() {
                     onFast = { runMode("bulk_fast") },
                     onCulturesOnly = { runMode("bulk_cultures_only") },
                     onFull = { runMode("bulk_full") },
+                    onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
                     onPhysicianNoteChange = { updatePhysicianNote(it) },
@@ -223,12 +230,21 @@ class MainActivity : ComponentActivity() {
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                webView.loadUrl(request.url.toString())
+                                if (NimsUrlPolicy.isAllowed(request.url)) {
+                                    val acceptedPopupUrl = request.url.buildUpon().clearQuery().fragment(null).build().toString()
+                                    webView.loadUrl(acceptedPopupUrl)
+                                } else {
+                                    log("Blocked popup navigation")
+                                }
+                                popupView.stopLoading()
+                                popupView.destroy()
                                 return true
                             }
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                if (url.isNotBlank() && url != "about:blank") webView.loadUrl(url)
+                                val uri = runCatching { android.net.Uri.parse(url) }.getOrNull()
+                                if (uri != null && NimsUrlPolicy.isAllowed(uri)) webView.loadUrl(uri.toString()) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
+                                popupView.destroy()
                             }
                         }
                     }
@@ -246,9 +262,13 @@ class MainActivity : ComponentActivity() {
 
     private fun saveHelperSettings() {
         runCatching {
-            settings.saveHelperUrl(helperUrlInput)
-            if (helperKeyInput.isBlank() && !settings.hasApiKey()) throw IllegalArgumentException("Set Railway helper API key first.")
-            settings.saveApiKey(helperKeyInput)
+            val helperUrlProvided = helperUrlInput.isNotBlank()
+            val helperKeyProvided = helperKeyInput.isNotBlank()
+            if (processingMode == ProcessingMode.REMOTE_ONLY || helperUrlProvided || helperKeyProvided) {
+                settings.saveHelperUrl(helperUrlInput)
+                if (helperKeyInput.isBlank() && !settings.hasApiKey()) throw IllegalArgumentException("Configure Railway helper URL and API key.")
+                settings.saveApiKey(helperKeyInput)
+            }
         }.onFailure {
             setState(AppState.ERROR, it.message ?: "Helper settings invalid")
             return
@@ -262,7 +282,8 @@ class MainActivity : ComponentActivity() {
         settings.clearHelperSettings()
         helperUrlInput = ""
         helperKeyInput = ""
-        setState(AppState.NEED_HELPER_SETTINGS, "Helper settings cleared.")
+        val initial = InitialStatePolicy.derive(processingMode, hasHelperUrl = false, hasApiKey = false)
+        setState(initial.state, initial.message)
     }
 
     private fun testHelper() {
@@ -283,7 +304,7 @@ class MainActivity : ComponentActivity() {
             if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             }
-            log("Diagnosis: ${safeJson(json)}")
+            log("Page diagnostics rows=$rows mappingReady=${rows > 0}")
         }
     }
 
@@ -372,9 +393,10 @@ class MainActivity : ComponentActivity() {
             setState(AppState.ERROR, "A report processing run is already active.")
             return
         }
-        activeProcessingJob = lifecycleScope.launch {
+        val job = lifecycleScope.launch {
             fetchParseSummarize(mode, prepared)
         }
+        activeProcessingJob = job
     }
 
     private suspend fun fetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
@@ -395,12 +417,7 @@ class MainActivity : ComponentActivity() {
                 }
                 listOf(result)
             } else {
-                val semaphore = Semaphore(2)
-                prepared.withIndex().map { indexed ->
-                    lifecycleScope.async(Dispatchers.IO) {
-                        semaphore.withPermit { fetchAndParseOne(indexed.value, indexed.index, prepared.size) }
-                    }
-                }.awaitAll()
+                processBulk(prepared).map { it.getOrElse { error -> errorParsedReport(JSONObject(), error.message ?: "Report failed") } }
             }
             val summaryMode = when (mode) {
                 "bulk_full" -> SummaryMode.FULL
@@ -421,13 +438,31 @@ class MainActivity : ComponentActivity() {
                 is ProcessingResult.Failure -> setState(AppState.ERROR, summaryResult.userMessage)
             }
         } catch (cancelled: CancellationException) {
-            setState(AppState.HELPER_READY, "Report processing cancelled.")
+            setState(AppState.HELPER_READY, "Processing stopped. Completed results were retained.")
             throw cancelled
         } catch (error: Exception) {
             setState(AppState.ERROR, error.message ?: "Report processing failed")
         } finally {
-            activeProcessingJob = null
+            if (activeProcessingJob == coroutineContext[Job]) activeProcessingJob = null
         }
+    }
+
+    private suspend fun processBulk(prepared: List<PreparedReportRequest>): List<Result<ParsedReport>> = coroutineScope {
+        val semaphore = Semaphore(2)
+        prepared.mapIndexed { index, request ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    ensureActive()
+                    try {
+                        Result.success(fetchAndParseOne(request, index, prepared.size))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        Result.failure(error)
+                    }
+                }
+            }
+        }.awaitAll()
     }
 
     private suspend fun fetchAndParseOne(request: PreparedReportRequest, index: Int, total: Int): ParsedReport {
@@ -446,7 +481,7 @@ class MainActivity : ComponentActivity() {
             reportType = row.optString("report_type", "other"),
             contentType = contentType(response.contentType),
             bytes = response.bytes,
-            safeSource = SafeUrl.hostPath(url)
+            safeSource = NimsUrlPolicy.safeSourceForHelper(url)
         )
         log("Parsing report ${index + 1}/$total")
         return when (val parsed = processingRouter.parse(input)) {
@@ -480,24 +515,28 @@ class MainActivity : ComponentActivity() {
             setRequestProperty("User-Agent", webViewUserAgent)
             setRequestProperty("Accept", "application/pdf,text/html,text/plain,*/*")
         }
-        val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
-        val bytes = stream?.use { input ->
-            val out = java.io.ByteArrayOutputStream()
-            val buffer = ByteArray(8192)
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                total += read
-                if (total > MAX_REPORT_BYTES) throw IllegalStateException("Report response exceeded 25 MB")
-                out.write(buffer, 0, read)
+        try {
+            val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
+            val bytes = stream?.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_FETCHED_REPORT_BYTES) throw IllegalStateException("Report response exceeded 25 MB")
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            } ?: ByteArray(0)
+            if (connection.responseCode >= 400) {
+                throw IllegalStateException("NIMS report fetch returned ${connection.responseCode} (${contentType(connection.contentType.orEmpty())})")
             }
-            out.toByteArray()
-        } ?: ByteArray(0)
-        if (connection.responseCode >= 400) {
-            throw IllegalStateException("NIMS report fetch returned ${connection.responseCode} (${contentType(connection.contentType.orEmpty())})")
+            return ReportFetchResult(connection.contentType.orEmpty(), connection.responseCode, SafeUrl.hostPath(connection.url.toString()), bytes)
+        } finally {
+            connection.disconnect()
         }
-        return ReportFetchResult(connection.contentType.orEmpty(), connection.responseCode, SafeUrl.hostPath(connection.url.toString()), bytes)
     }
 
     private fun contentType(value: String): String = value.substringBefore(";").ifBlank { "application/octet-stream" }
@@ -578,7 +617,8 @@ class MainActivity : ComponentActivity() {
     private fun updateProcessingMode(value: ProcessingMode) {
         processingMode = value
         settings.saveProcessingMode(value)
-        setState(appStateValue, "Processing mode: ${value.name.lowercase().replace('_', ' ')}")
+        val initial = InitialStatePolicy.derive(value, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+        setState(initial.state, initial.message)
     }
 
     private fun cleanSummaryText(): String {
@@ -618,7 +658,7 @@ class MainActivity : ComponentActivity() {
 
     private fun log(message: String) {
         runOnUiThread {
-            logText = (logText + "\n" + message).trim().takeLast(8000)
+            logText = safeLogBuffer.add(message)
         }
     }
 
@@ -626,23 +666,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             appStateValue = state
             statusMessage = message
-            logText = (logText + "\n${state.name}: $message").trim().takeLast(8000)
-        }
-    }
-
-    data class InitialAppState(val state: AppState, val message: String)
-
-    private fun deriveInitialState(processingMode: ProcessingMode, hasHelperUrl: Boolean, hasApiKey: Boolean): InitialAppState = when (processingMode) {
-        ProcessingMode.LOCAL_ONLY -> InitialAppState(AppState.HELPER_READY, "On-device processing ready. Login to NIMS manually.")
-        ProcessingMode.AUTO -> if (hasHelperUrl && hasApiKey) {
-            InitialAppState(AppState.HELPER_READY, "Automatic mode ready. Login to NIMS manually.")
-        } else {
-            InitialAppState(AppState.HELPER_READY, "On-device processing available. Configure Railway for PDF and unsupported reports.")
-        }
-        ProcessingMode.REMOTE_ONLY -> if (hasHelperUrl && hasApiKey) {
-            InitialAppState(AppState.HELPER_READY, "Railway helper ready. Login to NIMS manually.")
-        } else {
-            InitialAppState(AppState.NEED_HELPER_SETTINGS, "Add Railway helper URL and API key.")
+            logText = safeLogBuffer.add("${state.name}: $message")
         }
     }
 
@@ -651,20 +675,23 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (::webView.isInitialized) {
-            webView.stopLoading()
-            webView.loadUrl("about:blank")
-            webView.webChromeClient = null
-            webView.webViewClient = WebViewClient()
-            webView.removeAllViews()
-            webView.destroy()
+        activeProcessingJob?.cancel()
+        runCatching {
+            if (::webView.isInitialized) {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.webChromeClient = null
+                webView.webViewClient = WebViewClient()
+                webView.removeAllViews()
+                webView.destroy()
+            }
         }
         super.onDestroy()
     }
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
-        private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
+        private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
     }
 }
 
@@ -714,6 +741,7 @@ private fun NimsFastSummaryApp(
     onFast: () -> Unit,
     onCulturesOnly: () -> Unit,
     onFull: () -> Unit,
+    onCancelProcessing: () -> Unit,
     summary: UiSummary?,
     physicianNote: String,
     onPhysicianNoteChange: (String) -> Unit,
@@ -760,6 +788,7 @@ private fun NimsFastSummaryApp(
                 onFast = onFast,
                 onCulturesOnly = onCulturesOnly,
                 onFull = onFull,
+                onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
             1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
@@ -831,6 +860,7 @@ private fun NimsWebViewScreen(
     onFast: () -> Unit,
     onCulturesOnly: () -> Unit,
     onFull: () -> Unit,
+    onCancelProcessing: () -> Unit,
     logText: String
 ) {
     Column(modifier) {
@@ -848,6 +878,7 @@ private fun NimsWebViewScreen(
             item { Button(onClick = onFast) { Text("Fast") } }
             item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
             item { Button(onClick = onFull) { Text("Full") } }
+            if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
         if (logText.isNotBlank()) {
@@ -1046,7 +1077,7 @@ private fun StatusCard(state: AppState) {
         Text("Next action", fontWeight = FontWeight.Bold)
         Text(
             when (state) {
-                AppState.NEED_HELPER_SETTINGS -> "Add Railway helper URL and API key."
+                AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
                 AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."

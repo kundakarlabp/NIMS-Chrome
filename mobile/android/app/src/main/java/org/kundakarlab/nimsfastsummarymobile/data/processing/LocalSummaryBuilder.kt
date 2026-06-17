@@ -8,7 +8,11 @@ class LocalSummaryBuilder {
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
         val lines = mutableListOf("Auto-parsed summary. Verify with source NIMS reports before clinical decisions.")
-        val sortedReports = reports.withIndex().sortedWith(compareBy({ DateNormalizer.normalize(it.value.dateSent).sortEpoch ?: Long.MAX_VALUE }, { it.index })).map { it.value }
+        val sortedReports = reports.withIndex().sortedWith(compareBy<IndexedValue<ParsedReport>>(
+            { DateNormalizer.normalize(it.value.dateSent).sortEpoch == null },
+            { DateNormalizer.normalize(it.value.dateSent).sortEpoch ?: 0L },
+            { it.index }
+        )).map { it.value }
         if (reports.any { it.dateSent.isNotBlank() && DateNormalizer.normalize(it.dateSent).sortEpoch == null }) warnings += "Some report dates could not be normalized; trend ordering may be uncertain."
         when (mode) {
             SummaryMode.FAST -> addLabTrends(lines, sortedReports, keyOnly = true, warnings = warnings).also { addCultures(lines, sortedReports, concise = true) }
@@ -27,16 +31,23 @@ class LocalSummaryBuilder {
 
     private fun addLabTrends(lines: MutableList<String>, reports: List<ParsedReport>, keyOnly: Boolean, warnings: MutableList<String>) {
         val keyCodes = setOf("HB", "WBC", "PLT", "CREAT", "NA", "K", "TBIL", "CRP", "PCT", "INR")
-        reports.flatMap { report -> report.labs.filter { it.confidence != ParseConfidence.LOW && (!keyOnly || it.canonicalCode in keyCodes) }.map { report to it } }
-            .groupBy { it.second.canonicalCode }.values.forEach { rows ->
-                val ordered = rows.sortedWith(compareBy({ DateNormalizer.normalize(it.first.dateSent).sortEpoch ?: Long.MAX_VALUE }))
-                val latest = ordered.lastOrNull()?.second ?: return@forEach
-                val previous = ordered.dropLast(1).lastOrNull()?.second
+        reports.flatMap { report -> report.labs.filter { it.confidence != ParseConfidence.LOW && (!keyOnly || CanonicalLabCodes.normalize(it.canonicalCode) in keyCodes) }.map { report to it } }
+            .groupBy { CanonicalLabCodes.normalize(it.second.canonicalCode) }.values.forEach { rows ->
+                val datedRows = rows.mapNotNull { row -> DateNormalizer.normalize(row.first.dateSent).sortEpoch?.let { Triple(it, row.first, row.second) } }.sortedBy { it.first }
+                val undatedRows = rows.filter { DateNormalizer.normalize(it.first.dateSent).sortEpoch == null }
+                if (datedRows.isEmpty()) {
+                    rows.lastOrNull()?.second?.let { lines += "Recorded ${it.displayName} value: ${it.valueText()}; report date unavailable." }
+                    if (undatedRows.isNotEmpty()) warnings += "Undated ${rows.first().second.displayName} value(s) were not used for trend calculation."
+                    return@forEach
+                }
+                val latest = datedRows.last().third
+                val previous = datedRows.dropLast(1).lastOrNull()?.third
                 val latestValue = latest.valueText()
                 if (previous?.numericValue != null && latest.numericValue != null) {
                     val direction = when { latest.numericValue > previous.numericValue -> "increased"; latest.numericValue < previous.numericValue -> "decreased"; else -> "was unchanged" }
                     lines += "${latest.displayName} $direction from ${previous.valueText()} to $latestValue."
                 } else if (latestValue.isNotBlank()) lines += "Latest ${latest.displayName}: $latestValue."
+                if (undatedRows.isNotEmpty()) warnings += "Additional undated ${latest.displayName} value(s) were not used for trend calculation."
             }
     }
 
@@ -51,7 +62,7 @@ class LocalSummaryBuilder {
         if (noGrowth.isNotEmpty()) lines += "No-growth cultures: ${noGrowth.mapNotNull { it.specimen }.ifEmpty { listOf(noGrowth.size.toString()) }.joinToString(", ")}."
     }
 
-    private fun dateRange(reports: List<ParsedReport>): String? = reports.map { it.dateSent }.filter { it.isNotBlank() }.let { dates -> if (dates.isEmpty()) null else "${dates.first()} to ${dates.last()}" }
+    private fun dateRange(reports: List<ParsedReport>): String? = reports.mapNotNull { report -> DateNormalizer.normalize(report.dateSent).sortEpoch?.let { it to report.dateSent } }.sortedBy { it.first }.map { it.second }.let { dates -> if (dates.isEmpty()) null else "${dates.first()} to ${dates.last()}" }
     private fun ParsedLabValue.valueText(): String = ((if (comparator == NumericComparator.LESS_THAN) "<" else if (comparator == NumericComparator.GREATER_THAN) ">" else "") + (numericValue?.toString() ?: textValue.orEmpty()) + " " + unit.orEmpty()).trim()
 
     private fun toSummaryJson(reports: List<ParsedReport>, lines: List<String>, warnings: List<String>): JSONObject = JSONObject()

@@ -26,11 +26,11 @@ Local parsing is intentionally conservative. It supports text/plain and report-l
 
 ## Railway fallback
 
-PDF processing remains Railway-backed in AUTO mode. This PR does not claim full offline/local PDF support. Railway remains optional by mode but is not removed.
+PDF processing remains Railway-backed in AUTO mode. This PR does not claim full offline/local PDF support. Railway remains optional by mode but is not removed. Android rejects remote uploads larger than approximately 18 MB before Base64 encoding; 18 MB of binary report data expands to roughly 24 MB Base64 plus JSON overhead, keeping requests below the 25 MB Railway helper body limit.
 
 ## Privacy behavior
 
-NIMS credentials are not stored. NIMS cookies remain on-device and are used only for direct NIMS report fetches. Cookies are not uploaded to Railway. Raw HTML, raw PDF bytes, and raw report text are not persisted. Railway receives report content only when remote processing is used.
+NIMS credentials are not stored. NIMS cookies remain on-device and are used only for direct NIMS report fetches. Cookies are not uploaded to Railway. Raw HTML, raw PDF bytes, and raw report text are not persisted. Railway receives report content only when remote processing is used. The helper source metadata is sanitized to an approved NIMS HTTPS host/path without query strings, fragments, transient filenames, cookies, or hidden session values.
 
 ## Limitations
 
@@ -66,7 +66,7 @@ Auto-parsed summary. Verify with source NIMS reports before clinical decisions.
 
 The production Android processing path now routes fetched report bytes through `ProcessingRouter` instead of calling helper parse/summarize directly from `MainActivity`. `LOCAL_ONLY` does not require Railway helper settings and never calls Railway. `AUTO` uses local parsing for supported text/HTML, Railway for PDFs, and blocks login/session/captcha/OTP pages from remote fallback. `REMOTE_ONLY` preserves Railway behavior and maps helper JSON back into domain summaries.
 
-Parser safety was tightened: culture results are parsed per block, resistance acronyms use explicit word boundaries, lab label extraction is case-insensitive and position-based, comparator values such as `<0.5` and `>100` are retained, and summaries sort normalized dates chronologically. Bulk processing is coroutine-based with concurrency capped at two and an active job can be cancelled.
+Parser safety was tightened: culture results are parsed per block, resistance acronyms use explicit word boundaries, lab label extraction is case-insensitive and position-based, comparator values such as `<0.5` and `>100` are retained, and summaries sort normalized dates chronologically. Bulk processing is coroutine-based with structured child tasks, concurrency capped at two, and an active job can be cancelled. Popup WebView navigation is restricted to approved NIMS HTTPS hosts and paths; rejected popup URLs are not forwarded to the main WebView.
 
 Remaining roadmap:
 

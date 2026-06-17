@@ -50,3 +50,7 @@ No NIMS username or password storage was added. NIMS cookies remain on-device an
 ### Android processing-router security
 
 The Android processing router blocks login, session-expired, captcha and OTP pages from Railway fallback. NIMS cookies are attached only to direct NIMS HTTPS fetches and are not included in helper payloads. Remote payloads include sanitized source host/path metadata only.
+
+### Android remote upload and popup limits
+
+Android remote processing encodes report bytes once under the Railway-compatible `pdf_base64` field and checks the binary report size before Base64 allocation. Reports larger than approximately 18 MB are rejected client-side to stay below a 25 MB Railway request-body limit after Base64 and JSON overhead. Source URLs sent to the helper are sanitized to approved NIMS HTTPS host/path only and exclude query strings, fragments, transient filenames, cookies, tokens, and credentials. Popup navigation is restricted to approved NIMS HTTPS hosts and paths, and temporary popup WebViews are destroyed after accepted or rejected navigation.
