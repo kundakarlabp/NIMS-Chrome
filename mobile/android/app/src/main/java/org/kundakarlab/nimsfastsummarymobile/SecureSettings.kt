@@ -62,9 +62,6 @@ class SecureSettings(context: Context) {
         prefs.edit().remove("helper_key").apply()
     }
 
-    fun clear() {
-        prefs.edit().clear().apply()
-    }
 
     private fun encrypt(value: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

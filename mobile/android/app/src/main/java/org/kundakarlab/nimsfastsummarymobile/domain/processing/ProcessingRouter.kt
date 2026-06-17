@@ -16,8 +16,15 @@ class ProcessingRouter(
     suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = when (modeProvider()) {
         ProcessingMode.LOCAL_ONLY -> local.summarize(reports, mode)
         ProcessingMode.REMOTE_ONLY -> remote.summarize(reports, mode)
-        ProcessingMode.AUTO -> local.summarize(reports, mode).let { result ->
-            if (result is ProcessingResult.Unsupported || result is ProcessingResult.Failure) remote.summarize(reports, mode) else result
+        ProcessingMode.AUTO -> {
+            val localResult = local.summarize(reports, mode)
+            when (localResult) {
+                is ProcessingResult.Success -> localResult
+                is ProcessingResult.Unsupported -> remote.summarize(reports, mode).withFallbackWarning("On-device summary unsupported; Railway fallback used.")
+                is ProcessingResult.Failure -> if (localResult.isRemoteFallbackAllowed) {
+                    remote.summarize(reports, mode).withFallbackWarning("On-device summary was incomplete; Railway fallback used.")
+                } else localResult
+            }
         }
     }
 
@@ -30,14 +37,10 @@ class ProcessingRouter(
         if (input.contentType.contains("pdf", true)) return remote.parseReport(input)
         return when (val localResult = local.parseReport(input)) {
             is ProcessingResult.Success -> localResult
-            is ProcessingResult.Unsupported -> addFallbackWarning(remote.parseReport(input), "On-device parser unsupported; Railway fallback used.")
-            is ProcessingResult.Failure -> addFallbackWarning(remote.parseReport(input), "On-device parser failed safely; Railway fallback used.")
+            is ProcessingResult.Unsupported -> remote.parseReport(input).withFallbackWarning("On-device parser unsupported; Railway fallback used.")
+            is ProcessingResult.Failure -> if (localResult.isRemoteFallbackAllowed) {
+                remote.parseReport(input).withFallbackWarning("On-device parsing was incomplete; Railway fallback used.")
+            } else localResult
         }
     }
-
-    private fun addFallbackWarning(result: ProcessingResult<ParsedReport>, warning: String): ProcessingResult<ParsedReport> =
-        when (result) {
-            is ProcessingResult.Success -> result.copy(warnings = result.warnings + warning)
-            else -> result
-        }
 }

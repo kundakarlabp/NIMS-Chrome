@@ -195,3 +195,7 @@ See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, cr
 ## Android local-first processing
 
 The Android app now has a local-first processing foundation with Automatic, On-device only, and Railway only modes. HTML/text reports can be processed on-device where supported. PDF processing remains Railway-backed in Automatic mode; this is not full offline/local PDF support. NIMS login remains manual, NIMS credentials are not stored, NIMS cookies remain on-device, and cookies are not uploaded to Railway. Railway receives report content only when remote processing is used. Always verify generated summaries with source NIMS reports before clinical decisions.
+
+### Android PR #20 local-first corrections
+
+Processing mode now controls the real Android report path: `LOCAL_ONLY` avoids Railway entirely, `AUTO` uses on-device parsing for supported text/HTML and Railway for PDFs or unsupported reports, and `REMOTE_ONLY` keeps the Railway helper path. Login/session/captcha pages are not sent to Railway. PDF/OCR local support is still not claimed.

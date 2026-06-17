@@ -24,6 +24,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - run: ./gradlew clean
+        working-directory: mobile/android
       - run: ./gradlew test
         working-directory: mobile/android
       - run: ./gradlew assembleDebug

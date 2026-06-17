@@ -608,14 +608,14 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "mappingValidated = false" in main_activity
     assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
     assert "Run Test One Report successfully before bulk summary." in main_activity
-    assert "ReportFetchQueue(concurrency = 3)" in main_activity
-    assert "concurrency.coerceIn(1, 5)" in queue
+    assert "Semaphore(2)" in main_activity
+    assert "ReportFetchQueue(concurrency = 3)" not in main_activity
     assert "private var webViewUserAgent = \"\"" in main_activity
     assert "webViewUserAgent = webView.settings.userAgentString" in main_activity
     assert 'setRequestProperty("User-Agent", webViewUserAgent)' in main_activity
     assert "setRequestProperty(\"User-Agent\", webView.settings.userAgentString)" not in main_activity
     assert "Set Railway helper URL first." in validator
-    assert "Set Railway helper API key first." in main_activity
+    assert "Configure Railway helper for PDF and unsupported reports." in main_activity
     assert "responseCode >= 400" in main_activity
     assert "errorStream" in main_activity
     assert "ByteArrayOutputStream" in main_activity

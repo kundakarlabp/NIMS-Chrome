@@ -41,10 +41,10 @@ NIMS credentials are not stored. NIMS cookies remain on-device and are used only
 
 ## Migration roadmap
 
-1. Move remaining Activity-owned processing state into a ViewModel.
-2. Route all parse/summarize calls through `ProcessingRouter`.
-3. Add cancellation-aware coroutine bulk processing with concurrency capped at two.
-4. Add validated local PDF support only after memory and parser-parity tests.
+- validated local PDF extraction;
+- parser parity tests with de-identified NIMS PDFs;
+- optional encrypted structured database;
+- removal of Railway only after local parity is proven.
 
 ## Test commands
 
@@ -61,3 +61,16 @@ cd mobile/android
 ## Verification disclaimer
 
 Auto-parsed summary. Verify with source NIMS reports before clinical decisions.
+
+## PR #20 corrections
+
+The production Android processing path now routes fetched report bytes through `ProcessingRouter` instead of calling helper parse/summarize directly from `MainActivity`. `LOCAL_ONLY` does not require Railway helper settings and never calls Railway. `AUTO` uses local parsing for supported text/HTML, Railway for PDFs, and blocks login/session/captcha/OTP pages from remote fallback. `REMOTE_ONLY` preserves Railway behavior and maps helper JSON back into domain summaries.
+
+Parser safety was tightened: culture results are parsed per block, resistance acronyms use explicit word boundaries, lab label extraction is case-insensitive and position-based, comparator values such as `<0.5` and `>100` are retained, and summaries sort normalized dates chronologically. Bulk processing is coroutine-based with concurrency capped at two and an active job can be cancelled.
+
+Remaining roadmap:
+
+- validated local PDF extraction;
+- parser parity tests with de-identified NIMS PDFs;
+- optional encrypted structured database;
+- removal of Railway only after parity.

@@ -7,42 +7,36 @@ import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import kotlin.coroutines.*
 
 class LocalTextReportProcessorTest {
-    @Test fun parsesCbcText() {
-        val result = runSuspend { LocalTextReportProcessor().parseReport(input("Hemoglobin 10.2 g/dL\nPlatelet Count 150000 /cumm")) }
-        assertTrue(result is ProcessingResult.Success)
-        val report = (result as ProcessingResult.Success).value
-        assertTrue(report.labs.any { it.canonicalCode == "HB" && it.numericValue == 10.2 })
-        assertTrue(report.labs.any { it.canonicalCode == "PLT" })
+    @Test fun parsesUppercaseLowercaseAndComparatorLabs() {
+        val text = "HEMOGLOBIN : 10.2 g/dL\nhemoglobin 10.1 g/dL\nHb: 10.2 gm%\nPlatelet Count 150,000 /cumm\nCRP <0.5 mg/L\nPCT >100 ng/mL"
+        val result = success(text)
+        assertTrue(result.labs.any { it.canonicalCode == "HB" && it.confidence == ParseConfidence.HIGH })
+        assertTrue(result.labs.any { it.canonicalCode == "PLT" && it.numericValue == 150000.0 })
+        assertTrue(result.labs.toString(), result.labs.any { it.canonicalCode == "CRP" && it.comparator == NumericComparator.LESS_THAN })
+        assertTrue(result.labs.any { it.canonicalCode == "PCT" && it.comparator == NumericComparator.GREATER_THAN })
     }
-
-    @Test fun rejectsPdfForLocalOnlyParser() {
-        val result = runSuspend { LocalTextReportProcessor().parseReport(input("%PDF", "application/pdf")) }
-        assertTrue(result is ProcessingResult.Unsupported)
+    @Test fun dateBeforeValueIsLowAndExcluded() {
+        val result = runSuspend { LocalTextReportProcessor().parseReport(input("01-01-2026 Creatinine 1.2 mg/dL")) }
+        assertTrue((result as ProcessingResult.Success).value.labs.any { it.canonicalCode == "CREAT" && it.confidence == ParseConfidence.LOW })
     }
-
-    @Test fun detectsLoginHtml() {
-        val result = runSuspend { LocalTextReportProcessor().parseReport(input("<html>login password captcha</html>", "text/html")) }
-        assertTrue(result is ProcessingResult.Failure)
+    @Test fun detectsLoginCaptchaAndPdf() {
+        assertTrue(runSuspend { LocalTextReportProcessor().parseReport(input("<html>login password</html>", "text/html")) } is ProcessingResult.Failure)
+        assertTrue(runSuspend { LocalTextReportProcessor().parseReport(input("captcha required", "text/html")) } is ProcessingResult.Failure)
+        assertTrue(runSuspend { LocalTextReportProcessor().parseReport(input("%PDF", "application/pdf")) } is ProcessingResult.Unsupported)
     }
-
-    @Test fun parsesPositiveCultureWithSusceptibility() {
-        val text = "Blood culture\nSpecimen: Blood\nOrganism: Escherichia coli\nMeropenem Resistant\nESBL"
-        val result = runSuspend { LocalTextReportProcessor().parseReport(input(text)) }
-        assertTrue(result is ProcessingResult.Success)
-        val culture = (result as ProcessingResult.Success).value.cultures.first()
-        assertEquals(GrowthStatus.GROWTH_DETECTED, culture.growthStatus)
-        assertTrue("ESBL" in culture.explicitResistanceMarkers)
-        assertTrue(culture.susceptibility.any { it.interpretation.equals("Resistant", true) })
+    @Test fun cultureMarkersUseWordBoundaries() {
+        assertFalse(CultureTextParser.parse("Creatinine 1.2 mg/dL increased growth", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("CRE"))
+        assertTrue(CultureTextParser.parse("Blood Culture\nOrganism: Klebsiella pneumoniae\nCRE isolated", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("CRE"))
+        assertTrue(CultureTextParser.parse("Carbapenem-resistant Klebsiella pneumoniae", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("Carbapenem resistant"))
+        assertTrue(CultureTextParser.parse("CRAB MRSA VRE", "2026-01-01").flatMap { it.explicitResistanceMarkers }.containsAll(listOf("CRAB", "MRSA", "VRE")))
     }
-
+    @Test fun cultureBlocksKeepPositiveAndNoGrowthSeparate() {
+        val result = CultureTextParser.parse("Blood Culture\nOrganism: Escherichia coli\nMeropenem Resistant\n\nUrine Culture\nSpecimen: Urine\nNo growth", "2026-01-01")
+        assertTrue(result.any { it.growthStatus == GrowthStatus.GROWTH_DETECTED && it.organism?.contains("coli", true) == true })
+        assertTrue(result.any { it.growthStatus == GrowthStatus.NO_GROWTH && it.specimen?.contains("Urine", true) == true })
+    }
+    private fun success(text: String): ParsedReport = (runSuspend { LocalTextReportProcessor().parseReport(input(text)) } as ProcessingResult.Success).value
     private fun input(text: String, type: String = "text/plain") = ReportInput("r1", "Test", "2026-01-01", "lab", type, text.toByteArray())
 }
 
-private fun <T> runSuspend(block: suspend () -> T): T {
-    var value: Result<T>? = null
-    block.startCoroutine(object : Continuation<T> {
-        override val context: CoroutineContext = EmptyCoroutineContext
-        override fun resumeWith(result: Result<T>) { value = result }
-    })
-    return value!!.getOrThrow()
-}
+private fun <T> runSuspend(block: suspend () -> T): T { var value: Result<T>? = null; block.startCoroutine(object : Continuation<T> { override val context = EmptyCoroutineContext; override fun resumeWith(result: Result<T>) { value = result } }); return value!!.getOrThrow() }

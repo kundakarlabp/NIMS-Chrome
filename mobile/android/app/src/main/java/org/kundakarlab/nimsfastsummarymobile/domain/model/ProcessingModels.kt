@@ -9,6 +9,7 @@ enum class SummaryMode { FAST, CULTURES_ONLY, FULL }
 enum class ParseConfidence { HIGH, MEDIUM, LOW }
 enum class Abnormality { NORMAL, HIGH, LOW, CRITICAL, UNKNOWN }
 enum class GrowthStatus { NO_GROWTH, GROWTH_DETECTED, PENDING, UNKNOWN }
+enum class NumericComparator { LESS_THAN, GREATER_THAN, EQUAL }
 
 data class ReportInput(
     val reportId: String,
@@ -31,7 +32,8 @@ data class ParsedLabValue(
     val referenceHigh: Double?,
     val abnormality: Abnormality,
     val resultDate: String?,
-    val confidence: ParseConfidence
+    val confidence: ParseConfidence,
+    val comparator: NumericComparator = NumericComparator.EQUAL
 )
 
 data class AntibioticResult(
@@ -77,7 +79,8 @@ data class ParsedReport(
 data class ProcessingSummary(
     val text: String,
     val reportsProcessed: Int,
-    val warnings: List<String> = emptyList()
+    val warnings: List<String> = emptyList(),
+    val helperJson: JSONObject? = null
 )
 
 private fun ParsedLabValue.toJson(): JSONObject = JSONObject()

@@ -46,3 +46,7 @@ To clear local parsed cache, use the extension `Clear cache` button or delete `h
 ## Android local-first privacy notes
 
 No NIMS username or password storage was added. NIMS cookies remain on-device and are not uploaded to Railway. Raw HTML, PDF bytes, and decoded report text must not be persisted. HTML/text reports may be processed locally; PDF reports remain Railway-backed in Automatic mode. Railway receives report content only when remote processing is selected or required by fallback.
+
+### Android processing-router security
+
+The Android processing router blocks login, session-expired, captcha and OTP pages from Railway fallback. NIMS cookies are attached only to direct NIMS HTTPS fetches and are not included in helper payloads. Remote payloads include sanitized source host/path metadata only.
