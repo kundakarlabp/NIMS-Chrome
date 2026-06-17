@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r helper/requirements-dev.txt
-      - run: pytest -q
+      - run: python -m pytest -q
       - run: python -m py_compile helper/main.py helper/models.py helper/cache.py
 
   android:
@@ -27,6 +27,8 @@ jobs:
       - run: ./gradlew test
         working-directory: mobile/android
       - run: ./gradlew assembleDebug
+        working-directory: mobile/android
+      - run: ./gradlew lintDebug
         working-directory: mobile/android
 
   docker:

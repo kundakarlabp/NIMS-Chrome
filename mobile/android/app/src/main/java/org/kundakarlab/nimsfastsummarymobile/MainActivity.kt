@@ -69,6 +69,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.kundakarlab.nimsfastsummarymobile.ui.formatters.ClinicalSummaryFormatter
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.SummaryJsonMapper
+import org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode
 import org.kundakarlab.nimsfastsummarymobile.ui.models.Abnormality
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiCultureRow
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiLabTrendRow
@@ -97,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private var uiSummary by mutableStateOf<UiSummary?>(null)
     private var sanitizedSummaryText by mutableStateOf("")
     private var physicianNote by mutableStateOf("")
+    private var processingMode by mutableStateOf(ProcessingMode.AUTO)
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +106,7 @@ class MainActivity : ComponentActivity() {
         settings = SecureSettings(this)
         helperUrlInput = settings.helperUrl()
         physicianNote = settings.physicianNote()
+        processingMode = settings.processingMode()
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
@@ -132,6 +135,8 @@ class MainActivity : ComponentActivity() {
                     onSaveHelper = { saveHelperSettings() },
                     onTestHelper = { testHelper() },
                     onClearHelper = { clearHelperSettings() },
+                    processingMode = processingMode,
+                    onProcessingModeChange = { updateProcessingMode(it) },
                     onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
                     onBack = { if (webView.canGoBack()) webView.goBack() },
                     onForward = { if (webView.canGoForward()) webView.goForward() },
@@ -231,12 +236,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun clearHelperSettings() {
-        settings.clear()
+        settings.clearHelperSettings()
         helperUrlInput = ""
         helperKeyInput = ""
-        uiSummary = null
-        sanitizedSummaryText = ""
-        physicianNote = ""
         setState(AppState.NEED_HELPER_SETTINGS, "Helper settings cleared.")
     }
 
@@ -520,6 +522,12 @@ class MainActivity : ComponentActivity() {
         uiSummary = uiSummary?.copy(editableNote = value)
     }
 
+    private fun updateProcessingMode(value: ProcessingMode) {
+        processingMode = value
+        settings.saveProcessingMode(value)
+        setState(appStateValue, "Processing mode: ${value.name.lowercase().replace('_', ' ')}")
+    }
+
     private fun cleanSummaryText(): String {
         return ClinicalSummaryFormatter.cleanText((uiSummary ?: UiSummary()).copy(editableNote = physicianNote))
     }
@@ -569,6 +577,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.webChromeClient = null
+            webView.webViewClient = WebViewClient()
+            webView.removeAllViews()
+            webView.destroy()
+        }
+        super.onDestroy()
+    }
+
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
@@ -599,6 +619,8 @@ private fun NimsFastSummaryApp(
     onTabSelected: (Int) -> Unit,
     helperUrl: String,
     helperKey: String,
+    processingMode: ProcessingMode,
+    onProcessingModeChange: (ProcessingMode) -> Unit,
     onHelperUrlChange: (String) -> Unit,
     onHelperKeyChange: (String) -> Unit,
     showSettings: Boolean,
@@ -686,6 +708,8 @@ private fun NimsFastSummaryApp(
         SettingsDialog(
             helperUrl = helperUrl,
             helperKey = helperKey,
+            processingMode = processingMode,
+            onProcessingModeChange = onProcessingModeChange,
             onHelperUrlChange = onHelperUrlChange,
             onHelperKeyChange = onHelperKeyChange,
             onSave = onSaveHelper,
@@ -896,6 +920,8 @@ private fun SummaryScreen(
 private fun SettingsDialog(
     helperUrl: String,
     helperKey: String,
+    processingMode: ProcessingMode,
+    onProcessingModeChange: (ProcessingMode) -> Unit,
     onHelperUrlChange: (String) -> Unit,
     onHelperKeyChange: (String) -> Unit,
     onSave: () -> Unit,
@@ -912,11 +938,30 @@ private fun SettingsDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Railway helper URL") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
+                Text("Processing mode", fontWeight = FontWeight.Bold)
+                ProcessingMode.values().forEach { mode ->
+                    OutlinedButton(onClick = { onProcessingModeChange(mode) }) {
+                        Text(
+                            (if (mode == processingMode) "✓ " else "") + when (mode) {
+                                ProcessingMode.AUTO -> "Automatic"
+                                ProcessingMode.LOCAL_ONLY -> "On-device only"
+                                ProcessingMode.REMOTE_ONLY -> "Railway only"
+                            }
+                        )
+                    }
+                }
+                Text(
+                    when (processingMode) {
+                        ProcessingMode.AUTO -> "Processes supported text reports on-device and uses Railway for unsupported formats."
+                        ProcessingMode.LOCAL_ONLY -> "Report content stays on this device. PDF reports may not yet be supported."
+                        ProcessingMode.REMOTE_ONLY -> "Uses the configured Railway helper for parsing and summaries."
+                    }
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onTest) { Text("Test helper") }
-                    OutlinedButton(onClick = onClear) { Text("Clear") }
+                    OutlinedButton(onClick = onClear) { Text("Clear helper") }
                 }
-                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content for parsing only.")
+                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content only when remote processing is used.")
             }
         }
     )

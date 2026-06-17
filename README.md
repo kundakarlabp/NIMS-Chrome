@@ -192,3 +192,6 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
 
+## Android local-first processing
+
+The Android app now has a local-first processing foundation with Automatic, On-device only, and Railway only modes. HTML/text reports can be processed on-device where supported. PDF processing remains Railway-backed in Automatic mode; this is not full offline/local PDF support. NIMS login remains manual, NIMS credentials are not stored, NIMS cookies remain on-device, and cookies are not uploaded to Railway. Railway receives report content only when remote processing is used. Always verify generated summaries with source NIMS reports before clinical decisions.

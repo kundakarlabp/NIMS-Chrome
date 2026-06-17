@@ -41,3 +41,7 @@ Bulk buttons are blocked until `Test Direct Fetch` validates the mapping.
 ## Data Handling
 
 Raw report PDF/HTML/text is processed transiently. The app sends report content to Railway helper for parsing. NIMS cookies stay on the phone and are used only for NIMS report fetches.
+
+## Local-first processing modes
+
+The WebView flow remains manual-login only. Report fetching uses WebView cookies locally for NIMS HTTPS URLs, then processing can run in Automatic, On-device only, or Railway only mode. Supported HTML/text reports may be parsed on-device. Unsupported formats, especially PDFs, use Railway fallback in Automatic mode. Cookies/session tokens are not sent to Railway.

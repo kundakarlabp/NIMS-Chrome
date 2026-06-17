@@ -43,3 +43,6 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 
 To clear local parsed cache, use the extension `Clear cache` button or delete `helper/cache.db`.
 
+## Android local-first privacy notes
+
+No NIMS username or password storage was added. NIMS cookies remain on-device and are not uploaded to Railway. Raw HTML, PDF bytes, and decoded report text must not be persisted. HTML/text reports may be processed locally; PDF reports remain Railway-backed in Automatic mode. Railway receives report content only when remote processing is selected or required by fallback.

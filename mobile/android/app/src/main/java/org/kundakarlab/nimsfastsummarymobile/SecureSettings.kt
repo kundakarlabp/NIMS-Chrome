@@ -16,6 +16,7 @@ class SecureSettings(context: Context) {
     fun helperUrl(): String = prefs.getString("helper_url", "") ?: ""
     fun lastSummaryJson(): String = prefs.getString("last_summary_json", "") ?: ""
     fun physicianNote(): String = prefs.getString("physician_note", "") ?: ""
+    fun processingMode(): org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode = runCatching { org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.valueOf(prefs.getString("processing_mode", "AUTO") ?: "AUTO") }.getOrDefault(org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.AUTO)
 
     fun saveHelperUrl(value: String) {
         prefs.edit().putString("helper_url", HelperSettingsValidator.normalizeUrl(value)).apply()
@@ -37,8 +38,24 @@ class SecureSettings(context: Context) {
         prefs.edit().putString("physician_note", value).apply()
     }
 
+    fun saveProcessingMode(value: org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode) {
+        prefs.edit().putString("processing_mode", value.name).apply()
+    }
+
     fun clearResults() {
-        prefs.edit().remove("last_summary_json").remove("physician_note").apply()
+        prefs.edit().remove("last_summary_json").apply()
+    }
+
+    fun clearPhysicianNote() {
+        prefs.edit().remove("physician_note").apply()
+    }
+
+    fun clearHelperSettings() {
+        prefs.edit().remove("helper_url").remove("helper_key").apply()
+    }
+
+    fun clearAllLocalData() {
+        prefs.edit().clear().apply()
     }
 
     fun clearApiKey() {
