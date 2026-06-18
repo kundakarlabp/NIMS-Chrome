@@ -14,7 +14,7 @@ class InitialStatePolicyTest {
     @Test fun autoWithoutHelperStillAllowsLocalProcessing() {
         val state = InitialStatePolicy.derive(ProcessingMode.AUTO, false, false)
         assertEquals(AppState.HELPER_READY, state.state)
-        assertTrue(state.message.contains("Configure Railway"))
+        assertTrue(state.message.contains("on-device", ignoreCase = true))
     }
 
     @Test fun remoteOnlyRequiresHelper() {

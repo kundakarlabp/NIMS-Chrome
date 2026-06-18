@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   helper:
     runs-on: ubuntu-latest
@@ -24,22 +27,16 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - run: ./gradlew clean
+      - run: ./gradlew clean test lintDebug assembleDebug
         working-directory: mobile/android
-      - run: ./gradlew test
-        working-directory: mobile/android
-      - run: ./gradlew assembleDebug
+      - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
         working-directory: mobile/android
       - uses: actions/upload-artifact@v4
         with:
           name: nims-fast-summary-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 30
-      - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
-        working-directory: mobile/android
-      - run: ./gradlew lintDebug
-        working-directory: mobile/android
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

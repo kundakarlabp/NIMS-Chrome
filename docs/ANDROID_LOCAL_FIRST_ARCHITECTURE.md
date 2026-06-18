@@ -64,7 +64,7 @@ Auto-parsed summary. Verify with source NIMS reports before clinical decisions.
 
 ## PR #20 corrections
 
-The production Android processing path now routes fetched report bytes through `ProcessingRouter` instead of calling helper parse/summarize directly from `MainActivity`. `LOCAL_ONLY` does not require Railway helper settings and never calls Railway. `AUTO` uses local parsing for supported text/HTML, Railway for PDFs, and blocks login/session/captcha/OTP pages from remote fallback. `REMOTE_ONLY` preserves Railway behavior and maps helper JSON back into domain summaries.
+The production Android processing path now routes fetched report bytes through `ProcessingRouter` instead of calling helper parse/summarize directly from `MainActivity`. `LOCAL_ONLY` does not require Railway helper settings and never calls Railway. `AUTO` uses local parsing for supported text/HTML/PDF reports first and only uses Railway as optional legacy fallback when configured; login/session/captcha/OTP pages are blocked from remote fallback. `REMOTE_ONLY` preserves Railway behavior and maps helper JSON back into domain summaries.
 
 Parser safety was tightened: culture results are parsed per block, resistance acronyms use explicit word boundaries, lab label extraction is case-insensitive and position-based, comparator values such as `<0.5` and `>100` are retained, and summaries sort normalized dates chronologically. Bulk processing is coroutine-based with structured child tasks, concurrency capped at two, and an active job can be cancelled. Popup WebView navigation is restricted to approved NIMS HTTPS hosts and paths; rejected popup URLs are not forwarded to the main WebView.
 
@@ -79,12 +79,12 @@ Remaining roadmap:
 
 Android now defaults to `LOCAL_ONLY` / **On-device only**. Startup does not require a helper URL or API key, and the WebView workflow remains available for manual login, report-page diagnosis, mapping discovery, Test One Report, Bulk Fast Summary, Cultures Only, Full Summary, and the Reports/Trends/Cultures/Summary tabs.
 
-`LOCAL_ONLY` must not instantiate helper requests for report parsing or summaries. It parses supported text/HTML reports locally and returns the exact unsupported PDF message without upload. Cookies remain only on-device for NIMS fetches, raw report content is processed transiently, full URLs/query strings are not logged, and source reports must be verified manually.
+`LOCAL_ONLY` must not instantiate helper requests for report parsing or summaries. It parses supported text/HTML reports and text-based PDFs locally, and returns controlled unsupported messages for image-only PDFs without upload. Cookies remain only on-device for NIMS fetches, raw report content is processed transiently, full URLs/query strings are not logged, and source reports must be verified manually.
 
 TODO: add a future PdfBox-Android text-extraction component behind the local processor for PDFs after parser parity tests with de-identified PDFs. OCR is intentionally out of scope.
 
 ## On-device PDF architecture
 
-`ProcessingRouter` sends `LOCAL_ONLY` work to the on-device processor and does not call the remote helper. `OnDeviceReportProcessor` delegates HTML/text directly to `LocalTextReportProcessor`; for PDFs it uses `PdfBoxAndroidTextExtractor`, normalizes extracted text, then passes UTF-8 text back through the existing conservative local parsers. PDF bytes are written only to a random temporary cache file during extraction and deleted in `finally`; raw PDF bytes, raw HTML, extracted raw text, full URLs, query strings, cookies, and transient filenames are not persisted.
+`ProcessingRouter` sends `LOCAL_ONLY` work to the on-device processor and does not call the remote helper. `OnDeviceReportProcessor` delegates HTML/text directly to `LocalTextReportProcessor`; for PDFs it uses `PdfBoxAndroidTextExtractor`, normalizes extracted text, then passes UTF-8 text back through the existing conservative local parsers. PDF bytes are loaded through the in-memory PdfBox-Android API and are never written to filesDir, cacheDir, external storage, SharedPreferences, Room, or logs; raw PDF bytes, raw HTML, extracted raw text, full URLs, query strings, cookies, and transient filenames are not persisted.
 
 PdfBox-Android is pinned as `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0). PDF extraction is limited to one document at a time and enforces byte, page, and extracted-text safety limits. Image-only PDFs remain unsupported because OCR was not added.

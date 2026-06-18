@@ -1,6 +1,6 @@
 package org.kundakarlab.nimsfastsummarymobile
 
-import java.net.URI
+import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -19,17 +19,7 @@ object NimsReportTemplate {
         return "${template.origin.trimEnd('/')}${template.pathname}?${template.modeParamName}=$mode&${template.argumentParameterName}=$fileName"
     }
 
-    fun isAllowedNimsUrl(url: String): Boolean {
-        return try {
-            val uri = URI(url)
-            uri.scheme == "https" &&
-                (uri.host == "nimsts.edu.in" || uri.host == "www.nimsts.edu.in") &&
-                (uri.path.startsWith("/AHIMSG5/") || uri.path.startsWith("/HISInvestigationG5/"))
-        } catch (_: Exception) {
-            false
-        }
-    }
+    fun isAllowedNimsUrl(url: String): Boolean = NimsUrlPolicy.isAllowedUrl(url)
 
-    private fun encode(value: String): String =
-        URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+    private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
 }

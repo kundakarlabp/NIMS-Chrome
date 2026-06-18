@@ -9,7 +9,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.io.IOException
 import kotlin.coroutines.coroutineContext
 
@@ -23,11 +22,8 @@ class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
         if (!pdfBytes.startsWithPdfMagic()) return@withPermit PdfExtractionResult.Corrupt("This PDF report could not be read on-device.")
         withContext(Dispatchers.IO) {
             init(appContext)
-            var temp: File? = null
             try {
-                temp = File.createTempFile("nims_pdf_", ".tmp", appContext.cacheDir)
-                temp.outputStream().use { it.write(pdfBytes) }
-                PDDocument.load(temp).use { document ->
+                PDDocument.load(pdfBytes).use { document ->
                     if (document.isEncrypted) return@withContext PdfExtractionResult.Encrypted
                     val pages = document.numberOfPages
                     if (pages <= 0) return@withContext PdfExtractionResult.ImageOnly(0)
@@ -61,8 +57,6 @@ class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
                 PdfExtractionResult.Corrupt("This PDF report could not be read on-device.")
             } catch (_: IllegalArgumentException) {
                 PdfExtractionResult.Corrupt("This PDF report could not be read on-device.")
-            } finally {
-                temp?.delete()
             }
         }
     }

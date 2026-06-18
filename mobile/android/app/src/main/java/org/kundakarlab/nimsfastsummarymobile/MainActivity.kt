@@ -15,6 +15,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebStorage
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -130,7 +131,7 @@ class MainActivity : ComponentActivity() {
             local = OnDeviceReportProcessor(
                 textProcessor = LocalTextReportProcessor(),
                 pdfExtractor = PdfBoxAndroidTextExtractor(applicationContext),
-                onPdfProgress = { completed, total -> setState(AppState.FETCHING, "Extracting PDF page $completed of $total...") }
+                onPdfProgress = { completed, total -> runOnUiThread { setState(AppState.FETCHING, "Extracting PDF page $completed of $total...") } }
             ),
             remote = RemoteReportProcessor { helper() },
             modeProvider = { processingMode },
@@ -148,6 +149,7 @@ class MainActivity : ComponentActivity() {
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
+        clearWebViewSession(coldStartOnly = true)
         webViewUserAgent = webView.settings.userAgentString
         val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
         setState(initial.state, initial.message)
@@ -174,6 +176,7 @@ class MainActivity : ComponentActivity() {
                     processingMode = processingMode,
                     onProcessingModeChange = { updateProcessingMode(it) },
                     onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
+                    onClearNimsSession = { clearNimsSession() },
                     onBack = { if (webView.canGoBack()) webView.goBack() },
                     onForward = { if (webView.canGoForward()) webView.goForward() },
                     onReload = { webView.reload() },
@@ -206,7 +209,7 @@ class MainActivity : ComponentActivity() {
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.databaseEnabled = true
+            settings.databaseEnabled = false
             settings.javaScriptCanOpenWindowsAutomatically = true
             settings.setSupportMultipleWindows(true)
             settings.useWideViewPort = true
@@ -214,7 +217,7 @@ class MainActivity : ComponentActivity() {
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
             settings.textZoom = 100
-            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
@@ -223,7 +226,7 @@ class MainActivity : ComponentActivity() {
             isFocusable = true
             isFocusableInTouchMode = true
             setInitialScale(85)
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
                     loadProgress = newProgress
@@ -237,16 +240,15 @@ class MainActivity : ComponentActivity() {
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                val acceptedPopupUrl = NimsUrlPolicy.safeSourceForHelper(request.url.toString())
-                                if (acceptedPopupUrl.isNotBlank()) webView.loadUrl(acceptedPopupUrl) else log("Blocked popup navigation")
+                                val originalUrl = request.url.toString()
+                                if (NimsUrlPolicy.isAllowedUrl(originalUrl)) webView.loadUrl(originalUrl) else log("Blocked popup navigation")
                                 popupView.stopLoading()
                                 popupView.destroy()
                                 return true
                             }
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                val acceptedPopupUrl = NimsUrlPolicy.safeSourceForHelper(url)
-                                if (acceptedPopupUrl.isNotBlank()) webView.loadUrl(acceptedPopupUrl) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
+                                if (NimsUrlPolicy.isAllowedUrl(url)) webView.loadUrl(url) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
                                 popupView.destroy()
                             }
                         }
@@ -289,6 +291,26 @@ class MainActivity : ComponentActivity() {
         setState(initial.state, initial.message)
     }
 
+    private fun clearNimsSession() {
+        cancelActiveProcessing()
+        mapping = null
+        mappingValidated = false
+        clearWebViewSession(coldStartOnly = false)
+        webView.loadUrl(NIMS_LOGIN_URL)
+        setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
+    }
+
+    private fun clearWebViewSession(coldStartOnly: Boolean) {
+        if (coldStartOnly && webViewSessionCleaned) return
+        webViewSessionCleaned = true
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+        WebStorage.getInstance().deleteAllData()
+        webView.clearCache(true)
+        webView.clearHistory()
+        webView.clearFormData()
+    }
+
     private fun testHelper() {
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
@@ -303,7 +325,7 @@ class MainActivity : ComponentActivity() {
 
     private fun diagnosePage() {
         evaluateCore("JSON.stringify(NimsReportCore.diagnosePage(document))") { json ->
-            val rows = json.optInt("viewReportRowCount", json.optInt("view_report_rows"))
+            val rows = DiagnosePageContract.viewReportRows(json)
             if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             }
@@ -734,6 +756,7 @@ private fun NimsFastSummaryApp(
     onTestHelper: () -> Unit,
     onClearHelper: () -> Unit,
     onNimsLogin: () -> Unit,
+    onClearNimsSession: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
@@ -781,6 +804,7 @@ private fun NimsFastSummaryApp(
                 webView = webView,
                 state = state,
                 onNimsLogin = onNimsLogin,
+                onClearNimsSession = onClearNimsSession,
                 onBack = onBack,
                 onForward = onForward,
                 onReload = onReload,
@@ -853,6 +877,7 @@ private fun NimsWebViewScreen(
     webView: WebView,
     state: AppState,
     onNimsLogin: () -> Unit,
+    onClearNimsSession: () -> Unit,
     onBack: () -> Unit,
     onForward: () -> Unit,
     onReload: () -> Unit,
@@ -874,6 +899,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onForward) { Text("Forward") } }
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
             item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
+            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
@@ -1137,6 +1163,8 @@ private fun abnormalityColor(value: Abnormality): Color {
         Abnormality.UNKNOWN -> Color(0xFFE8EEF7)
     }
 }
+
+private var webViewSessionCleaned = false
 
 data class ReportFetchResult(
     val contentType: String,
