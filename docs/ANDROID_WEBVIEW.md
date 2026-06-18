@@ -56,6 +56,6 @@ The Android app can run with no Railway service configured. The default processi
 
 Railway settings are optional/advanced. **Automatic with Railway fallback** uses on-device parsing first and requires Railway only for PDFs or unsupported reports. **Railway only** requires a helper URL and API key.
 
-PDF local parsing is not yet supported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “PDF local parsing is not yet supported. Open the source report manually or enable Railway fallback.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
+PDF local parsing is not yet supported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “PDF local parsing is not yet supported. Open the source report manually.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
 
 Always verify generated summaries against the source reports in NIMS before clinical decisions.

@@ -28,8 +28,23 @@ class LocalTextReportProcessorTest {
         assertFalse(CultureTextParser.parse("Creatinine 1.2 mg/dL increased growth", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("CRE"))
         assertTrue(CultureTextParser.parse("Blood Culture\nOrganism: Klebsiella pneumoniae\nCRE isolated", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("CRE"))
         assertTrue(CultureTextParser.parse("Carbapenem-resistant Klebsiella pneumoniae", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("Carbapenem resistant"))
-        assertTrue(CultureTextParser.parse("CRAB MRSA VRE", "2026-01-01").flatMap { it.explicitResistanceMarkers }.containsAll(listOf("CRAB", "MRSA", "VRE")))
+        assertTrue(CultureTextParser.parse("Blood Culture\nOrganism: Acinetobacter baumannii\nCRAB MRSA VRE isolated", "2026-01-01").flatMap { it.explicitResistanceMarkers }.containsAll(listOf("CRAB", "MRSA", "VRE")))
     }
+    @Test fun cultureResistanceNegationsAreNotMarkers() {
+        assertFalse(CultureTextParser.parse("Blood Culture\nOrganism: Escherichia coli\nno ESBL detected", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("ESBL"))
+        assertFalse(CultureTextParser.parse("Blood Culture\nOrganism: Klebsiella pneumoniae\nCRE negative", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("CRE"))
+        assertFalse(CultureTextParser.parse("Blood Culture\nOrganism: Staphylococcus aureus\nMRSA not detected", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("MRSA"))
+        assertFalse(CultureTextParser.parse("Blood Culture\nOrganism: Escherichia coli\nnot ESBL", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("ESBL"))
+        assertFalse(CultureTextParser.parse("Blood Culture\nOrganism: Escherichia coli\nESBL negative", "2026-01-01").flatMap { it.explicitResistanceMarkers }.contains("ESBL"))
+    }
+
+    @Test fun cultureResistanceMarkerAloneIsUnknownLowConfidence() {
+        val result = CultureTextParser.parse("ESBL mentioned", "2026-01-01")
+        assertEquals(1, result.size)
+        assertEquals(GrowthStatus.UNKNOWN, result.first().growthStatus)
+        assertEquals(ParseConfidence.LOW, result.first().confidence)
+    }
+
     @Test fun cultureBlocksKeepPositiveAndNoGrowthSeparate() {
         val result = CultureTextParser.parse("Blood Culture\nOrganism: Escherichia coli\nMeropenem Resistant\n\nUrine Culture\nSpecimen: Urine\nNo growth", "2026-01-01")
         assertTrue(result.any { it.growthStatus == GrowthStatus.GROWTH_DETECTED && it.organism?.contains("coli", true) == true })

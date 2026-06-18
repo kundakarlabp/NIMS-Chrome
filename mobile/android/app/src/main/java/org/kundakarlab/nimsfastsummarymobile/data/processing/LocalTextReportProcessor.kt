@@ -13,7 +13,7 @@ class LocalTextReportProcessor(
     override val capabilities = setOf(ProcessingCapability.HTML, ProcessingCapability.PLAIN_TEXT, ProcessingCapability.LABS, ProcessingCapability.CULTURES, ProcessingCapability.SUMMARY)
 
     override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> {
-        if (input.contentType.contains("pdf", true) || input.bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) return ProcessingResult.Unsupported("PDF local parsing is not yet supported. Open the source report manually or enable Railway fallback.")
+        if (input.contentType.contains("pdf", true) || input.bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) return ProcessingResult.Unsupported("PDF local parsing is not yet supported. Open the source report manually.")
         if (input.bytes.isEmpty()) return ProcessingResult.Failure("Empty report response.", "LOCAL_EMPTY_RESPONSE", false)
         if (input.bytes.size > maxBytes) return ProcessingResult.Failure("Report text is too large for on-device processing.", "LOCAL_OVERSIZED_TEXT", false)
         val text = normalize(decode(input.bytes, input.contentType))
@@ -142,9 +142,18 @@ object CultureTextParser {
             ?: Regex("growth\\s+of\\s+([^\\n]+)", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1)?.trim()
         val specimen = Regex("(?:specimen|sample)\\s*[:=]\\s*([^\\n]+)", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1)?.trim()
         val susceptibility = parseSusceptibility(block)
-        val markers = resistanceMarkerPatterns.filterValues { it.containsMatchIn(block) }.keys.toSet()
-        val explicitGrowth = Regex("\\b(growth|positive|isolated)\\b", RegexOption.IGNORE_CASE).containsMatchIn(block)
+        val markers = resistanceMarkerPatterns.filter { (marker, pattern) -> pattern.containsMatchIn(block) && !isNegatedMarker(block, marker) }.keys.toSet()
+        val explicitGrowth = Regex("\\b(growth\\s+of|positive|isolated)\\b", RegexOption.IGNORE_CASE).containsMatchIn(block)
         if (!noGrowth && organism.isNullOrBlank() && !explicitGrowth && markers.isEmpty()) return null
+        if (!noGrowth && organism.isNullOrBlank() && !explicitGrowth) {
+            return ParsedCultureValue(specimen, null, date, null, GrowthStatus.UNKNOWN, susceptibility, markers, emptyList(), ParseConfidence.LOW)
+        }
         return ParsedCultureValue(specimen, null, date, organism, if (noGrowth) GrowthStatus.NO_GROWTH else GrowthStatus.GROWTH_DETECTED, susceptibility, markers, emptyList(), ParseConfidence.HIGH)
+    }
+
+    private fun isNegatedMarker(block: String, marker: String): Boolean {
+        val token = Regex.escape(marker)
+        val negation = Regex("\\b(?:no|not)\\s+$token\\b|\\b$token\\s+(?:negative|not\\s+detected)\\b", RegexOption.IGNORE_CASE)
+        return negation.containsMatchIn(block)
     }
 }

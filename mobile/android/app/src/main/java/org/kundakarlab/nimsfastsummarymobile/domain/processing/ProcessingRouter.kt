@@ -52,7 +52,7 @@ class ProcessingRouter(
     }
 }
 
-private const val LOCAL_PDF_UNSUPPORTED = "PDF local parsing is not yet supported. Open the source report manually or enable Railway fallback."
+private const val LOCAL_PDF_UNSUPPORTED = "PDF local parsing is not yet supported. Open the source report manually."
 private const val AUTO_PDF_HELPER_REQUIRED = "PDF local parsing is not yet supported. Configure Railway fallback to process PDFs."
 
 private fun ReportInput.isPdf(): Boolean = contentType.contains("pdf", true) || bytes.take(5).toByteArray().contentEquals("%PDF-".toByteArray()) || bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())

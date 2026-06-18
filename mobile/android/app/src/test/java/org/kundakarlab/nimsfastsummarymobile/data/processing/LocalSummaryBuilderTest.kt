@@ -50,5 +50,17 @@ class LocalSummaryBuilderTest {
         assertTrue(text.contains("Hemoglobin increased from 10.0 g/dL to 11.0 g/dL"))
     }
 
+    @Test fun unsupportedPdfAppearsAsSourceReportWithAction() {
+        val reason = "PDF local parsing is not yet supported. Open the source report manually."
+        val unsupported = ParsedReport("pdf", "PDF Report", "02-06-2026", "pdf", warnings = listOf(reason), processorName = "none")
+        val json = LocalSummaryBuilder().build(listOf(unsupported), SummaryMode.FULL).helperJson!!
+        val sourceReport = json.getJSONArray("source_reports").getJSONObject(0)
+        assertEquals("PDF Report", sourceReport.getString("report_name"))
+        assertEquals("02-06-2026", sourceReport.getString("date_sent"))
+        assertEquals("unsupported", sourceReport.getString("status"))
+        assertEquals(reason, sourceReport.getString("notes"))
+        assertEquals("Open source report in NIMS", sourceReport.getString("action"))
+    }
+
     private fun report(date: String, creat: Double, growth: GrowthStatus) = ParsedReport("r$date", "Report", date, "lab", labs = listOf(ParsedLabValue("CREAT", "Creatinine", "Creatinine", creat, null, "mg/dL", null, null, null, Abnormality.UNKNOWN, date, ParseConfidence.HIGH)), cultures = listOf(ParsedCultureValue("Blood", null, date, if (growth == GrowthStatus.GROWTH_DETECTED) "Escherichia coli" else null, growth, emptyList(), emptySet(), emptyList(), ParseConfidence.HIGH)), processorName = "local")
 }

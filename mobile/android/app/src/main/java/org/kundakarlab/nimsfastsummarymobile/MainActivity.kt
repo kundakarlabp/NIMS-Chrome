@@ -231,20 +231,16 @@ class MainActivity : ComponentActivity() {
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                if (NimsUrlPolicy.isAllowed(request.url)) {
-                                    val acceptedPopupUrl = request.url.buildUpon().clearQuery().fragment(null).build().toString()
-                                    webView.loadUrl(acceptedPopupUrl)
-                                } else {
-                                    log("Blocked popup navigation")
-                                }
+                                val acceptedPopupUrl = NimsUrlPolicy.safeSourceForHelper(request.url.toString())
+                                if (acceptedPopupUrl.isNotBlank()) webView.loadUrl(acceptedPopupUrl) else log("Blocked popup navigation")
                                 popupView.stopLoading()
                                 popupView.destroy()
                                 return true
                             }
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                val uri = runCatching { android.net.Uri.parse(url) }.getOrNull()
-                                if (uri != null && NimsUrlPolicy.isAllowed(uri)) webView.loadUrl(uri.toString()) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
+                                val acceptedPopupUrl = NimsUrlPolicy.safeSourceForHelper(url)
+                                if (acceptedPopupUrl.isNotBlank()) webView.loadUrl(acceptedPopupUrl) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
                                 popupView.destroy()
                             }
                         }
@@ -504,7 +500,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "error" else "parsed").put("notes", report.warnings.joinToString("; "))) } })
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", if (report.labs.isEmpty() && report.cultures.isEmpty()) "Open source report in NIMS" else "")) } })
         .put("interpretation", JSONArray(text.lines()))
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
