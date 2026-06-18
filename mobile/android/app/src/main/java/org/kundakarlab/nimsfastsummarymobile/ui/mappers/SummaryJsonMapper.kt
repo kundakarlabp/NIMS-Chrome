@@ -34,7 +34,7 @@ object SummaryJsonMapper {
                         type = row.optString("type", row.optString("report_type", "other")),
                         status = status,
                         notes = notes,
-                        hasError = status.equals("error", ignoreCase = true) || notes.isNotBlank()
+                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true) || notes.isNotBlank()
                     )
                 )
             }

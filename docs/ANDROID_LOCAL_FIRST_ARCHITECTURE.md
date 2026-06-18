@@ -74,3 +74,11 @@ Remaining roadmap:
 - parser parity tests with de-identified NIMS PDFs;
 - optional encrypted structured database;
 - removal of Railway only after parity.
+
+## Fully local-first default
+
+Android now defaults to `LOCAL_ONLY` / **On-device only**. Startup does not require a helper URL or API key, and the WebView workflow remains available for manual login, report-page diagnosis, mapping discovery, Test One Report, Bulk Fast Summary, Cultures Only, Full Summary, and the Reports/Trends/Cultures/Summary tabs.
+
+`LOCAL_ONLY` must not instantiate helper requests for report parsing or summaries. It parses supported text/HTML reports locally and returns the exact unsupported PDF message without upload. Cookies remain only on-device for NIMS fetches, raw report content is processed transiently, full URLs/query strings are not logged, and source reports must be verified manually.
+
+TODO: add a future PdfBox-Android text-extraction component behind the local processor for PDFs after parser parity tests with de-identified PDFs. OCR is intentionally out of scope.

@@ -49,3 +49,13 @@ The WebView flow remains manual-login only. Report fetching uses WebView cookies
 ## Popup and URL policy
 
 Popup/new-window navigation is forwarded to the main WebView only when the target is HTTPS, belongs exactly to an approved NIMS host, and uses an approved NIMS path prefix. `http:`, `javascript:`, `file:`, `content:`, `data:`, `intent:`, user-info URLs, non-NIMS hosts, and wrong paths are blocked and temporary popup WebViews are destroyed.
+
+## Local-first Android operation
+
+The Android app can run with no Railway service configured. The default processing mode is **On-device only**, NIMS login remains manual in the WebView, and supported text/HTML reports are fetched with the active WebView cookie session and parsed on the device. NIMS cookies are used only for direct NIMS HTTPS fetches and must not be sent to Railway or any other server.
+
+Railway settings are optional/advanced. **Automatic with Railway fallback** uses on-device parsing first and requires Railway only for PDFs or unsupported reports. **Railway only** requires a helper URL and API key.
+
+PDF local parsing is not yet supported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “PDF local parsing is not yet supported. Open the source report manually.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
+
+Always verify generated summaries against the source reports in NIMS before clinical decisions.

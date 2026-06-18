@@ -4,7 +4,7 @@ NIMS Fast Summary summarizes NIMS e-Sushrut/HIS report-list pages after the user
 
 Recommended modes:
 
-1. Android WebView + Railway helper: no laptop runtime MVP. The phone logs in to NIMS manually, fetches reports with the WebView session, and sends report content to Railway helper for parsing.
+1. Android WebView local-first app: no laptop or Railway dependency for supported text/HTML reports. The phone logs in to NIMS manually, fetches reports with the WebView session, and parses supported reports on-device; Railway is optional for fallback.
 2. Chrome extension + Railway helper: desktop browser session fetches reports, Railway parses/summarizes.
 3. Local helper: development and fully local desktop use.
 
@@ -85,8 +85,7 @@ The extension still performs direct NIMS report fetching in the browser session.
 The mobile app scaffold lives under `mobile/android/`. It is a single-activity Kotlin WebView app that loads NIMS, uses manual login only, injects controlled shared JavaScript from `shared/nims-web/nimsReportCore.js`, fetches reports with the active WebView cookie session, and posts report content to the configured Railway helper.
 
 1. Install the debug APK on the phone.
-2. Enter the Railway helper URL and API key.
-3. Open NIMS in the in-app WebView.
+2. Open NIMS in the in-app WebView.
 4. Login manually.
 5. Open `CR No Wise Result Report Printing New`.
 6. Run `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
@@ -199,3 +198,8 @@ The Android app now has a local-first processing foundation with Automatic, On-d
 ### Android PR #20 local-first corrections
 
 Processing mode now controls the real Android report path: `LOCAL_ONLY` avoids Railway entirely, `AUTO` uses on-device parsing for supported text/HTML and Railway for PDFs or unsupported reports, and `REMOTE_ONLY` keeps the Railway helper path. Login/session/captcha pages are not sent to Railway. PDF/OCR local support is still not claimed.
+
+
+### Android local-only default
+
+The Android app defaults to **On-device only** and can run without Railway, helper URL, or API key. Supported text/HTML reports are fetched with WebView cookies and parsed locally; cookies never leave the device. Railway is optional/advanced for **Automatic with Railway fallback** or **Railway only** modes. PDF local parsing is not yet supported; local-only PDF reports are shown as unsupported with: “PDF local parsing is not yet supported. Open the source report manually.” NIMS login remains manual, credentials are not stored, raw reports are not persisted, and generated output must be verified against source NIMS reports.

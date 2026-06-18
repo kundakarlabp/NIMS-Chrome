@@ -23,6 +23,8 @@ class NimsUrlPolicyTest {
 
     @Test fun safeSourceStripsQueryAndRejectsNonNims() {
         assertEquals("https://nimsts.edu.in/AHIMSG5/report", NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag"))
+        assertFalse(NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag").contains("?"))
+        assertFalse(NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag").contains("#"))
         assertEquals("", NimsUrlPolicy.safeSourceForHelper("https://example.com/AHIMSG5/report?x=1"))
     }
 }

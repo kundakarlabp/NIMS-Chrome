@@ -7,7 +7,9 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.*
 class LocalSummaryBuilder {
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
+        val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() }
         val lines = mutableListOf("Auto-parsed summary. Verify with source NIMS reports before clinical decisions.")
+        if (unsupportedCount > 0) lines += "Failed or unsupported reports: $unsupportedCount."
         val sortedReports = reports.withIndex().sortedWith(compareBy<IndexedValue<ParsedReport>>(
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch == null },
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch ?: 0L },
@@ -18,7 +20,7 @@ class LocalSummaryBuilder {
             SummaryMode.FAST -> addLabTrends(lines, sortedReports, keyOnly = true, warnings = warnings).also { addCultures(lines, sortedReports, concise = true) }
             SummaryMode.CULTURES_ONLY -> addCultures(lines, sortedReports, concise = false)
             SummaryMode.FULL -> {
-                lines += "Reports processed: ${reports.size}."
+                lines += "Reports processed: ${reports.size}; failed/unsupported: $unsupportedCount."
                 dateRange(sortedReports)?.let { lines += "Date range: $it." }
                 addLabTrends(lines, sortedReports, keyOnly = false, warnings = warnings)
                 addCultures(lines, sortedReports, concise = false)
@@ -66,7 +68,7 @@ class LocalSummaryBuilder {
     private fun ParsedLabValue.valueText(): String = ((if (comparator == NumericComparator.LESS_THAN) "<" else if (comparator == NumericComparator.GREATER_THAN) ">" else "") + (numericValue?.toString() ?: textValue.orEmpty()) + " " + unit.orEmpty()).trim()
 
     private fun toSummaryJson(reports: List<ParsedReport>, lines: List<String>, warnings: List<String>): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { a -> reports.forEach { r -> a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType).put("status", "parsed").put("notes", r.warnings.joinToString("; ")).put("processor", r.processorName)) } })
+        .put("source_reports", JSONArray().also { a -> reports.forEach { r -> a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType).put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", r.warnings.joinToString("; ")).put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "").put("processor", r.processorName)) } })
         .put("interpretation", JSONArray(lines))
         .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c -> a.put(JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty()).put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase()).put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" }).put("comment", c.explicitResistanceMarkers.joinToString(", "))) } })
         .put("lab_trend_table", JSONObject().put("columns", JSONArray(reports.map { it.dateSent }.distinct())).put("rows", JSONArray().also { rows -> reports.flatMap { it.labs }.groupBy { it.displayName }.forEach { (name, labs) -> rows.put(JSONObject().put("parameter", name).put("trend", "auto-parsed").put("values", JSONArray(labs.map { it.valueText() }))) } }))
