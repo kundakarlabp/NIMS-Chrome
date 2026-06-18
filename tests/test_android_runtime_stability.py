@@ -19,7 +19,7 @@ def test_android_bulk_workers_do_not_evaluate_webview_javascript() -> None:
         ANDROID_APP
         / "src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt"
     ).read_text(encoding="utf-8")
-    fetch_body = source.split("private fun fetchAndParseOne", 1)[1].split(
+    fetch_body = source.split("private suspend fun fetchAndParseOne", 1)[1].split(
         "private fun fetchWithWebViewCookies", 1
     )[0]
     assert "evaluateCore" not in fetch_body

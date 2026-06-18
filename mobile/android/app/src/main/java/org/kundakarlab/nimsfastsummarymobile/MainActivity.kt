@@ -65,10 +65,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingRouter
+import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
+import org.kundakarlab.nimsfastsummarymobile.domain.model.SummaryMode
+import org.kundakarlab.nimsfastsummarymobile.domain.model.ParsedReport
+import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
+import org.kundakarlab.nimsfastsummarymobile.data.processing.RemoteReportProcessor
+import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
+import kotlinx.coroutines.withContext
+import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
+import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
 import org.kundakarlab.nimsfastsummarymobile.ui.formatters.ClinicalSummaryFormatter
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.SummaryJsonMapper
+import org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode
 import org.kundakarlab.nimsfastsummarymobile.ui.models.Abnormality
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiCultureRow
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiLabTrendRow
@@ -77,6 +99,7 @@ import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import kotlin.coroutines.coroutineContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -97,6 +120,16 @@ class MainActivity : ComponentActivity() {
     private var uiSummary by mutableStateOf<UiSummary?>(null)
     private var sanitizedSummaryText by mutableStateOf("")
     private var physicianNote by mutableStateOf("")
+    private var processingMode by mutableStateOf(ProcessingMode.AUTO)
+    private var activeProcessingJob: Job? = null
+    private val safeLogBuffer = SafeLogBuffer()
+    private val processingRouter by lazy {
+        ProcessingRouter(
+            local = LocalTextReportProcessor(),
+            remote = RemoteReportProcessor { helper() },
+            modeProvider = { processingMode }
+        )
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,14 +137,13 @@ class MainActivity : ComponentActivity() {
         settings = SecureSettings(this)
         helperUrlInput = settings.helperUrl()
         physicianNote = settings.physicianNote()
+        processingMode = settings.processingMode()
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
         webViewUserAgent = webView.settings.userAgentString
-        setState(
-            if (settings.helperUrl().isBlank() || !settings.hasApiKey()) AppState.NEED_HELPER_SETTINGS else AppState.HELPER_READY,
-            if (settings.helperUrl().isBlank() || !settings.hasApiKey()) "Add Railway helper URL and API key." else "Helper ready. Login to NIMS manually."
-        )
+        val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+        setState(initial.state, initial.message)
         setContent {
             NimsTheme {
                 NimsFastSummaryApp(
@@ -132,6 +164,8 @@ class MainActivity : ComponentActivity() {
                     onSaveHelper = { saveHelperSettings() },
                     onTestHelper = { testHelper() },
                     onClearHelper = { clearHelperSettings() },
+                    processingMode = processingMode,
+                    onProcessingModeChange = { updateProcessingMode(it) },
                     onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
                     onBack = { if (webView.canGoBack()) webView.goBack() },
                     onForward = { if (webView.canGoForward()) webView.goForward() },
@@ -144,6 +178,7 @@ class MainActivity : ComponentActivity() {
                     onFast = { runMode("bulk_fast") },
                     onCulturesOnly = { runMode("bulk_cultures_only") },
                     onFull = { runMode("bulk_full") },
+                    onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
                     onPhysicianNoteChange = { updatePhysicianNote(it) },
@@ -195,12 +230,21 @@ class MainActivity : ComponentActivity() {
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                webView.loadUrl(request.url.toString())
+                                if (NimsUrlPolicy.isAllowed(request.url)) {
+                                    val acceptedPopupUrl = request.url.buildUpon().clearQuery().fragment(null).build().toString()
+                                    webView.loadUrl(acceptedPopupUrl)
+                                } else {
+                                    log("Blocked popup navigation")
+                                }
+                                popupView.stopLoading()
+                                popupView.destroy()
                                 return true
                             }
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                if (url.isNotBlank() && url != "about:blank") webView.loadUrl(url)
+                                val uri = runCatching { android.net.Uri.parse(url) }.getOrNull()
+                                if (uri != null && NimsUrlPolicy.isAllowed(uri)) webView.loadUrl(uri.toString()) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
+                                popupView.destroy()
                             }
                         }
                     }
@@ -218,9 +262,13 @@ class MainActivity : ComponentActivity() {
 
     private fun saveHelperSettings() {
         runCatching {
-            settings.saveHelperUrl(helperUrlInput)
-            if (helperKeyInput.isBlank() && !settings.hasApiKey()) throw IllegalArgumentException("Set Railway helper API key first.")
-            settings.saveApiKey(helperKeyInput)
+            val helperUrlProvided = helperUrlInput.isNotBlank()
+            val helperKeyProvided = helperKeyInput.isNotBlank()
+            if (processingMode == ProcessingMode.REMOTE_ONLY || helperUrlProvided || helperKeyProvided) {
+                settings.saveHelperUrl(helperUrlInput)
+                if (helperKeyInput.isBlank() && !settings.hasApiKey()) throw IllegalArgumentException("Configure Railway helper URL and API key.")
+                settings.saveApiKey(helperKeyInput)
+            }
         }.onFailure {
             setState(AppState.ERROR, it.message ?: "Helper settings invalid")
             return
@@ -231,17 +279,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun clearHelperSettings() {
-        settings.clear()
+        settings.clearHelperSettings()
         helperUrlInput = ""
         helperKeyInput = ""
-        uiSummary = null
-        sanitizedSummaryText = ""
-        physicianNote = ""
-        setState(AppState.NEED_HELPER_SETTINGS, "Helper settings cleared.")
+        val initial = InitialStatePolicy.derive(processingMode, hasHelperUrl = false, hasApiKey = false)
+        setState(initial.state, initial.message)
     }
 
     private fun testHelper() {
-        Thread {
+        lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 val health = publicHelper().health()
                 val version = publicHelper().version()
@@ -249,7 +295,7 @@ class MainActivity : ComponentActivity() {
             }
                 .onSuccess { setState(AppState.HELPER_READY, it) }
                 .onFailure { setState(AppState.ERROR, "Helper connection failed: ${it.message}") }
-        }.start()
+        }
     }
 
     private fun diagnosePage() {
@@ -258,7 +304,7 @@ class MainActivity : ComponentActivity() {
             if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             }
-            log("Diagnosis: ${safeJson(json)}")
+            log("Page diagnostics rows=$rows mappingReady=${rows > 0}")
         }
     }
 
@@ -311,7 +357,7 @@ class MainActivity : ComponentActivity() {
                 }
                 log("Selected ${selected.length()} reports")
                 prepareReportRequests(selected, currentMapping) { prepared ->
-                    Thread { fetchParseSummarize(mode, prepared) }.start()
+                    startFetchParseSummarize(mode, prepared)
                 }
             }
         }
@@ -342,80 +388,123 @@ class MainActivity : ComponentActivity() {
         step(0)
     }
 
-    private fun fetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
+    private fun startFetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
+        if (activeProcessingJob?.isActive == true) {
+            setState(AppState.ERROR, "A report processing run is already active.")
+            return
+        }
+        val job = lifecycleScope.launch {
+            fetchParseSummarize(mode, prepared)
+        }
+        activeProcessingJob = job
+    }
+
+    private suspend fun fetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
         setState(AppState.FETCHING, "Fetching and parsing reports...")
-        val parsedReports = JSONArray()
-        if (mode == "test_direct") {
-            val request = prepared.firstOrNull()
-            if (request == null) {
-                setState(AppState.ERROR, "No report selected for Test One Report.")
-                return
+        try {
+            val parsedReports = if (mode == "test_direct") {
+                val request = prepared.firstOrNull() ?: run {
+                    setState(AppState.ERROR, "No report selected for Test One Report.")
+                    return
+                }
+                val result = withContext(Dispatchers.IO) { fetchAndParseOne(request, 0, 1) }
+                val valid = result.labs.isNotEmpty() || result.cultures.isNotEmpty()
+                mappingValidated = valid
+                if (!valid) {
+                    mappingValidated = false
+                    setState(AppState.ERROR, result.warnings.firstOrNull() ?: "Test One Report did not parse a report.")
+                    return
+                }
+                listOf(result)
+            } else {
+                processBulk(prepared).map { it.getOrElse { error -> errorParsedReport(JSONObject(), error.message ?: "Report failed") } }
             }
-            val report = fetchAndParseOne(request, 0, 1)
-            parsedReports.put(report)
-            val valid = isParsedReportValid(report)
-            mappingValidated = valid
-            if (!valid) {
-                mappingValidated = false
-                setState(AppState.ERROR, report.optJSONArray("errors")?.optString(0) ?: "Test One Report did not parse a report.")
-                return
+            val summaryMode = when (mode) {
+                "bulk_full" -> SummaryMode.FULL
+                "bulk_cultures_only" -> SummaryMode.CULTURES_ONLY
+                else -> SummaryMode.FAST
             }
-        } else {
-            val results = ReportFetchQueue(concurrency = 3).run(prepared.withIndex().toList()) { indexed ->
-                fetchAndParseOne(indexed.value, indexed.index, prepared.size)
-            }
-            results.forEach { result ->
-                parsedReports.put(result.getOrElse { errorReport(JSONObject(), it.message ?: "direct fetch failed") })
-            }
-        }
-        val summaryMode = when (mode) {
-            "bulk_full" -> "full"
-            "bulk_cultures_only" -> "cultures_only"
-            else -> "fast"
-        }
-        log("Summarizing ${parsedReports.length()}/${prepared.size}")
-        runCatching {
-            helper().summarize(JSONObject().put("mode", summaryMode).put("reports", parsedReports))
-        }
-            .onSuccess { summary ->
-                runOnUiThread {
-                    sanitizedSummaryText = summary.toString()
+            log("Summarizing ${parsedReports.size}/${prepared.size}")
+            when (val summaryResult = withContext(Dispatchers.IO) { processingRouter.summarize(parsedReports, summaryMode) }) {
+                is ProcessingResult.Success -> {
+                    val json = summaryResult.value.helperJson ?: localSummaryJson(parsedReports, summaryResult.value.text)
+                    sanitizedSummaryText = json.toString()
                     settings.saveLastSummaryJson(sanitizedSummaryText)
-                    uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary, physicianNote)
+                    uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(json, physicianNote)
                     selectedTab = 4
                     setState(AppState.SUMMARY_READY, "Summary ready.")
                 }
+                is ProcessingResult.Unsupported -> setState(AppState.ERROR, summaryResult.reason)
+                is ProcessingResult.Failure -> setState(AppState.ERROR, summaryResult.userMessage)
             }
-            .onFailure { error ->
-                setState(AppState.ERROR, "Summary failed: ${error.message ?: "unknown error"}")
-            }
-    }
-
-    private fun fetchAndParseOne(request: PreparedReportRequest, index: Int, total: Int): JSONObject {
-        val row = request.row
-        return runCatching {
-            validateHelperSettings()
-            log("Fetching selected report ${index + 1}/$total")
-            val transient = request.transientArg
-            val url = request.directUrl
-            val response = fetchWithWebViewCookies(url)
-            val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
-            if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
-            if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
-            log("Parsing report ${index + 1}/$total")
-            val payload = JSONObject()
-                .put("report_id", safeReportKey(transient, row))
-                .put("report_name", row.optString("report_name"))
-                .put("date_sent", row.optString("date_sent"))
-                .put("source_url", SafeUrl.hostPath(url))
-                .put("content_type", contentType(response.contentType))
-                .put("pdf_base64", Base64.encodeToString(response.bytes, Base64.NO_WRAP))
-            helper().parseReport(payload)
-        }.getOrElse {
-            errorReport(row, it.message ?: "direct fetch failed")
+        } catch (cancelled: CancellationException) {
+            setState(AppState.HELPER_READY, "Processing stopped. Completed results were retained.")
+            throw cancelled
+        } catch (error: Exception) {
+            setState(AppState.ERROR, error.message ?: "Report processing failed")
+        } finally {
+            if (activeProcessingJob == coroutineContext[Job]) activeProcessingJob = null
         }
     }
 
+    private suspend fun processBulk(prepared: List<PreparedReportRequest>): List<Result<ParsedReport>> = coroutineScope {
+        val semaphore = Semaphore(2)
+        prepared.mapIndexed { index, request ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    ensureActive()
+                    try {
+                        Result.success(fetchAndParseOne(request, index, prepared.size))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        Result.failure(error)
+                    }
+                }
+            }
+        }.awaitAll()
+    }
+
+    private suspend fun fetchAndParseOne(request: PreparedReportRequest, index: Int, total: Int): ParsedReport {
+        val row = request.row
+        log("Fetching selected report ${index + 1}/$total")
+        val transient = request.transientArg
+        val url = request.directUrl
+        val response = fetchWithWebViewCookies(url)
+        val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
+        if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
+        if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
+        val input = ReportInput(
+            reportId = safeReportKey(transient, row),
+            reportName = row.optString("report_name"),
+            dateSent = row.optString("date_sent"),
+            reportType = row.optString("report_type", "other"),
+            contentType = contentType(response.contentType),
+            bytes = response.bytes,
+            safeSource = NimsUrlPolicy.safeSourceForHelper(url)
+        )
+        log("Parsing report ${index + 1}/$total")
+        return when (val parsed = processingRouter.parse(input)) {
+            is ProcessingResult.Success -> parsed.value.copy(warnings = parsed.value.warnings + parsed.warnings)
+            is ProcessingResult.Unsupported -> errorParsedReport(row, parsed.reason)
+            is ProcessingResult.Failure -> errorParsedReport(row, parsed.userMessage)
+        }
+    }
+
+    private fun errorParsedReport(row: JSONObject, error: String): ParsedReport {
+        return ParsedReport(
+            reportId = row.optString("report_id", "error"),
+            reportName = row.optString("report_name"),
+            dateSent = row.optString("date_sent"),
+            reportType = row.optString("report_type", "other"),
+            warnings = listOf(error),
+            processorName = "none"
+        )
+    }
+
+    private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "error" else "parsed").put("notes", report.warnings.joinToString("; "))) } })
+        .put("interpretation", JSONArray(text.lines()))
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -426,24 +515,28 @@ class MainActivity : ComponentActivity() {
             setRequestProperty("User-Agent", webViewUserAgent)
             setRequestProperty("Accept", "application/pdf,text/html,text/plain,*/*")
         }
-        val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
-        val bytes = stream?.use { input ->
-            val out = java.io.ByteArrayOutputStream()
-            val buffer = ByteArray(8192)
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                total += read
-                if (total > MAX_REPORT_BYTES) throw IllegalStateException("Report response exceeded 25 MB")
-                out.write(buffer, 0, read)
+        try {
+            val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
+            val bytes = stream?.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_FETCHED_REPORT_BYTES) throw IllegalStateException("Report response exceeded 25 MB")
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            } ?: ByteArray(0)
+            if (connection.responseCode >= 400) {
+                throw IllegalStateException("NIMS report fetch returned ${connection.responseCode} (${contentType(connection.contentType.orEmpty())})")
             }
-            out.toByteArray()
-        } ?: ByteArray(0)
-        if (connection.responseCode >= 400) {
-            throw IllegalStateException("NIMS report fetch returned ${connection.responseCode} (${contentType(connection.contentType.orEmpty())})")
+            return ReportFetchResult(connection.contentType.orEmpty(), connection.responseCode, SafeUrl.hostPath(connection.url.toString()), bytes)
+        } finally {
+            connection.disconnect()
         }
-        return ReportFetchResult(connection.contentType.orEmpty(), connection.responseCode, SafeUrl.hostPath(connection.url.toString()), bytes)
     }
 
     private fun contentType(value: String): String = value.substringBefore(";").ifBlank { "application/octet-stream" }
@@ -459,8 +552,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun validateHelperSettings() {
+        if (processingMode == ProcessingMode.LOCAL_ONLY) return
         HelperSettingsValidator.normalizeUrl(settings.helperUrl())
-        if (settings.apiKey().isBlank()) throw IllegalStateException("Set Railway helper API key first.")
+        if (settings.apiKey().isBlank()) throw IllegalStateException("Configure Railway helper for PDF and unsupported reports.")
     }
 
     private fun evaluateCore(expression: String, callback: (JSONObject) -> Unit) {
@@ -520,6 +614,13 @@ class MainActivity : ComponentActivity() {
         uiSummary = uiSummary?.copy(editableNote = value)
     }
 
+    private fun updateProcessingMode(value: ProcessingMode) {
+        processingMode = value
+        settings.saveProcessingMode(value)
+        val initial = InitialStatePolicy.derive(value, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+        setState(initial.state, initial.message)
+    }
+
     private fun cleanSummaryText(): String {
         return ClinicalSummaryFormatter.cleanText((uiSummary ?: UiSummary()).copy(editableNote = physicianNote))
     }
@@ -557,7 +658,7 @@ class MainActivity : ComponentActivity() {
 
     private fun log(message: String) {
         runOnUiThread {
-            logText = (logText + "\n" + message).trim().takeLast(8000)
+            logText = safeLogBuffer.add(message)
         }
     }
 
@@ -565,13 +666,32 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             appStateValue = state
             statusMessage = message
-            logText = (logText + "\n${state.name}: $message").trim().takeLast(8000)
+            logText = safeLogBuffer.add("${state.name}: $message")
         }
+    }
+
+    fun cancelActiveProcessing() {
+        activeProcessingJob?.cancel()
+    }
+
+    override fun onDestroy() {
+        activeProcessingJob?.cancel()
+        runCatching {
+            if (::webView.isInitialized) {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.webChromeClient = null
+                webView.webViewClient = WebViewClient()
+                webView.removeAllViews()
+                webView.destroy()
+            }
+        }
+        super.onDestroy()
     }
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
-        private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
+        private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
     }
 }
 
@@ -599,6 +719,8 @@ private fun NimsFastSummaryApp(
     onTabSelected: (Int) -> Unit,
     helperUrl: String,
     helperKey: String,
+    processingMode: ProcessingMode,
+    onProcessingModeChange: (ProcessingMode) -> Unit,
     onHelperUrlChange: (String) -> Unit,
     onHelperKeyChange: (String) -> Unit,
     showSettings: Boolean,
@@ -619,6 +741,7 @@ private fun NimsFastSummaryApp(
     onFast: () -> Unit,
     onCulturesOnly: () -> Unit,
     onFull: () -> Unit,
+    onCancelProcessing: () -> Unit,
     summary: UiSummary?,
     physicianNote: String,
     onPhysicianNoteChange: (String) -> Unit,
@@ -665,6 +788,7 @@ private fun NimsFastSummaryApp(
                 onFast = onFast,
                 onCulturesOnly = onCulturesOnly,
                 onFull = onFull,
+                onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
             1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
@@ -686,6 +810,8 @@ private fun NimsFastSummaryApp(
         SettingsDialog(
             helperUrl = helperUrl,
             helperKey = helperKey,
+            processingMode = processingMode,
+            onProcessingModeChange = onProcessingModeChange,
             onHelperUrlChange = onHelperUrlChange,
             onHelperKeyChange = onHelperKeyChange,
             onSave = onSaveHelper,
@@ -734,6 +860,7 @@ private fun NimsWebViewScreen(
     onFast: () -> Unit,
     onCulturesOnly: () -> Unit,
     onFull: () -> Unit,
+    onCancelProcessing: () -> Unit,
     logText: String
 ) {
     Column(modifier) {
@@ -751,6 +878,7 @@ private fun NimsWebViewScreen(
             item { Button(onClick = onFast) { Text("Fast") } }
             item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
             item { Button(onClick = onFull) { Text("Full") } }
+            if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
         if (logText.isNotBlank()) {
@@ -896,6 +1024,8 @@ private fun SummaryScreen(
 private fun SettingsDialog(
     helperUrl: String,
     helperKey: String,
+    processingMode: ProcessingMode,
+    onProcessingModeChange: (ProcessingMode) -> Unit,
     onHelperUrlChange: (String) -> Unit,
     onHelperKeyChange: (String) -> Unit,
     onSave: () -> Unit,
@@ -912,11 +1042,30 @@ private fun SettingsDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Railway helper URL") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
+                Text("Processing mode", fontWeight = FontWeight.Bold)
+                ProcessingMode.values().forEach { mode ->
+                    OutlinedButton(onClick = { onProcessingModeChange(mode) }) {
+                        Text(
+                            (if (mode == processingMode) "✓ " else "") + when (mode) {
+                                ProcessingMode.AUTO -> "Automatic"
+                                ProcessingMode.LOCAL_ONLY -> "On-device only"
+                                ProcessingMode.REMOTE_ONLY -> "Railway only"
+                            }
+                        )
+                    }
+                }
+                Text(
+                    when (processingMode) {
+                        ProcessingMode.AUTO -> "Processes supported text/HTML reports on-device and uses Railway for PDF or unsupported reports."
+                        ProcessingMode.LOCAL_ONLY -> "Keeps report processing on this device. PDF reports are not yet supported."
+                        ProcessingMode.REMOTE_ONLY -> "Uses the configured Railway helper for all report parsing and summaries."
+                    }
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onTest) { Text("Test helper") }
-                    OutlinedButton(onClick = onClear) { Text("Clear") }
+                    OutlinedButton(onClick = onClear) { Text("Clear helper") }
                 }
-                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content for parsing only.")
+                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content only when remote processing is used.")
             }
         }
     )
@@ -928,7 +1077,7 @@ private fun StatusCard(state: AppState) {
         Text("Next action", fontWeight = FontWeight.Bold)
         Text(
             when (state) {
-                AppState.NEED_HELPER_SETTINGS -> "Add Railway helper URL and API key."
+                AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
                 AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."

@@ -91,7 +91,7 @@ The mobile app scaffold lives under `mobile/android/`. It is a single-activity K
 5. Open `CR No Wise Result Report Printing New`.
 6. Run `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
 
-The Android app must use the active WebView/NIMS session for report fetching and must not store NIMS credentials or bypass captcha/OTP/session controls.
+The Android app must use the active WebView/NIMS session for report fetching and must not store NIMS credentials or bypass captcha/OTP/session controls. Android now supports three processing modes: Automatic, On-device only, and Railway only. Automatic processes supported HTML/text reports on-device and uses Railway for PDFs or unsupported reports. On-device only rejects PDFs because this PR does not add local PDF/OCR support. Railway only preserves the existing helper behavior. NIMS cookies remain on-device; remote payloads contain report content only when Railway processing is used, a sanitized source path without query/fragment, and no cookies or credentials. Remote Android uploads are capped at about 18 MB of binary report data before Base64 encoding so the JSON request stays below a 25 MB Railway body limit.
 
 Android build steps:
 
@@ -192,3 +192,10 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
 
+## Android local-first processing
+
+The Android app now has a local-first processing foundation with Automatic, On-device only, and Railway only modes. HTML/text reports can be processed on-device where supported. PDF processing remains Railway-backed in Automatic mode; this is not full offline/local PDF support. NIMS login remains manual, NIMS credentials are not stored, NIMS cookies remain on-device, and cookies are not uploaded to Railway. Railway receives report content only when remote processing is used. Always verify generated summaries with source NIMS reports before clinical decisions.
+
+### Android PR #20 local-first corrections
+
+Processing mode now controls the real Android report path: `LOCAL_ONLY` avoids Railway entirely, `AUTO` uses on-device parsing for supported text/HTML and Railway for PDFs or unsupported reports, and `REMOTE_ONLY` keeps the Railway helper path. Login/session/captcha pages are not sent to Railway. PDF/OCR local support is still not claimed.
