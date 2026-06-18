@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
     private var mappingValidated = false
     private var webViewUserAgent = ""
 
-    private var appStateValue by mutableStateOf(AppState.NEED_HELPER_SETTINGS)
+    private var appStateValue by mutableStateOf(AppState.HELPER_READY)
     private var statusMessage by mutableStateOf("Open NIMS and login manually.")
     private var currentPage by mutableStateOf("NIMS login")
     private var loadProgress by mutableIntStateOf(0)
@@ -120,14 +120,15 @@ class MainActivity : ComponentActivity() {
     private var uiSummary by mutableStateOf<UiSummary?>(null)
     private var sanitizedSummaryText by mutableStateOf("")
     private var physicianNote by mutableStateOf("")
-    private var processingMode by mutableStateOf(ProcessingMode.AUTO)
+    private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
         ProcessingRouter(
             local = LocalTextReportProcessor(),
             remote = RemoteReportProcessor { helper() },
-            modeProvider = { processingMode }
+            modeProvider = { processingMode },
+            remoteConfigured = { settings.helperUrl().isNotBlank() && settings.hasApiKey() }
         )
     }
 
@@ -275,7 +276,7 @@ class MainActivity : ComponentActivity() {
         }
         helperKeyInput = ""
         showSettings = false
-        setState(AppState.HELPER_READY, "Helper settings saved. Login to NIMS manually.")
+        setState(AppState.HELPER_READY, "Settings saved. Login to NIMS manually.")
     }
 
     private fun clearHelperSettings() {
@@ -1040,14 +1041,16 @@ private fun SettingsDialog(
         title = { Text("Settings and security") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Railway helper URL") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
+                Text("Railway settings (optional / advanced)", fontWeight = FontWeight.Bold)
+                Text("Leave blank for fully local supported text/HTML processing.")
+                OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Optional Railway helper URL") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "Optional API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
                 Text("Processing mode", fontWeight = FontWeight.Bold)
                 ProcessingMode.values().forEach { mode ->
                     OutlinedButton(onClick = { onProcessingModeChange(mode) }) {
                         Text(
                             (if (mode == processingMode) "✓ " else "") + when (mode) {
-                                ProcessingMode.AUTO -> "Automatic"
+                                ProcessingMode.AUTO -> "Automatic with Railway fallback"
                                 ProcessingMode.LOCAL_ONLY -> "On-device only"
                                 ProcessingMode.REMOTE_ONLY -> "Railway only"
                             }
@@ -1057,7 +1060,7 @@ private fun SettingsDialog(
                 Text(
                     when (processingMode) {
                         ProcessingMode.AUTO -> "Processes supported text/HTML reports on-device and uses Railway for PDF or unsupported reports."
-                        ProcessingMode.LOCAL_ONLY -> "Keeps report processing on this device. PDF reports are not yet supported."
+                        ProcessingMode.LOCAL_ONLY -> "On-device processing. Keeps report processing on this device. PDF reports are not yet supported."
                         ProcessingMode.REMOTE_ONLY -> "Uses the configured Railway helper for all report parsing and summaries."
                     }
                 )
@@ -1065,6 +1068,7 @@ private fun SettingsDialog(
                     OutlinedButton(onClick = onTest) { Text("Test helper") }
                     OutlinedButton(onClick = onClear) { Text("Clear helper") }
                 }
+                Text("On-device processing")
                 Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content only when remote processing is used.")
             }
         }
@@ -1077,7 +1081,7 @@ private fun StatusCard(state: AppState) {
         Text("Next action", fontWeight = FontWeight.Bold)
         Text(
             when (state) {
-                AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key."
+                AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
                 AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."

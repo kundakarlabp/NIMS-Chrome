@@ -35,6 +35,15 @@ class LocalTextReportProcessorTest {
         assertTrue(result.any { it.growthStatus == GrowthStatus.GROWTH_DETECTED && it.organism?.contains("coli", true) == true })
         assertTrue(result.any { it.growthStatus == GrowthStatus.NO_GROWTH && it.specimen?.contains("Urine", true) == true })
     }
+
+    @Test fun parsesCommonPanelsAndSusceptibilityAbbreviations() {
+        val report = success("RBC 4.5 million/cumm\nPCV 36 %\nMCV 82 fL\neGFR 95 mL/min\nGGT 44 U/L\nTotal Protein 6.8 g/dL\naPTT 32 sec\nBlood Culture\nOrganism: Escherichia coli\nCeftriaxone R\nMeropenem S")
+        assertTrue(report.labs.any { it.canonicalCode == "RBC" })
+        assertTrue(report.labs.any { it.canonicalCode == "EGFR" })
+        assertTrue(report.labs.any { it.canonicalCode == "GGT" })
+        assertTrue(report.labs.any { it.canonicalCode == "APTT" })
+        assertTrue(report.cultures.flatMap { it.susceptibility }.any { it.antibiotic.contains("Meropenem", true) && it.interpretation == "Susceptible" })
+    }
     private fun success(text: String): ParsedReport = (runSuspend { LocalTextReportProcessor().parseReport(input(text)) } as ProcessingResult.Success).value
     private fun input(text: String, type: String = "text/plain") = ReportInput("r1", "Test", "2026-01-01", "lab", type, text.toByteArray())
 }

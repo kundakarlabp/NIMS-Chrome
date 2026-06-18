@@ -44,8 +44,19 @@ class ProcessingRouterTest {
     }
     @Test fun localOnlyPdfDoesNotCallRemote() {
         val local = FakeProcessor(ProcessingResult.Unsupported("unsupported")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.LOCAL_ONLY }.parse(input(type = "application/pdf")) }
-        assertTrue(result is ProcessingResult.Unsupported); assertEquals(0, remote.parseCalls)
+        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.LOCAL_ONLY }.parse(input(type = "application/octet-stream", bytes = "%PDF-1.4".toByteArray())) }
+        assertTrue(result is ProcessingResult.Unsupported); assertTrue((result as ProcessingResult.Unsupported).reason.contains("PDF local parsing is not yet supported")); assertEquals(0, remote.parseCalls)
+    }
+
+    @Test fun autoWithoutHelperProcessesLocalTextButFailsPdfWithoutRemote() {
+        val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
+        val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
+        val router = ProcessingRouter(local, remote, { ProcessingMode.AUTO }, remoteConfigured = { false })
+        assertTrue(runSuspend { router.parse(input()) } is ProcessingResult.Success)
+        val pdf = runSuspend { router.parse(input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray())) }
+        assertTrue(pdf is ProcessingResult.Failure)
+        assertTrue((pdf as ProcessingResult.Failure).userMessage.contains("Configure Railway fallback"))
+        assertEquals(0, remote.parseCalls)
     }
     @Test fun remoteOnlyNeverCallsLocal() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
@@ -58,7 +69,7 @@ class ProcessingRouterTest {
         override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> { parseCalls++; return result }
         override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = ProcessingResult.Success(ProcessingSummary("ok", reports.size), name)
     }
-    private fun input(type: String = "text/plain") = ReportInput("r", "Report", "2026-01-01", "lab", type, "Hemoglobin 1".toByteArray())
+    private fun input(type: String = "text/plain", bytes: ByteArray = "Hemoglobin 1".toByteArray()) = ReportInput("r", "Report", "2026-01-01", "lab", type, bytes)
     private fun parsed(name: String) = ParsedReport("r", "Report", "2026-01-01", "lab", processorName = name)
 }
 
