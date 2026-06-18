@@ -3,49 +3,66 @@ package org.kundakarlab.nimsfastsummarymobile.domain.processing
 import org.junit.Assert.*
 import org.junit.Test
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
+import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalSummaryBuilder
 import kotlin.coroutines.*
 
 class ProcessingRouterTest {
     @Test fun autoLocalSuccessDoesNotCallRemote() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input()) }
+        val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertTrue(result is ProcessingResult.Success); assertEquals(1, local.parseCalls); assertEquals(0, remote.parseCalls)
     }
     @Test fun autoUnsupportedFallsBackOnceWithWarning() {
         val local = FakeProcessor(ProcessingResult.Unsupported("unsupported"))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input()) }
+        val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertTrue(result is ProcessingResult.Success); assertEquals(1, remote.parseCalls); assertTrue((result as ProcessingResult.Success).warnings.any { it.contains("fallback", true) })
     }
     @Test fun autoEligibleFailureFallsBackOnce() {
         val local = FakeProcessor(ProcessingResult.Failure("incomplete", "LOCAL_PARSE_INCOMPLETE", true))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input()) }
+        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertEquals(1, local.parseCalls); assertEquals(1, remote.parseCalls)
     }
     @Test fun autoLoginFailureDoesNotFallback() {
         val local = FakeProcessor(ProcessingResult.Failure("login", "LOCAL_LOGIN_HTML", false))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input()) }
+        val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertTrue(result is ProcessingResult.Failure); assertEquals(0, remote.parseCalls)
     }
     @Test fun autoCaptchaFailureDoesNotFallback() {
         val local = FakeProcessor(ProcessingResult.Failure("captcha", "LOCAL_CAPTCHA_PAGE", false))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input()) }
+        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertEquals(0, remote.parseCalls)
     }
     @Test fun autoPdfCallsRemoteOnly() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        runSuspend { ProcessingRouter(local, remote) { ProcessingMode.AUTO }.parse(input(type = "application/pdf")) }
+        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input(type = "application/pdf")) }
         assertEquals(0, local.parseCalls); assertEquals(1, remote.parseCalls)
     }
     @Test fun localOnlyPdfDoesNotCallRemote() {
         val local = FakeProcessor(ProcessingResult.Unsupported("unsupported")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        val result = runSuspend { ProcessingRouter(local, remote) { ProcessingMode.LOCAL_ONLY }.parse(input(type = "application/octet-stream", bytes = "%PDF-1.4".toByteArray())) }
+        val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.LOCAL_ONLY }).parse(input(type = "application/octet-stream", bytes = "%PDF-1.4".toByteArray())) }
         assertTrue(result is ProcessingResult.Unsupported); assertTrue((result as ProcessingResult.Unsupported).reason.contains("PDF local parsing is not yet supported")); assertEquals(0, remote.parseCalls)
+    }
+
+    @Test fun localOnlyPdfUnsupportedAppearsInSourceReports() {
+        val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
+        val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
+        val input = input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray()).copy(reportName = "PDF Report", dateSent = "02-06-2026")
+        val parsed = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.LOCAL_ONLY }).parse(input) }
+        assertTrue(parsed is ProcessingResult.Unsupported)
+        val unsupportedReport = ParsedReport(input.reportId, input.reportName, input.dateSent, input.reportType, warnings = listOf((parsed as ProcessingResult.Unsupported).reason), processorName = "none")
+        val sourceReport = LocalSummaryBuilder().build(listOf(unsupportedReport), SummaryMode.FULL).helperJson!!.getJSONArray("source_reports").getJSONObject(0)
+        assertEquals("PDF Report", sourceReport.getString("report_name"))
+        assertEquals("02-06-2026", sourceReport.getString("date_sent"))
+        assertEquals("unsupported", sourceReport.getString("status"))
+        assertEquals("PDF local parsing is not yet supported. Open the source report manually.", sourceReport.getString("notes"))
+        assertEquals("Open source report in NIMS", sourceReport.getString("action"))
+        assertEquals(0, remote.parseCalls)
     }
 
     @Test fun autoWithoutHelperProcessesLocalTextButFailsPdfWithoutRemote() {
@@ -60,7 +77,7 @@ class ProcessingRouterTest {
     }
     @Test fun remoteOnlyNeverCallsLocal() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        runSuspend { ProcessingRouter(local, remote) { ProcessingMode.REMOTE_ONLY }.parse(input()) }
+        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.REMOTE_ONLY }).parse(input()) }
         assertEquals(0, local.parseCalls); assertEquals(1, remote.parseCalls)
     }
     private class FakeProcessor(private val result: ProcessingResult<ParsedReport>) : ReportProcessor {
