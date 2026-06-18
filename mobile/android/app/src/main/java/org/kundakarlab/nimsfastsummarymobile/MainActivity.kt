@@ -72,6 +72,8 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.ParsedReport
 import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
 import org.kundakarlab.nimsfastsummarymobile.data.processing.RemoteReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
+import org.kundakarlab.nimsfastsummarymobile.data.processing.OnDeviceReportProcessor
+import org.kundakarlab.nimsfastsummarymobile.data.pdf.PdfBoxAndroidTextExtractor
 import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
@@ -125,7 +127,11 @@ class MainActivity : ComponentActivity() {
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
         ProcessingRouter(
-            local = LocalTextReportProcessor(),
+            local = OnDeviceReportProcessor(
+                textProcessor = LocalTextReportProcessor(),
+                pdfExtractor = PdfBoxAndroidTextExtractor(applicationContext),
+                onPdfProgress = { completed, total -> setState(AppState.FETCHING, "Extracting PDF page $completed of $total...") }
+            ),
             remote = RemoteReportProcessor { helper() },
             modeProvider = { processingMode },
             remoteConfigured = { settings.helperUrl().isNotBlank() && settings.hasApiKey() }
@@ -480,6 +486,7 @@ class MainActivity : ComponentActivity() {
             bytes = response.bytes,
             safeSource = NimsUrlPolicy.safeSourceForHelper(url)
         )
+        if (input.contentType.contains("pdf", true) || input.bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) setState(AppState.FETCHING, "Extracting PDF text on-device…")
         log("Parsing report ${index + 1}/$total")
         return when (val parsed = processingRouter.parse(input)) {
             is ProcessingResult.Success -> parsed.value.copy(warnings = parsed.value.warnings + parsed.warnings)
@@ -1038,7 +1045,7 @@ private fun SettingsDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Railway settings (optional / advanced)", fontWeight = FontWeight.Bold)
-                Text("Leave blank for fully local supported text/HTML processing.")
+                Text("Leave blank for fully local supported text/HTML and text-based PDF processing.")
                 OutlinedTextField(helperUrl, onHelperUrlChange, label = { Text("Optional Railway helper URL") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(helperKey, onHelperKeyChange, label = { Text(if (helperKey.isBlank()) "Optional API key" else "API key entered") }, modifier = Modifier.fillMaxWidth())
                 Text("Processing mode", fontWeight = FontWeight.Bold)
@@ -1055,8 +1062,8 @@ private fun SettingsDialog(
                 }
                 Text(
                     when (processingMode) {
-                        ProcessingMode.AUTO -> "Processes supported text/HTML reports on-device and uses Railway for PDF or unsupported reports."
-                        ProcessingMode.LOCAL_ONLY -> "On-device processing. Keeps report processing on this device. PDF reports are not yet supported."
+                        ProcessingMode.AUTO -> "Processes supported text/HTML/PDF reports on-device first; optional Railway fallback is legacy advanced behavior."
+                        ProcessingMode.LOCAL_ONLY -> "Reports are fetched and processed on this device. NIMS credentials and cookies are not uploaded."
                         ProcessingMode.REMOTE_ONLY -> "Uses the configured Railway helper for all report parsing and summaries."
                     }
                 )
@@ -1065,7 +1072,7 @@ private fun SettingsDialog(
                     OutlinedButton(onClick = onClear) { Text("Clear helper") }
                 }
                 Text("On-device processing")
-                Text("NIMS login is manual. NIMS credentials are not stored. NIMS cookies stay on this phone. Railway receives report content only when remote processing is used.")
+                Text("Reports are fetched and processed on this device. NIMS credentials and cookies are not uploaded.")
             }
         }
     )

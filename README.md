@@ -193,13 +193,28 @@ See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, cr
 
 ## Android local-first processing
 
-The Android app now has a local-first processing foundation with Automatic, On-device only, and Railway only modes. HTML/text reports can be processed on-device where supported. PDF processing remains Railway-backed in Automatic mode; this is not full offline/local PDF support. NIMS login remains manual, NIMS credentials are not stored, NIMS cookies remain on-device, and cookies are not uploaded to Railway. Railway receives report content only when remote processing is used. Always verify generated summaries with source NIMS reports before clinical decisions.
+The Android app now has a local-first processing foundation with Automatic, On-device only, and Railway only modes. HTML/text reports and text-based PDFs can be processed on-device where supported. Image-only PDFs remain unsupported because OCR is not included. NIMS login remains manual, NIMS credentials are not stored, NIMS cookies remain on-device, and cookies are not uploaded to Railway. Railway is optional legacy/advanced behavior only when explicitly selected. Always verify generated summaries with source NIMS reports before clinical decisions.
 
 ### Android PR #20 local-first corrections
 
-Processing mode now controls the real Android report path: `LOCAL_ONLY` avoids Railway entirely, `AUTO` uses on-device parsing for supported text/HTML and Railway for PDFs or unsupported reports, and `REMOTE_ONLY` keeps the Railway helper path. Login/session/captcha pages are not sent to Railway. PDF/OCR local support is still not claimed.
+Processing mode now controls the real Android report path: `LOCAL_ONLY` avoids Railway entirely, `AUTO` uses on-device parsing for supported text/HTML/PDF reports first and only uses Railway as optional legacy fallback when configured, and `REMOTE_ONLY` keeps the Railway helper path. Login/session/captcha pages are not sent to Railway. OCR support is not claimed.
 
 
 ### Android local-only default
 
-The Android app defaults to **On-device only** and can run without Railway, helper URL, or API key. Supported text/HTML reports are fetched with WebView cookies and parsed locally; cookies never leave the device. Railway is optional/advanced for **Automatic with Railway fallback** or **Railway only** modes. PDF local parsing is not yet supported; local-only PDF reports are shown as unsupported with: “PDF local parsing is not yet supported. Open the source report manually.” NIMS login remains manual, credentials are not stored, raw reports are not persisted, and generated output must be verified against source NIMS reports.
+The Android app defaults to **On-device only** and can run without Railway, helper URL, or API key. Supported text/HTML reports and text-based PDFs are fetched with WebView cookies and parsed locally; cookies never leave the device. Railway is optional/advanced for **Automatic with Railway fallback** or **Railway only** modes. Image-only PDFs are shown as unsupported with an OCR-not-enabled message. NIMS login remains manual, credentials are not stored, raw reports are not persisted, and generated output must be verified against source NIMS reports.
+
+## Android zero-cost local PDF workflow
+
+The Android app defaults to **On-device only**. NIMS login remains manual in the WebView, shared `shared/nims-web/nimsReportCore.js` discovers report rows/mapping, and Android fetches reports with the active WebView cookie session. HTML/text reports and text-based PDFs are processed on-device; image-only PDFs are shown as unsupported because OCR is not included. No Railway service, backend, API key, cloud database, or external AI service is required for normal Android use. NIMS credentials are not stored, cookies are used only for approved NIMS HTTPS report requests, raw reports are not persisted, and summaries must be verified against source NIMS reports before clinical decisions.
+
+### Download the debug APK from GitHub Actions
+
+1. Open GitHub → **Actions**.
+2. Select the latest successful **CI** run.
+3. Open **Artifacts**.
+4. Download `nims-fast-summary-debug-apk`.
+5. Extract the ZIP and install `app-debug.apk` on the Android device.
+6. If prompted, enable Android **Install unknown apps** permission for the browser/file manager used to open the APK.
+
+The debug APK is unsigned for store distribution and is intended for manual review/testing only.

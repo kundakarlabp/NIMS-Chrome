@@ -56,6 +56,14 @@ The Android app can run with no Railway service configured. The default processi
 
 Railway settings are optional/advanced. **Automatic with Railway fallback** uses on-device parsing first and requires Railway only for PDFs or unsupported reports. **Railway only** requires a helper URL and API key.
 
-PDF local parsing is not yet supported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “PDF local parsing is not yet supported. Open the source report manually.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
+Text-based PDF local parsing is supported; image-only PDFs remain unsupported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “Text-based PDF local parsing is supported; image-only PDFs remain unsupported. Open the source report manually.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
 
 Always verify generated summaries against the source reports in NIMS before clinical decisions.
+
+## Local text-based PDF processing
+
+Android now routes fetched report bytes through the on-device processor in the default **On-device only** mode. Text/HTML reports are parsed locally, and text-based PDF reports are extracted locally with PdfBox-Android before entering the same conservative text parsers. Image-only, encrypted, corrupt, oversized, or excessive-page PDFs are displayed as visible unsupported/failed source-report rows with controlled messages and an **Open source report in NIMS** action label. OCR is not included.
+
+Reports are fetched and processed on this device. NIMS credentials and cookies are not uploaded.
+
+The app can be installed from GitHub Actions: open the latest successful CI run, download the `nims-fast-summary-debug-apk` artifact, extract `app-debug.apk`, and install it after enabling Android's **Install unknown apps** permission if required.

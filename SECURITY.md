@@ -54,3 +54,9 @@ The Android processing router blocks login, session-expired, captcha and OTP pag
 ### Android remote upload and popup limits
 
 Android remote processing encodes report bytes once under the Railway-compatible `pdf_base64` field and checks the binary report size before Base64 allocation. Reports larger than approximately 18 MB are rejected client-side to stay below a 25 MB Railway request-body limit after Base64 and JSON overhead. Source URLs sent to the helper are sanitized to approved NIMS HTTPS host/path only and exclude query strings, fragments, transient filenames, cookies, tokens, and credentials. Popup navigation is restricted to approved NIMS HTTPS hosts and paths, and temporary popup WebViews are destroyed after accepted or rejected navigation.
+
+## Android encrypted local clinical data
+
+Android stores the latest summary JSON and physician note encrypted with Android Keystore AES/GCM under a clinical-data key alias separate from the helper API-key alias. Existing plaintext `last_summary_json` and `physician_note` values are migrated once and the plaintext keys are removed. `android:allowBackup="false"` remains required.
+
+Text-based PDFs are extracted on-device only. Raw PDF bytes are transient, temporary files are created under app cache with non-identifying names and deleted after extraction, and extracted text is not persisted. Image-only PDFs are not OCR processed. No server, Railway deployment, cloud database, external AI service, NIMS credential storage, or cookie upload is required for normal Android use.

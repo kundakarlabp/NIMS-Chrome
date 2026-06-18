@@ -34,7 +34,7 @@ NIMS credentials are not stored. NIMS cookies remain on-device and are used only
 
 ## Limitations
 
-- Local PDF parsing is not implemented.
+- Image-only PDF OCR is not implemented.
 - No OCR is included.
 - Local parsing is conservative and may mark unfamiliar formats unsupported.
 - Source NIMS reports must be verified before clinical decisions.
@@ -82,3 +82,9 @@ Android now defaults to `LOCAL_ONLY` / **On-device only**. Startup does not requ
 `LOCAL_ONLY` must not instantiate helper requests for report parsing or summaries. It parses supported text/HTML reports locally and returns the exact unsupported PDF message without upload. Cookies remain only on-device for NIMS fetches, raw report content is processed transiently, full URLs/query strings are not logged, and source reports must be verified manually.
 
 TODO: add a future PdfBox-Android text-extraction component behind the local processor for PDFs after parser parity tests with de-identified PDFs. OCR is intentionally out of scope.
+
+## On-device PDF architecture
+
+`ProcessingRouter` sends `LOCAL_ONLY` work to the on-device processor and does not call the remote helper. `OnDeviceReportProcessor` delegates HTML/text directly to `LocalTextReportProcessor`; for PDFs it uses `PdfBoxAndroidTextExtractor`, normalizes extracted text, then passes UTF-8 text back through the existing conservative local parsers. PDF bytes are written only to a random temporary cache file during extraction and deleted in `finally`; raw PDF bytes, raw HTML, extracted raw text, full URLs, query strings, cookies, and transient filenames are not persisted.
+
+PdfBox-Android is pinned as `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0). PDF extraction is limited to one document at a time and enforces byte, page, and extracted-text safety limits. Image-only PDFs remain unsupported because OCR was not added.

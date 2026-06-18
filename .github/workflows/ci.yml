@@ -30,8 +30,25 @@ jobs:
         working-directory: mobile/android
       - run: ./gradlew assembleDebug
         working-directory: mobile/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nims-fast-summary-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+      - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
+        working-directory: mobile/android
       - run: ./gradlew lintDebug
         working-directory: mobile/android
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-test-and-lint-reports
+          path: |
+            mobile/android/app/build/reports/tests/
+            mobile/android/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+          retention-days: 14
 
   docker:
     runs-on: ubuntu-latest

@@ -37,20 +37,20 @@ class ProcessingRouterTest {
         runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input()) }
         assertEquals(0, remote.parseCalls)
     }
-    @Test fun autoPdfCallsRemoteOnly() {
+    @Test fun autoPdfLocalSuccessDoesNotCallRemote() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
-        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input(type = "application/pdf")) }
-        assertEquals(0, local.parseCalls); assertEquals(1, remote.parseCalls)
+        runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }).parse(input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray())) }
+        assertEquals(1, local.parseCalls); assertEquals(0, remote.parseCalls)
     }
-    @Test fun localOnlyPdfDoesNotCallRemote() {
-        val local = FakeProcessor(ProcessingResult.Unsupported("unsupported")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
+    @Test fun localOnlyPdfCallsLocalAndDoesNotCallRemote() {
+        val local = FakeProcessor(ProcessingResult.Unsupported("This PDF appears to contain images without extractable text. OCR is not enabled. Open the source report in NIMS.")); val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
         val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.LOCAL_ONLY }).parse(input(type = "application/octet-stream", bytes = "%PDF-1.4".toByteArray())) }
-        assertTrue(result is ProcessingResult.Unsupported); assertTrue((result as ProcessingResult.Unsupported).reason.contains("PDF local parsing is not yet supported")); assertEquals(0, remote.parseCalls)
+        assertTrue(result is ProcessingResult.Unsupported); assertTrue((result as ProcessingResult.Unsupported).reason.contains("OCR is not enabled")); assertEquals(1, local.parseCalls); assertEquals(0, remote.parseCalls)
     }
 
     @Test fun localOnlyPdfUnsupportedAppearsInSourceReports() {
-        val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
+        val local = FakeProcessor(ProcessingResult.Unsupported("This PDF appears to contain images without extractable text. OCR is not enabled. Open the source report in NIMS."))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
         val input = input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray()).copy(reportName = "PDF Report", dateSent = "02-06-2026")
         val parsed = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.LOCAL_ONLY }).parse(input) }
@@ -60,19 +60,17 @@ class ProcessingRouterTest {
         assertEquals("PDF Report", sourceReport.getString("report_name"))
         assertEquals("02-06-2026", sourceReport.getString("date_sent"))
         assertEquals("unsupported", sourceReport.getString("status"))
-        assertEquals("PDF local parsing is not yet supported. Open the source report manually.", sourceReport.getString("notes"))
+        assertTrue(sourceReport.getString("notes").contains("OCR is not enabled"))
         assertEquals("Open source report in NIMS", sourceReport.getString("action"))
         assertEquals(0, remote.parseCalls)
     }
 
-    @Test fun autoWithoutHelperProcessesLocalTextButFailsPdfWithoutRemote() {
+    @Test fun autoWithoutHelperProcessesLocalPdfWithoutRemote() {
         val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"))
         val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"))
         val router = ProcessingRouter(local, remote, { ProcessingMode.AUTO }, remoteConfigured = { false })
         assertTrue(runSuspend { router.parse(input()) } is ProcessingResult.Success)
-        val pdf = runSuspend { router.parse(input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray())) }
-        assertTrue(pdf is ProcessingResult.Failure)
-        assertTrue((pdf as ProcessingResult.Failure).userMessage.contains("Configure Railway fallback"))
+        assertTrue(runSuspend { router.parse(input(type = "application/pdf", bytes = "%PDF-1.4".toByteArray())) } is ProcessingResult.Success)
         assertEquals(0, remote.parseCalls)
     }
     @Test fun remoteOnlyNeverCallsLocal() {
