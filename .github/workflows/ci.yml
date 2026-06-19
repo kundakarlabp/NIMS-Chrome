@@ -31,6 +31,15 @@ jobs:
         working-directory: mobile/android
       - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
         working-directory: mobile/android
+      - name: Run instrumented PDF tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          working-directory: mobile/android
+          script: ./gradlew connectedDebugAndroidTest
       - uses: actions/upload-artifact@v4
         with:
           name: nims-fast-summary-debug-apk
@@ -40,9 +49,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: android-test-and-lint-reports
+          name: android-test-lint-and-instrumentation-reports
           path: |
             mobile/android/app/build/reports/tests/
+            mobile/android/app/build/reports/androidTests/
+            mobile/android/app/build/outputs/androidTest-results/
             mobile/android/app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
           retention-days: 14

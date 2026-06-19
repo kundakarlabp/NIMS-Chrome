@@ -12,12 +12,15 @@ import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.OnDeviceReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import java.io.ByteArrayOutputStream
 
+@RunWith(AndroidJUnit4::class)
 class PdfBoxAndroidTextExtractorInstrumentedTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 

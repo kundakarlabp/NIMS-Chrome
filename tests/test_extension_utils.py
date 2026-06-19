@@ -623,7 +623,7 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     policy = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "security" / "NimsUrlPolicy.kt").read_text(encoding="utf-8")
     assert 'scheme.equals("https", ignoreCase = true)' in policy
     assert 'allowedHosts' in policy
-    assert 'path.startsWith(it)' in policy
+    assert 'rawPath.startsWith(it)' in policy
     assert "http://" not in template
 
 

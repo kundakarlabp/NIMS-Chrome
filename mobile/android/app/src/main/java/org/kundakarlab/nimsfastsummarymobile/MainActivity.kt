@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
-        clearWebViewSession(coldStartOnly = true)
+        clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
         webViewUserAgent = webView.settings.userAgentString
         val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
         setState(initial.state, initial.message)
@@ -200,7 +200,6 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-        webView.loadUrl(NIMS_LOGIN_URL)
         webView.requestFocus()
     }
 
@@ -295,20 +294,26 @@ class MainActivity : ComponentActivity() {
         cancelActiveProcessing()
         mapping = null
         mappingValidated = false
-        clearWebViewSession(coldStartOnly = false)
-        webView.loadUrl(NIMS_LOGIN_URL)
-        setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
+        clearWebViewSession(coldStartOnly = false) {
+            webView.loadUrl(NIMS_LOGIN_URL)
+            setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
+        }
     }
 
-    private fun clearWebViewSession(coldStartOnly: Boolean) {
-        if (coldStartOnly && webViewSessionCleaned) return
+    private fun clearWebViewSession(coldStartOnly: Boolean, onComplete: () -> Unit = {}) {
+        if (coldStartOnly && webViewSessionCleaned) {
+            onComplete()
+            return
+        }
         webViewSessionCleaned = true
-        CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().flush()
-        WebStorage.getInstance().deleteAllData()
-        webView.clearCache(true)
-        webView.clearHistory()
-        webView.clearFormData()
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush()
+            WebStorage.getInstance().deleteAllData()
+            webView.clearCache(true)
+            webView.clearHistory()
+            webView.clearFormData()
+            runOnUiThread { onComplete() }
+        }
     }
 
     private fun testHelper() {
