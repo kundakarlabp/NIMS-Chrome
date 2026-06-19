@@ -2,6 +2,7 @@ package org.kundakarlab.nimsfastsummarymobile.data.pdf
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
@@ -11,6 +12,7 @@ import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,6 +25,11 @@ import java.io.ByteArrayOutputStream
 @RunWith(AndroidJUnit4::class)
 class PdfBoxAndroidTextExtractorInstrumentedTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    @Before
+    fun initializePdfBox() {
+        PDFBoxResourceLoader.init(context)
+    }
 
     @Test fun extractsSyntheticTextPdfParsesCbcRftAndCreatesNoCacheFiles() = runBlocking {
         val before = cacheNames()

@@ -305,13 +305,13 @@ class MainActivity : ComponentActivity() {
             onComplete()
             return
         }
-        webViewSessionCleaned = true
         CookieManager.getInstance().removeAllCookies {
             CookieManager.getInstance().flush()
             WebStorage.getInstance().deleteAllData()
             webView.clearCache(true)
             webView.clearHistory()
             webView.clearFormData()
+            webViewSessionCleaned = true
             runOnUiThread { onComplete() }
         }
     }
