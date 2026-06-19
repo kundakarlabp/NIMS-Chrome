@@ -1,61 +1,71 @@
 # Android WebView App
 
-The Android app lets the phone replace the laptop-hosted helper workflow. It loads NIMS in a WebView, the user logs in manually, the app fetches report content using the active WebView cookies, and it sends report bytes/text to the configured Railway helper for parsing and summarization.
+The Android app is a zero-cost, local-first NIMS report viewer. It loads NIMS in a WebView, requires the clinician to log in manually, uses the shared `shared/nims-web/nimsReportCore.js` scraper to discover report rows and report parameters, fetches reports with the active WebView cookie session, and processes supported reports on the device.
 
-The app does not automate login, store NIMS credentials, bypass captcha/OTP/session expiry, or send NIMS cookies to Railway.
+No Railway URL, helper API key, backend, cloud database, or external AI service is required for normal Android use.
 
 ## Build
 
 ```bash
 cd mobile/android
-./gradlew test
-./gradlew assembleDebug
+./gradlew clean test lintDebug assembleDebug
 ```
 
-The debug APK is created under `mobile/android/app/build/outputs/apk/debug/`.
+The debug-signed APK is created under `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+
+## Install from GitHub Actions
+
+1. Open GitHub → **Actions**.
+2. Select the latest successful **CI** run.
+3. Open **Artifacts**.
+4. Download `nims-fast-summary-debug-apk`.
+5. Extract the ZIP.
+6. Install `app-debug.apk` on the Android device.
+7. If prompted, enable Android **Install unknown apps** for the browser or file manager used to open the APK.
 
 ## Use
 
-1. Install the debug APK.
-2. Enter the Railway helper URL and API key.
-3. Tap `Save Helper`.
-4. Tap `Test Helper` and confirm health/version details.
-5. Log in manually in the NIMS WebView.
-6. Open `CR No Wise Result Report Printing New`.
-7. Tap `Diagnose Page`.
-8. Tap `Discover Mapping`.
-9. Tap `Test Direct Fetch`.
-10. If one report parses successfully, tap `Bulk Fast Summary`, `Bulk Cultures Only`, or `Bulk Full Summary`.
+1. Install the debug-signed APK.
+2. Confirm the app starts in **On-device only** mode and does not ask for a Railway URL or API key.
+3. Log in manually in the NIMS WebView.
+4. Open `CR No Wise Result Report Printing New`.
+5. Tap `Diagnose Page`.
+6. Tap `Discover Mapping`.
+7. Tap `Test One`.
+8. If one report parses successfully, run `Fast`, `Cultures`, or `Full`.
 
-Bulk buttons are blocked until `Test Direct Fetch` validates the mapping.
+Bulk buttons are blocked until `Test One` validates the current in-memory mapping.
+
+## Local processing support
+
+- Text and HTML reports are parsed locally.
+- Text-based PDFs are extracted locally with PdfBox-Android and then parsed through the same conservative local parsers.
+- Image-only PDFs are unsupported because OCR is not included.
+- Encrypted, corrupt, oversized, and excessive-page PDFs are shown as visible unsupported or failed source-report rows with controlled reasons.
+- Generated summaries must be verified against source NIMS reports before clinical decisions.
+
+## Privacy and storage
+
+- NIMS credentials are not stored.
+- NIMS cookies are used only for approved NIMS HTTPS report requests.
+- Raw reports, raw HTML, raw PDF bytes, full report URLs, query strings, hidden form values, and transient report filenames are not persisted.
+- Summary JSON and physician notes are encrypted locally with Android Keystore AES/GCM.
+- Use **Clear NIMS Session** to clear cookies, WebStorage, cache, form data, history, mapping, and in-memory transient requests.
+
+## URL and popup policy
+
+Approved NIMS HTTPS URLs remain inside the WebView. Ordinary external HTTPS URLs may open in the system browser. `http`, `javascript`, `intent`, `file`, `content`, `data`, user-info URLs, alternate ports, suffix-host attacks, malformed paths, and unknown schemes are blocked without logging raw URLs.
+
+Popup/new-window navigation is forwarded to the main WebView only when the original target URL is an approved NIMS HTTPS URL. Query parameters remain in memory for navigation but are not persisted or logged.
+
+## Advanced legacy remote modes
+
+Railway settings are optional legacy/advanced functionality. **Automatic with Railway fallback** tries on-device processing first and uses Railway only when explicitly configured. **Railway only** sends report content to the configured helper and requires a helper URL and API key. These modes are not required for normal Android use.
 
 ## Troubleshooting
 
 - No rows found: confirm the report list is visible inside NIMS.
 - Mapping not discovered: run `Discover Mapping` after the report list loads.
 - Session expired: log in again in the WebView.
-- Helper `401`: check the Railway helper API key.
-- Large report: increase `NIMS_HELPER_MAX_BODY_MB` only if needed and safe.
-- Parse error: verify the source report and helper logs; logs should not include raw report content.
-
-## Data Handling
-
-Raw report PDF/HTML/text is processed transiently. Supported HTML/text can be parsed on-device. In Automatic and Railway-only modes, the app sends report content to Railway helper only when remote processing is selected or required; NIMS cookies stay on the phone and are used only for NIMS report fetches. Remote upload is capped at about 18 MB binary before Base64 encoding, and source metadata is stripped to an approved NIMS host/path without query or fragment.
-
-## Local-first processing modes
-
-The WebView flow remains manual-login only. Report fetching uses WebView cookies locally for NIMS HTTPS URLs, then processing can run in Automatic, On-device only, or Railway only mode. Supported HTML/text reports may be parsed on-device. Unsupported formats, especially PDFs, use Railway fallback in Automatic mode. Cookies/session tokens are not sent to Railway.
-
-## Popup and URL policy
-
-Popup/new-window navigation is forwarded to the main WebView only when the target is HTTPS, belongs exactly to an approved NIMS host, and uses an approved NIMS path prefix. `http:`, `javascript:`, `file:`, `content:`, `data:`, `intent:`, user-info URLs, non-NIMS hosts, and wrong paths are blocked and temporary popup WebViews are destroyed.
-
-## Local-first Android operation
-
-The Android app can run with no Railway service configured. The default processing mode is **On-device only**, NIMS login remains manual in the WebView, and supported text/HTML reports are fetched with the active WebView cookie session and parsed on the device. NIMS cookies are used only for direct NIMS HTTPS fetches and must not be sent to Railway or any other server.
-
-Railway settings are optional/advanced. **Automatic with Railway fallback** uses on-device parsing first and requires Railway only for PDFs or unsupported reports. **Railway only** requires a helper URL and API key.
-
-PDF local parsing is not yet supported. In On-device only mode, PDF reports are not uploaded anywhere and are shown as unsupported: “PDF local parsing is not yet supported. Open the source report manually.” A future PdfBox-Android parser can be added without OCR; this PR does not add OCR.
-
-Always verify generated summaries against the source reports in NIMS before clinical decisions.
+- Image-only PDF: open the source report in NIMS; OCR is not enabled.
+- Parse error: verify the source report; app logs must not include raw report content.

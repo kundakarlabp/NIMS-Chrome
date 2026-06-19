@@ -620,9 +620,10 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "errorStream" in main_activity
     assert "ByteArrayOutputStream" in main_activity
     assert "raw" not in main_activity.lower()
-    assert 'uri.scheme == "https"' in template
-    assert 'uri.path.startsWith("/AHIMSG5/")' in template
-    assert 'uri.path.startsWith("/HISInvestigationG5/")' in template
+    policy = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "security" / "NimsUrlPolicy.kt").read_text(encoding="utf-8")
+    assert 'scheme.equals("https", ignoreCase = true)' in policy
+    assert 'allowedHosts' in policy
+    assert 'rawPath.startsWith(it)' in policy
     assert "http://" not in template
 
 

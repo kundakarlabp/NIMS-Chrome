@@ -29,16 +29,9 @@ class ProcessingRouter(
         }
     }
 
-    private suspend fun parseLocalOnly(input: ReportInput): ProcessingResult<ParsedReport> {
-        if (input.isPdf()) return ProcessingResult.Unsupported(LOCAL_PDF_UNSUPPORTED)
-        return local.parseReport(input)
-    }
+    private suspend fun parseLocalOnly(input: ReportInput): ProcessingResult<ParsedReport> = local.parseReport(input)
 
     private suspend fun parseAuto(input: ReportInput): ProcessingResult<ParsedReport> {
-        if (input.isPdf()) {
-            if (!remoteConfigured()) return ProcessingResult.Failure(AUTO_PDF_HELPER_REQUIRED, "REMOTE_HELPER_REQUIRED", false)
-            return remote.parseReport(input)
-        }
         return when (val localResult = local.parseReport(input)) {
             is ProcessingResult.Success -> localResult
             is ProcessingResult.Unsupported -> {
@@ -51,8 +44,3 @@ class ProcessingRouter(
         }
     }
 }
-
-private const val LOCAL_PDF_UNSUPPORTED = "PDF local parsing is not yet supported. Open the source report manually."
-private const val AUTO_PDF_HELPER_REQUIRED = "PDF local parsing is not yet supported. Configure Railway fallback to process PDFs."
-
-private fun ReportInput.isPdf(): Boolean = contentType.contains("pdf", true) || bytes.take(5).toByteArray().contentEquals("%PDF-".toByteArray()) || bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())

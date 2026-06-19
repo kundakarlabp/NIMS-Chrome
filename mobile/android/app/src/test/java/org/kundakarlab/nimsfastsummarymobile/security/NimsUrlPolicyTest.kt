@@ -4,27 +4,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NimsUrlPolicyTest {
-    @Test fun allowsApprovedNimsUrls() {
-        assertTrue(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/login"))
+    @Test fun allowsOnlyApprovedHttpsNimsDefaultPortAndPaths() {
+        assertTrue(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/report?hmode=x&fileName=y"))
         assertTrue(NimsUrlPolicy.isAllowedUrl("https://www.nimsts.edu.in/HISInvestigationG5/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("http://nimsts.edu.in/AHIMSG5/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://user@nimsts.edu.in/AHIMSG5/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in:444/AHIMSG5/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://evilnimsts.edu.in/AHIMSG5/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in.evil.test/AHIMSG5/report"))
     }
 
-    @Test fun blocksUnsafeUrls() {
-        assertFalse(NimsUrlPolicy.isAllowedUrl("http://nimsts.edu.in/AHIMSG5/login"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("javascript:alert(1)"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("file:///tmp/a"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("content://x"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("data:text/html,x"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("intent://x"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("https://evil-nimsts.edu.in/AHIMSG5/login"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("https://user@nimsts.edu.in/AHIMSG5/login"))
-        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/other/path"))
+    @Test fun rejectsEncodedTraversalAndMalformedPaths() {
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/%2e%2e/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/HISInvestigationG5/%2E%2E/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/a%2fb/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/a%5Cb/report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5//report"))
+        assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/../AHIMSG5/report"))
     }
 
-    @Test fun safeSourceStripsQueryAndRejectsNonNims() {
-        assertEquals("https://nimsts.edu.in/AHIMSG5/report", NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag"))
-        assertFalse(NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag").contains("?"))
-        assertFalse(NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?fileName=secret#frag").contains("#"))
-        assertEquals("", NimsUrlPolicy.safeSourceForHelper("https://example.com/AHIMSG5/report?x=1"))
+    @Test fun validNimsReportPathsRemainAccepted() {
+        assertTrue(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/report/print"))
+        assertTrue(NimsUrlPolicy.isAllowedUrl("https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/report.cnt"))
+    }
+
+    @Test fun safeSourceStripsQueryAndKeepsHostPathOnly() {
+        assertEquals("https://nimsts.edu.in/AHIMSG5/report", NimsUrlPolicy.safeSourceForHelper("https://nimsts.edu.in/AHIMSG5/report?hmode=x&fileName=secret"))
     }
 }

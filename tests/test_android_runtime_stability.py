@@ -48,7 +48,7 @@ def test_android_webview_login_surface_is_optimized() -> None:
     assert "settings.loadWithOverviewMode = true" in source
     assert "settings.builtInZoomControls = true" in source
     assert "settings.displayZoomControls = false" in source
-    assert "setAcceptThirdPartyCookies(this, true)" in source
+    assert "setAcceptThirdPartyCookies(this, false)" in source
     assert "webView.requestFocus()" in source
     assert "NimsFastSummaryApp(" in source
     assert "SettingsDialog(" in source
