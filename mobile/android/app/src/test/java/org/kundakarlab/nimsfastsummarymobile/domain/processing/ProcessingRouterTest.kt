@@ -78,11 +78,21 @@ class ProcessingRouterTest {
         runSuspend { ProcessingRouter(local, remote, { ProcessingMode.REMOTE_ONLY }).parse(input()) }
         assertEquals(0, local.parseCalls); assertEquals(1, remote.parseCalls)
     }
-    private class FakeProcessor(private val result: ProcessingResult<ParsedReport>) : ReportProcessor {
+
+    @Test fun autoSummaryWithoutHelperDoesNotFallbackToRemote() {
+        val local = FakeProcessor(ProcessingResult.Success(parsed("local"), "local"), ProcessingResult.Unsupported("unsupported"))
+        val remote = FakeProcessor(ProcessingResult.Success(parsed("remote"), "remote"), ProcessingResult.Success(ProcessingSummary("remote", 1), "remote"))
+        val result = runSuspend { ProcessingRouter(local, remote, { ProcessingMode.AUTO }, remoteConfigured = { false }).summarize(listOf(parsed("local")), SummaryMode.FULL) }
+        assertTrue(result is ProcessingResult.Failure)
+        assertEquals("REMOTE_HELPER_REQUIRED", (result as ProcessingResult.Failure).technicalCode)
+        assertEquals(0, remote.summaryCalls)
+    }
+    private class FakeProcessor(private val result: ProcessingResult<ParsedReport>, private val summaryResult: ProcessingResult<ProcessingSummary> = ProcessingResult.Success(ProcessingSummary("ok", 0), "fake")) : ReportProcessor {
         var parseCalls = 0
+        var summaryCalls = 0
         override val name = "fake"; override val capabilities = emptySet<ProcessingCapability>()
         override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> { parseCalls++; return result }
-        override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = ProcessingResult.Success(ProcessingSummary("ok", reports.size), name)
+        override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> { summaryCalls++; return summaryResult }
     }
     private fun input(type: String = "text/plain", bytes: ByteArray = "Hemoglobin 1".toByteArray()) = ReportInput("r", "Report", "2026-01-01", "lab", type, bytes)
     private fun parsed(name: String) = ParsedReport("r", "Report", "2026-01-01", "lab", processorName = name)

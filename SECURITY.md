@@ -45,7 +45,7 @@ To clear local parsed cache, use the extension `Clear cache` button or delete `h
 
 ## Android local-first privacy notes
 
-No NIMS username or password storage was added. NIMS cookies remain on-device and are not uploaded to Railway. Raw HTML, PDF bytes, and decoded report text must not be persisted. HTML/text reports may be processed locally; PDF reports remain Railway-backed in Automatic mode. Railway receives report content only when remote processing is selected or required by fallback.
+No NIMS username or password storage was added. NIMS cookies remain on-device and are not uploaded to Railway. Raw HTML, PDF bytes, and decoded report text must not be persisted. HTML/text reports and text-based PDFs are processed locally in `LOCAL_ONLY` and `AUTO` modes. Railway receives report content only when remote processing is explicitly selected or when a configured fallback is required.
 
 ### Android processing-router security
 
@@ -59,4 +59,4 @@ Android remote processing encodes report bytes once under the Railway-compatible
 
 Android stores the latest summary JSON and physician note encrypted with Android Keystore AES/GCM under a clinical-data key alias separate from the helper API-key alias. Existing plaintext `last_summary_json` and `physician_note` values are migrated once and the plaintext keys are removed. `android:allowBackup="false"` remains required.
 
-Text-based PDFs are extracted on-device only. Raw PDF bytes are transient and processed in memory; they are not written to filesDir, cacheDir, external storage, SharedPreferences, Room, or logs, and extracted text is not persisted. Image-only PDFs are not OCR processed. No server, Railway deployment, cloud database, external AI service, NIMS credential storage, or cookie upload is required for normal Android use.
+Text-based PDFs are extracted and processed locally in `LOCAL_ONLY` and `AUTO` modes. Raw PDF bytes are transient and processed in memory; they are not written to filesDir, cacheDir, external storage, SharedPreferences, Room, or logs, and extracted text is not persisted. Image-only PDFs are not OCR processed. Railway is used only when remote processing is explicitly selected or when a configured fallback is required. No cloud database, external AI service, NIMS credential storage, or cookie upload is required for normal Android use.

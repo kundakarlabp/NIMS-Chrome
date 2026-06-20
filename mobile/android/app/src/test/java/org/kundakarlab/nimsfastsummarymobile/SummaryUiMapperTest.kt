@@ -71,6 +71,23 @@ class SummaryUiMapperTest {
     }
 
     @Test
+    fun mapperUsesLatestToOldestColumnsAndPadsShortRows() {
+        val summary = JSONObject()
+            .put("lab_trend_table", JSONObject()
+                .put("columns", JSONArray().put("02-06-2026").put("01-06-2026").put("31-05-2026"))
+                .put("rows", JSONArray().put(JSONObject().put("parameter", "Creatinine").put("values", JSONArray().put("1.4 mg/dL").put("").put("1.0 mg/dL")))
+                    .put(JSONObject().put("parameter", "Hb").put("values", JSONArray().put("11 g/dL")))
+                    .put(JSONObject().put("parameter", "Bad").put("values", JSONArray().put("a").put("b").put("c").put("d")))))
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary)
+        val creat = ui.labTrends.first { it.parameter == "Creatinine" }
+        assertEquals("1.4 mg/dL", creat.latestValue)
+        assertEquals("02-06-2026", creat.latestDate)
+        assertEquals("1.0 mg/dL", creat.previousValue)
+        assertEquals("31-05-2026", creat.previousDate)
+        assertEquals(2, ui.labTrends.size)
+    }
+
+    @Test
     fun formatterIncludesClinicalSectionsAndDisclaimer() {
         val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(
             JSONObject()
