@@ -77,7 +77,11 @@ class LocalSummaryBuilderTest {
         val json = LocalSummaryBuilder().build(listOf(high, low), SummaryMode.FULL).helperJson!!
         assertFalse(json.toString().contains("9.9"))
         assertTrue(json.getJSONArray("warnings").getString(0).contains("low-confidence", true))
-        assertTrue(json.getJSONArray("source_reports").getJSONObject(1).getString("notes").contains("Low-confidence"))
+        val sourceReports = json.getJSONArray("source_reports")
+        val lowSourceReport = (0 until sourceReports.length())
+            .map { sourceReports.getJSONObject(it) }
+            .first { it.getString("report_name") == "Low" }
+        assertTrue(lowSourceReport.getString("notes").contains("Low-confidence"))
     }
 
     @Test fun localAndRemoteAliasesProduceOneCanonicalTrendRow() {

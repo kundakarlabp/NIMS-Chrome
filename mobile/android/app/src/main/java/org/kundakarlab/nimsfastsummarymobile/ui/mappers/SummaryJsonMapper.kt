@@ -49,8 +49,8 @@ object SummaryJsonMapper {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 val values = strings(row.optJSONArray("values"))
-                if (values.size > columns.size) continue
-                val alignedValues = values + List(columns.size - values.size) { "" }
+                if (values.size != columns.size) continue
+                val alignedValues = values
                 val history = columns.zip(alignedValues).filter { it.second.isNotBlank() }
                 val latest = history.firstOrNull()
                 val previous = history.drop(1).firstOrNull()
