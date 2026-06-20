@@ -1,8 +1,11 @@
 (function () {
+  if (window.__NIMS_FAST_SUMMARY_CONTENT_INSTALLED__) return;
+  window.__NIMS_FAST_SUMMARY_CONTENT_INSTALLED__ = true;
   const isExtension = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage;
   const utils = window.NimsFastSummaryUtils;
   const DEBUG_MODE = false;
   let observerStarted = false;
+  let periodicScanStarted = false;
 
   function start() {
     scanAndInject();
@@ -39,6 +42,8 @@
   }
 
   function startPeriodicScan() {
+    if (periodicScanStarted) return;
+    periodicScanStarted = true;
     const started = Date.now();
     const interval = setInterval(() => {
       scanAndInject();
@@ -354,18 +359,22 @@
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start);
-  } else {
-    start();
-  }
-
   window.NimsFastSummary = {
+    ...(window.NimsFastSummary || {}),
     extractReportRows: () => utils.extractReportRows(document, location.href),
     selectRowsForMode: utils.selectRowsForMode,
     runSummary,
     discoverMapping,
     clearMapping,
-    scanAndInject
+    scanAndInject,
+    detectNimsPageStage: (doc) => window.NimsReportCore && window.NimsReportCore.detectNimsPageStage(doc || document),
+    navigateToCrWiseReports: (doc) => window.NimsReportCore && window.NimsReportCore.navigateToCrWiseReports(doc || document)
   };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
+
 })();

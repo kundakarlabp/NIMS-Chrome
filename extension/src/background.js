@@ -3,7 +3,15 @@ const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
   "https://www.nimsts.edu.in/AHIMSG5/*",
   "https://nimsts.edu.in/HISInvestigationG5/*",
-  "https://www.nimsts.edu.in/HISInvestigationG5/*"
+  "https://www.nimsts.edu.in/HISInvestigationG5/*",
+  "https://nimsts.edu.in/HIS/*",
+  "https://www.nimsts.edu.in/HIS/*",
+  "https://nimsts.edu.in/hislogin/*",
+  "https://www.nimsts.edu.in/hislogin/*",
+  "https://nimsts.edu.in/HISUtilities/*",
+  "https://www.nimsts.edu.in/HISUtilities/*",
+  "https://nimsts.edu.in/HBIMS/*",
+  "https://www.nimsts.edu.in/HBIMS/*"
 ];
 let privateDirectMapping = null;
 

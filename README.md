@@ -202,3 +202,20 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 ## Security
 
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
+
+
+## NIMS CR-wise navigation workflow
+
+1. Open the app/extension and log in to NIMS manually.
+2. Use **Open CR Reports**.
+3. The tool opens Investigation → CR No Wise Result Report Printing New with bounded, frame-aware clicks.
+4. Enter the CR number manually in the NIMS page.
+5. Submit the NIMS search form manually.
+6. After the report list appears, run Diagnose Page.
+7. Run Discover Mapping.
+8. Run Test One Report.
+9. Run Fast, Cultures or Full.
+
+Login, CAPTCHA/OTP, password entry and CR-number entry remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
+
+Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, CR search page ready, and Report list not yet loaded.

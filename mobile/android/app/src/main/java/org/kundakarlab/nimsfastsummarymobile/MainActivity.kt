@@ -78,6 +78,7 @@ import org.kundakarlab.nimsfastsummarymobile.data.pdf.PdfBoxAndroidTextExtractor
 import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
+import org.kundakarlab.nimsfastsummarymobile.security.UrlClassification
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
@@ -88,6 +89,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -103,6 +106,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -125,6 +129,8 @@ class MainActivity : ComponentActivity() {
     private var physicianNote by mutableStateOf("")
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
+    private var navigationJob: Job? = null
+    private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
         ProcessingRouter(
@@ -182,6 +188,8 @@ class MainActivity : ComponentActivity() {
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
+                    onOpenCrReports = { openCrWiseReports() },
+                    navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
                     onTestOne = { runMode("test_direct") },
@@ -239,16 +247,24 @@ class MainActivity : ComponentActivity() {
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                val originalUrl = request.url.toString()
-                                if (NimsUrlPolicy.isAllowedUrl(originalUrl)) webView.loadUrl(originalUrl) else log("Blocked popup navigation")
+                                when (NimsUrlPolicy.classify(request.url)) {
+                                    UrlClassification.ALLOWED_NIMS -> webView.loadUrl(request.url.toString())
+                                    UrlClassification.EXTERNAL_HTTPS -> if (request.isForMainFrame && isUserGesture) startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                                    else -> log("Blocked popup navigation")
+                                }
                                 popupView.stopLoading()
-                                popupView.destroy()
+                                popupView.post { popupView.destroy() }
                                 return true
                             }
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                if (NimsUrlPolicy.isAllowedUrl(url)) webView.loadUrl(url) else if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
-                                popupView.destroy()
+                                val uri = android.net.Uri.parse(url)
+                                when (NimsUrlPolicy.classify(uri)) {
+                                    UrlClassification.ALLOWED_NIMS -> webView.loadUrl(url)
+                                    UrlClassification.EXTERNAL_HTTPS -> if (isUserGesture) startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                    else -> if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
+                                }
+                                popupView.post { popupView.destroy() }
                             }
                         }
                     }
@@ -258,9 +274,10 @@ class MainActivity : ComponentActivity() {
                     return true
                 }
             }
-            webViewClient = NimsWebViewClient { safeUrl ->
-                currentPage = safeUrl.ifBlank { "NIMS" }
-            }
+            webViewClient = NimsWebViewClient(
+                onPageChanged = { safeUrl -> currentPage = safeUrl.ifBlank { "NIMS" } },
+                onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") }
+            )
         }
     }
 
@@ -292,6 +309,7 @@ class MainActivity : ComponentActivity() {
 
     private fun clearNimsSession() {
         cancelActiveProcessing()
+        cancelNavigation()
         mapping = null
         mappingValidated = false
         clearWebViewSession(coldStartOnly = false) {
@@ -326,6 +344,68 @@ class MainActivity : ComponentActivity() {
                 .onSuccess { setState(AppState.HELPER_READY, it) }
                 .onFailure { setState(AppState.ERROR, "Helper connection failed: ${it.message}") }
         }
+    }
+
+
+    private fun openCrWiseReports() {
+        navigationJob?.cancel()
+        navigationJob = lifecycleScope.launch {
+            navigationInProgress = true
+            setState(AppState.HELPER_READY, "Checking current NIMS page…")
+            try {
+                repeat(MAX_NAVIGATION_ATTEMPTS) {
+                    ensureActive()
+                    val result = evaluateNavigationStep()
+                    when (result.stage) {
+                        "cr_search" -> {
+                            setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
+                            return@launch
+                        }
+                        "report_list" -> {
+                            setState(AppState.REPORT_PAGE_READY, "Report list detected.")
+                            return@launch
+                        }
+                        "login" -> {
+                            setState(AppState.ERROR, "Manual NIMS login required.")
+                            return@launch
+                        }
+                        "session_expired" -> {
+                            setState(AppState.ERROR, "NIMS session expired. Login again.")
+                            return@launch
+                        }
+                        else -> setState(AppState.HELPER_READY, navigationMessage(result))
+                    }
+                    delay(NAVIGATION_RETRY_DELAY_MS)
+                }
+                setState(AppState.ERROR, "Unable to open CR-wise reports. Use Diagnose and retry.")
+            } catch (_: CancellationException) {
+                // Expected cancellation.
+            } finally {
+                navigationInProgress = false
+            }
+        }
+    }
+
+    private suspend fun evaluateNavigationStep(): NimsNavigationStep = suspendCancellableCoroutine { continuation ->
+        evaluateCore("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { json ->
+            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromJson(json))
+        }
+    }
+
+    private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
+        "clicked_investigation_module" -> "Opening Investigation…"
+        "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
+        else -> when (result.errorCode) {
+            "investigation_module_not_found" -> "Unable to locate the Investigation menu."
+            "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
+            else -> "Checking current NIMS page…"
+        }
+    }
+
+    private fun cancelNavigation() {
+        navigationJob?.cancel()
+        navigationJob = null
+        navigationInProgress = false
     }
 
     private fun diagnosePage() {
@@ -706,6 +786,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        cancelNavigation()
         activeProcessingJob?.cancel()
         runCatching {
             if (::webView.isInitialized) {
@@ -723,6 +804,8 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
+        private const val MAX_NAVIGATION_ATTEMPTS = 14
+        private const val NAVIGATION_RETRY_DELAY_MS = 750L
     }
 }
 
@@ -767,6 +850,8 @@ private fun NimsFastSummaryApp(
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
+    onOpenCrReports: () -> Unit,
+    navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
     onTestOne: () -> Unit,
@@ -815,6 +900,8 @@ private fun NimsFastSummaryApp(
                 onReload = onReload,
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
+                onOpenCrReports = onOpenCrReports,
+                navigationInProgress = navigationInProgress,
                 onDiagnose = onDiagnose,
                 onDiscover = onDiscover,
                 onTestOne = onTestOne,
@@ -888,6 +975,8 @@ private fun NimsWebViewScreen(
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
+    onOpenCrReports: () -> Unit,
+    navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
     onTestOne: () -> Unit,
@@ -907,6 +996,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR Reports") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }
             item { Button(onClick = onTestOne) { Text("Test One") } }
@@ -1170,6 +1260,24 @@ private fun abnormalityColor(value: Abnormality): Color {
 }
 
 private var webViewSessionCleaned = false
+
+data class NimsNavigationStep(
+    val ok: Boolean,
+    val stage: String,
+    val action: String,
+    val done: Boolean,
+    val errorCode: String
+) {
+    companion object {
+        fun fromJson(json: JSONObject): NimsNavigationStep = NimsNavigationStep(
+            ok = json.optBoolean("ok", false),
+            stage = json.optString("stage", "unknown"),
+            action = json.optString("action", "none"),
+            done = json.optBoolean("done", false),
+            errorCode = json.optString("errorCode", "")
+        )
+    }
+}
 
 data class ReportFetchResult(
     val contentType: String,
