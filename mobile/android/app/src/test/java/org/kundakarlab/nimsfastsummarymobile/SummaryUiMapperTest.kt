@@ -71,6 +71,63 @@ class SummaryUiMapperTest {
     }
 
     @Test
+    fun mapperExcludesShorterValuesArrayThanColumns() {
+        val summary = summaryWithTrendRows(
+            JSONObject().put("parameter", "Hb").put("values", JSONArray().put("11 g/dL"))
+        )
+
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary)
+
+        assertTrue(ui.labTrends.isEmpty())
+    }
+
+    @Test
+    fun mapperExcludesLongerValuesArrayThanColumns() {
+        val summary = summaryWithTrendRows(
+            JSONObject().put("parameter", "Hb").put("values", JSONArray().put("a").put("b").put("c").put("d"))
+        )
+
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary)
+
+        assertTrue(ui.labTrends.isEmpty())
+    }
+
+    @Test
+    fun mapperAcceptsEqualLengthValuesWithBlankMiddleDate() {
+        val summary = summaryWithTrendRows(
+            JSONObject().put("parameter", "Creatinine").put("values", JSONArray().put("1.4 mg/dL").put("").put("1.0 mg/dL"))
+        )
+
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary)
+        val creat = ui.labTrends.single()
+
+        assertEquals("1.4 mg/dL", creat.latestValue)
+        assertEquals("02-06-2026", creat.latestDate)
+        assertEquals("1.0 mg/dL", creat.previousValue)
+        assertEquals("31-05-2026", creat.previousDate)
+    }
+
+    @Test
+    fun mapperUsesLatestToOldestColumnsForLatestAndPreviousResults() {
+        val summary = summaryWithTrendRows(
+            JSONObject().put("parameter", "Creatinine").put("values", JSONArray().put("1.4 mg/dL").put("1.2 mg/dL").put("1.0 mg/dL"))
+        )
+
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary)
+        val creat = ui.labTrends.single()
+
+        assertEquals("1.4 mg/dL", creat.latestValue)
+        assertEquals("02-06-2026", creat.latestDate)
+        assertEquals("1.2 mg/dL", creat.previousValue)
+        assertEquals("01-06-2026", creat.previousDate)
+    }
+
+    private fun summaryWithTrendRows(vararg rows: JSONObject): JSONObject = JSONObject()
+        .put("lab_trend_table", JSONObject()
+            .put("columns", JSONArray().put("02-06-2026").put("01-06-2026").put("31-05-2026"))
+            .put("rows", JSONArray().also { array -> rows.forEach { array.put(it) } }))
+
+    @Test
     fun formatterIncludesClinicalSectionsAndDisclaimer() {
         val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(
             JSONObject()

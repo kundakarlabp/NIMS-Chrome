@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.kundakarlab.nimsfastsummarymobile.HelperApiClient
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.*
+import kotlinx.coroutines.CancellationException
 
 class RemoteReportProcessor(private val clientProvider: () -> HelperApiClient) : ReportProcessor {
     override val name = "Railway"
@@ -14,12 +15,16 @@ class RemoteReportProcessor(private val clientProvider: () -> HelperApiClient) :
         val response = clientProvider().parseReport(payload)
         val (report, warnings) = RemoteReportMapper.toParsedReport(response, input, name)
         ProcessingResult.Success(report, name, warnings)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Exception) { error.toRemoteFailure() }
 
     override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = try {
         val reportArray = org.json.JSONArray().also { array -> reports.forEach { array.put(it.toHelperJson()) } }
         val response = clientProvider().summarize(JSONObject().put("mode", mode.name.lowercase()).put("reports", reportArray))
         ProcessingResult.Success(RemoteSummaryMapper.toProcessingSummary(response, reports.size), name)
+    } catch (error: CancellationException) {
+        throw error
     } catch (error: Exception) { error.toRemoteFailure() }
 }
 

@@ -8,8 +8,10 @@ class LocalSummaryBuilder {
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
         val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() }
+        val lowConfidenceLabCount = reports.sumOf { report -> report.labs.count { it.confidence == ParseConfidence.LOW } }
         val lines = mutableListOf("Auto-parsed summary. Verify with source NIMS reports before clinical decisions.")
         if (unsupportedCount > 0) lines += "Failed or unsupported reports: $unsupportedCount."
+        if (lowConfidenceLabCount > 0) warnings += "Some low-confidence laboratory values were excluded; review source reports."
         val sortedReports = reports.withIndex().sortedWith(compareBy<IndexedValue<ParsedReport>>(
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch == null },
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch ?: 0L },
@@ -67,10 +69,63 @@ class LocalSummaryBuilder {
     private fun dateRange(reports: List<ParsedReport>): String? = reports.mapNotNull { report -> DateNormalizer.normalize(report.dateSent).sortEpoch?.let { it to report.dateSent } }.sortedBy { it.first }.map { it.second }.let { dates -> if (dates.isEmpty()) null else "${dates.first()} to ${dates.last()}" }
     private fun ParsedLabValue.valueText(): String = ((if (comparator == NumericComparator.LESS_THAN) "<" else if (comparator == NumericComparator.GREATER_THAN) ">" else "") + (numericValue?.toString() ?: textValue.orEmpty()) + " " + unit.orEmpty()).trim()
 
-    private fun toSummaryJson(reports: List<ParsedReport>, lines: List<String>, warnings: List<String>): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { a -> reports.forEach { r -> a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType).put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", r.warnings.joinToString("; ")).put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "").put("processor", r.processorName)) } })
-        .put("interpretation", JSONArray(lines))
-        .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c -> a.put(JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty()).put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase()).put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" }).put("comment", c.explicitResistanceMarkers.joinToString(", "))) } })
-        .put("lab_trend_table", JSONObject().put("columns", JSONArray(reports.map { it.dateSent }.distinct())).put("rows", JSONArray().also { rows -> reports.flatMap { it.labs }.groupBy { it.displayName }.forEach { (name, labs) -> rows.put(JSONObject().put("parameter", name).put("trend", "auto-parsed").put("values", JSONArray(labs.map { it.valueText() }))) } }))
-        .put("warnings", JSONArray(warnings))
+    private fun toSummaryJson(reports: List<ParsedReport>, lines: List<String>, warnings: List<String>): JSONObject {
+        val normalizedDates = reports.map { it.dateSent to DateNormalizer.normalize(it.dateSent) }
+            .filter { it.second.sortEpoch != null }
+            .distinctBy { it.second.sortEpoch }
+            .sortedByDescending { it.second.sortEpoch }
+        val dateColumns = normalizedDates.map { it.first }
+        val dateByEpoch = normalizedDates.associate { it.second.sortEpoch to it.first }
+        val rowsByCode = linkedMapOf<String, MutableMap<String, IndexedLab>>()
+        reports.forEachIndexed { reportIndex, report ->
+            val reportDate = dateByEpoch[DateNormalizer.normalize(report.dateSent).sortEpoch] ?: return@forEachIndexed
+            report.labs.forEachIndexed { labIndex, lab ->
+                if (lab.confidence == ParseConfidence.LOW) return@forEachIndexed
+                val canonicalCode = CanonicalLabCodes.normalize(lab.canonicalCode)
+                val byDate = rowsByCode.getOrPut(canonicalCode) { linkedMapOf() }
+                val candidate = IndexedLab(lab, reportIndex, labIndex)
+                val current = byDate[reportDate]
+                if (current == null || isPreferred(candidate, current)) byDate[reportDate] = candidate
+            }
+        }
+        return JSONObject()
+            .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
+                val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
+                val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
+                a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType).put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes).put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "").put("processor", r.processorName))
+            } })
+            .put("interpretation", JSONArray(lines))
+            .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c -> a.put(JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty()).put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase()).put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" }).put("comment", c.explicitResistanceMarkers.joinToString(", "))) } })
+            .put("lab_trend_table", JSONObject().put("columns", JSONArray(dateColumns)).put("rows", JSONArray().also { rows ->
+                rowsByCode.toSortedMap().forEach { (_, labsByDate) ->
+                    val firstLab = labsByDate.values.first().lab
+                    rows.put(JSONObject().put("parameter", firstLab.displayName).put("trend", "auto-parsed").put("values", JSONArray(dateColumns.map { date -> labsByDate[date]?.lab?.valueText().orEmpty() })))
+                }
+            }))
+            .put("warnings", JSONArray(warnings))
+    }
+
+    private fun isPreferred(candidate: IndexedLab, current: IndexedLab): Boolean = compareValuesBy(
+        candidate,
+        current,
+        { confidenceRank(it.lab.confidence) },
+        { -it.reportIndex },
+        { -it.labIndex },
+        { stableLabKey(it.lab) }
+    ) > 0
+
+    private fun confidenceRank(value: ParseConfidence): Int = when (value) {
+        ParseConfidence.HIGH -> 2
+        ParseConfidence.MEDIUM -> 1
+        ParseConfidence.LOW -> 0
+    }
+
+    private fun stableLabKey(lab: ParsedLabValue): String = listOf(
+        lab.numericValue?.toString().orEmpty(),
+        lab.textValue.orEmpty(),
+        lab.unit.orEmpty(),
+        lab.comparator.name
+    ).joinToString("|")
+
+    private data class IndexedLab(val lab: ParsedLabValue, val reportIndex: Int, val labIndex: Int)
 }

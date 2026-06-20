@@ -21,9 +21,13 @@ class ProcessingRouter(
             val localResult = local.summarize(reports, mode)
             when (localResult) {
                 is ProcessingResult.Success -> localResult
-                is ProcessingResult.Unsupported -> remote.summarize(reports, mode).withFallbackWarning("On-device summary unsupported; Railway fallback used.")
+                is ProcessingResult.Unsupported -> {
+                    if (!remoteConfigured()) ProcessingResult.Failure("On-device summary is unsupported. Configure Railway fallback to process it.", "REMOTE_HELPER_REQUIRED", false)
+                    else remote.summarize(reports, mode).withFallbackWarning("On-device summary unsupported; Railway fallback used.")
+                }
                 is ProcessingResult.Failure -> if (localResult.isRemoteFallbackAllowed) {
-                    remote.summarize(reports, mode).withFallbackWarning("On-device summary was incomplete; Railway fallback used.")
+                    if (!remoteConfigured()) ProcessingResult.Failure("On-device summary was incomplete. Configure Railway fallback to process it.", "REMOTE_HELPER_REQUIRED", false)
+                    else remote.summarize(reports, mode).withFallbackWarning("On-device summary was incomplete; Railway fallback used.")
                 } else localResult
             }
         }

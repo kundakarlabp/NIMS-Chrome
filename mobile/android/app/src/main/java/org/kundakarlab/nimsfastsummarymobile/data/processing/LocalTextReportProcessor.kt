@@ -3,8 +3,6 @@ package org.kundakarlab.nimsfastsummarymobile.data.processing
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.*
 
-// TODO(local-pdf): add a PdfBox-Android text-extraction adapter ahead of this
-// text parser once de-identified NIMS PDF parity tests exist. OCR is out of scope.
 class LocalTextReportProcessor(
     private val summaryBuilder: LocalSummaryBuilder = LocalSummaryBuilder(),
     private val maxBytes: Int = 1024 * 1024
