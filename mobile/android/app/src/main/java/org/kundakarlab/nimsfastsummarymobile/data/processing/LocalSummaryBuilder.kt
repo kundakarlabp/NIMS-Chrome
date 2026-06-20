@@ -85,7 +85,7 @@ class LocalSummaryBuilder {
                 val byDate = rowsByCode.getOrPut(canonicalCode) { linkedMapOf() }
                 val candidate = IndexedLab(lab, reportIndex, labIndex)
                 val current = byDate[reportDate]
-                if (current == null || candidate.isPreferredOver(current)) byDate[reportDate] = candidate
+                if (current == null || isPreferred(candidate, current)) byDate[reportDate] = candidate
             }
         }
         return JSONObject()
@@ -105,8 +105,27 @@ class LocalSummaryBuilder {
             .put("warnings", JSONArray(warnings))
     }
 
-    private data class IndexedLab(val lab: ParsedLabValue, val reportIndex: Int, val labIndex: Int) {
-        fun isPreferredOver(other: IndexedLab): Boolean = compareValuesBy(this, other, { it.lab.confidence.rank }, { -it.reportIndex }, { -it.labIndex }, { it.lab.valueText() }) > 0
-        private val ParseConfidence.rank: Int get() = when (this) { ParseConfidence.HIGH -> 2; ParseConfidence.MEDIUM -> 1; ParseConfidence.LOW -> 0 }
+    private fun isPreferred(candidate: IndexedLab, current: IndexedLab): Boolean = compareValuesBy(
+        candidate,
+        current,
+        { confidenceRank(it.lab.confidence) },
+        { -it.reportIndex },
+        { -it.labIndex },
+        { stableLabKey(it.lab) }
+    ) > 0
+
+    private fun confidenceRank(value: ParseConfidence): Int = when (value) {
+        ParseConfidence.HIGH -> 2
+        ParseConfidence.MEDIUM -> 1
+        ParseConfidence.LOW -> 0
     }
+
+    private fun stableLabKey(lab: ParsedLabValue): String = listOf(
+        lab.numericValue?.toString().orEmpty(),
+        lab.textValue.orEmpty(),
+        lab.unit.orEmpty(),
+        lab.comparator.name
+    ).joinToString("|")
+
+    private data class IndexedLab(val lab: ParsedLabValue, val reportIndex: Int, val labIndex: Int)
 }
