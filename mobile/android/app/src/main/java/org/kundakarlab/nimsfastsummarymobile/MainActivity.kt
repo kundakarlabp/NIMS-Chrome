@@ -247,9 +247,10 @@ class MainActivity : ComponentActivity() {
                 override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
                     val handled = AtomicBoolean(false)
                     fun cleanupPopup(popupView: WebView) {
-                        popupView.stopLoading()
+                        runCatching { popupView.stopLoading() }
                         popupView.webChromeClient = null
-                        popupView.webViewClient = null
+                        // Do not assign null to popupView.webViewClient; Android's Kotlin API exposes it as non-null.
+                        // The AtomicBoolean one-shot guard prevents duplicate popup handling.
                         popupView.post { runCatching { popupView.destroy() } }
                     }
                     fun handlePopupUrlOnce(popupView: WebView, uri: Uri, isMainFrame: Boolean): Boolean {
