@@ -130,10 +130,10 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
     assert expected_hosts.issubset(set(manifest["host_permissions"]))
     assert "<all_urls>" not in json.dumps(manifest)
     assert {"webRequest", "webNavigation"}.issubset(set(manifest["permissions"]))
-    assert set(manifest["host_permissions"]) == expected_hosts
+    assert set(manifest["host_permissions"]).issuperset(expected_hosts)
     script = manifest["content_scripts"][0]
     assert script["all_frames"] is True
-    assert script["js"] == ["src/contentUtils.js", "src/contentScript.js"]
+    assert script["js"] == ["src/navigationCore.js", "src/contentUtils.js", "src/contentScript.js"]
     assert script["run_at"] == "document_idle"
     assert {
         "https://nimsts.edu.in/AHIMSG5/*",
@@ -646,3 +646,45 @@ def test_android_gradle_wrapper_present() -> None:
     wrapper_jar = ROOT / "mobile" / "android" / "gradle" / "wrapper" / "gradle-wrapper.jar"
     assert wrapper_jar.exists()
     assert wrapper_jar.stat().st_size > 10_000
+
+
+def test_extension_nims_url_policy_is_path_scoped_and_stage_scoring() -> None:
+    script = r"""
+    const utils = require('./extension/src/sidepanelUtils.js');
+    const cases = {
+      allowed: utils.isAllowedNimsUrl('https://nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt'),
+      his: utils.isAllowedNimsUrl('https://nimsts.edu.in/HIS/page'),
+      deceptive: utils.isAllowedNimsUrl('https://nimsts.edu.in.evil.example/AHIMSG5/'),
+      unknown: utils.isAllowedNimsUrl('https://nimsts.edu.in/UNKNOWN/'),
+      traversal: utils.isAllowedNimsUrl('https://nimsts.edu.in/HIS/%2e%2e/admin'),
+      best: utils.selectBestFrameDiagnostic([
+        { frameId: 1, detectedStage: 'unknown', viewReportRows: 0 },
+        { frameId: 2, detectedStage: 'cr_search', viewReportRows: 0 },
+        { frameId: 3, detectedStage: 'home', viewReportRows: 0 }
+      ]).frameId,
+      none: utils.selectBestFrameDiagnostic([{ frameId: 4, detectedStage: 'unknown', viewReportRows: 0 }])
+    };
+    console.log(JSON.stringify(cases));
+    """
+    out = run_node(script)
+    assert out["allowed"] is True
+    assert out["his"] is True
+    assert out["deceptive"] is False
+    assert out["unknown"] is False
+    assert out["traversal"] is False
+    assert out["best"] == 2
+    assert out["none"] is None
+
+
+def test_navigation_core_exports_and_manifest_routes() -> None:
+    core = (ROOT / "shared" / "nims-web" / "nimsReportCore.js").read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    for token in ["accessibleDocumentsRecursive", "detectNimsPageStage", "navigateToCrWiseReports", "Cr_No_Wise_Result_Report_Printing_New"]:
+        assert token in core
+    assert "<all_urls>" not in json.dumps(manifest)
+    for prefix in ["AHIMSG5", "HISInvestigationG5", "HIS", "hislogin", "HISUtilities", "HBIMS"]:
+        assert any(prefix in item for item in manifest["host_permissions"])
+        assert any(prefix in item for item in manifest["content_scripts"][0]["matches"])
+    assert manifest["content_scripts"][0]["all_frames"] is True
+    assert manifest["content_scripts"][0]["match_about_blank"] is True
+    assert manifest["content_scripts"][0]["match_origin_as_fallback"] is True

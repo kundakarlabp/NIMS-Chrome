@@ -1,14 +1,30 @@
 {
   "manifest_version": 3,
   "name": "NIMS Fast Summary",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Local fast summary tables for NIMS HIS reports after manual login.",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel", "webRequest", "webNavigation"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "sidePanel",
+    "webRequest",
+    "webNavigation"
+  ],
   "host_permissions": [
     "https://nimsts.edu.in/AHIMSG5/*",
-    "https://www.nimsts.edu.in/AHIMSG5/*",
     "https://nimsts.edu.in/HISInvestigationG5/*",
+    "https://nimsts.edu.in/HIS/*",
+    "https://nimsts.edu.in/hislogin/*",
+    "https://nimsts.edu.in/HISUtilities/*",
+    "https://nimsts.edu.in/HBIMS/*",
+    "https://www.nimsts.edu.in/AHIMSG5/*",
     "https://www.nimsts.edu.in/HISInvestigationG5/*",
+    "https://www.nimsts.edu.in/HIS/*",
+    "https://www.nimsts.edu.in/hislogin/*",
+    "https://www.nimsts.edu.in/HISUtilities/*",
+    "https://www.nimsts.edu.in/HBIMS/*",
     "http://127.0.0.1:8765/*",
     "https://*.railway.app/*",
     "https://*.up.railway.app/*"
@@ -17,14 +33,30 @@
     {
       "matches": [
         "https://nimsts.edu.in/AHIMSG5/*",
-        "https://www.nimsts.edu.in/AHIMSG5/*",
         "https://nimsts.edu.in/HISInvestigationG5/*",
-        "https://www.nimsts.edu.in/HISInvestigationG5/*"
+        "https://nimsts.edu.in/HIS/*",
+        "https://nimsts.edu.in/hislogin/*",
+        "https://nimsts.edu.in/HISUtilities/*",
+        "https://nimsts.edu.in/HBIMS/*",
+        "https://www.nimsts.edu.in/AHIMSG5/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*",
+        "https://www.nimsts.edu.in/HIS/*",
+        "https://www.nimsts.edu.in/hislogin/*",
+        "https://www.nimsts.edu.in/HISUtilities/*",
+        "https://www.nimsts.edu.in/HBIMS/*"
       ],
-      "js": ["src/contentUtils.js", "src/contentScript.js"],
-      "css": ["src/styles.css"],
+      "js": [
+        "src/navigationCore.js",
+        "src/contentUtils.js",
+        "src/contentScript.js"
+      ],
+      "css": [
+        "src/styles.css"
+      ],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
     }
   ],
   "background": {
@@ -37,4 +69,3 @@
     "default_title": "NIMS Fast Summary"
   }
 }
-

@@ -1,5 +1,7 @@
 let latestState = null;
 let latestDiagnostic = null;
+let navigationInProgress = false;
+let navigationGeneration = 0;
 const sidepanelUtils = window.NimsSidepanelUtils;
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -16,6 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function bindActions() {
+  document.getElementById("openCrReports").addEventListener("click", openCrWiseReports);
   document.getElementById("discoverMapping").addEventListener("click", discoverMappingFromBestFrame);
   document.getElementById("testDirectFetch").addEventListener("click", () => runSummaryFromBestFrame("test_direct"));
   document.getElementById("runFast").addEventListener("click", () => runSummaryFromBestFrame("bulk_fast"));
@@ -43,6 +46,114 @@ function bindActions() {
   document.getElementById("saveHelperSettings").addEventListener("click", saveHelperSettings);
   document.getElementById("testHelperConnection").addEventListener("click", testHelperConnection);
   document.getElementById("clearHelperSettings").addEventListener("click", clearHelperSettings);
+}
+
+
+async function openCrWiseReports() {
+  const status = document.getElementById("status");
+  const button = document.getElementById("openCrReports");
+  if (navigationInProgress) {
+    status.textContent = "Open CR Reports is already running.";
+    return;
+  }
+  const generation = ++navigationGeneration;
+  navigationInProgress = true;
+  if (button) button.disabled = true;
+  const setStatus = (message) => {
+    if (generation === navigationGeneration) status.textContent = message;
+  };
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) throw new Error("No active tab found");
+    if (!sidepanelUtils.isAllowedNimsUrl(tab.url || "")) throw new Error("Open a controlled NIMS page after manual login.");
+    setStatus("Checking current NIMS page…");
+    const started = Date.now();
+    for (let attempt = 0; attempt < 14 && Date.now() - started < 20000; attempt += 1) {
+      if (generation !== navigationGeneration) return;
+      await ensureMainWorldNavigationCore(tab.id);
+      const probes = await probeNavigationFrames(tab.id);
+      if (generation !== navigationGeneration) return;
+      const selected = sidepanelUtils.selectNavigationTarget(probes);
+      if (selected && selected.kind === "terminal") {
+        const stage = selected.frame.stage || selected.frame.detectedStage;
+        if (stage === "cr_search") { setStatus("CR-wise report page ready. Enter the CR number."); return; }
+        if (stage === "report_list") { setStatus("Report list detected."); return; }
+        if (stage === "login") { setStatus("Manual NIMS login required."); return; }
+        if (stage === "session_expired") { setStatus("NIMS session expired. Login again."); return; }
+      }
+      if (!selected || selected.kind !== "action") {
+        setStatus("Unable to locate the Investigation menu. Retrying…");
+        await delay(750);
+        continue;
+      }
+      const clicked = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [selected.frame.frameId] },
+        world: "MAIN",
+        func: () => {
+          if (!window.NimsReportCore || typeof window.NimsReportCore.navigateCurrentDocumentStep !== "function") {
+            return { ok: false, stage: "unknown", action: "none", done: false, errorCode: "navigation_api_unavailable" };
+          }
+          return window.NimsReportCore.navigateCurrentDocumentStep(document);
+        }
+      });
+      const result = clicked && clicked[0] && clicked[0].result || { stage: "unknown", errorCode: "navigation_target_not_found" };
+      if (result.stage === "cr_search") { setStatus("CR-wise report page ready. Enter the CR number."); return; }
+      if (result.stage === "report_list") { setStatus("Report list detected."); return; }
+      if (result.stage === "login") { setStatus("Manual NIMS login required."); return; }
+      if (result.stage === "session_expired") { setStatus("NIMS session expired. Login again."); return; }
+      if (result.action === "clicked_investigation_module") setStatus("Opening Investigation…");
+      else if (result.action === "clicked_cr_wise_menu") setStatus("Opening CR-wise reports…");
+      else if (result.action === "cooldown") setStatus("Waiting for NIMS navigation…");
+      else setStatus("Unable to locate the Investigation menu. Retrying…");
+      await delay(750);
+    }
+    setStatus("Unable to open CR-wise reports. Use Diagnose and retry.");
+  } catch (error) {
+    setStatus(`Error: ${error.message}`);
+  } finally {
+    if (generation === navigationGeneration) {
+      navigationInProgress = false;
+      if (button) button.disabled = false;
+    }
+  }
+}
+
+async function probeNavigationFrames(tabId) {
+  const probes = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    world: "MAIN",
+    func: () => {
+      if (!window.NimsReportCore || typeof window.NimsReportCore.getCurrentDocumentNavigationDiagnostic !== "function") {
+        return { stage: "unknown", actionable: false, visible: false, errorCode: "navigation_api_unavailable" };
+      }
+      return window.NimsReportCore.getCurrentDocumentNavigationDiagnostic(document);
+    }
+  }).catch(() => []);
+  return (probes || []).map((item) => ({ frameId: item.frameId, ...(item.result || { stage: "unknown", visible: false }) }));
+}
+
+function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function ensureMainWorldNavigationCore(tabId) {
+  const checks = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    world: "MAIN",
+    func: () => Boolean(window.NimsReportCore && typeof window.NimsReportCore.detectCurrentDocumentStage === "function" && typeof window.NimsReportCore.navigateCurrentDocumentStep === "function")
+  }).catch(() => []);
+  const missingFrameIds = (checks || []).filter((item) => !item.result).map((item) => item.frameId);
+  if (!missingFrameIds.length) return;
+  await chrome.scripting.executeScript({ target: { tabId, frameIds: missingFrameIds }, world: "MAIN", files: ["src/navigationCore.js"] }).catch(() => {});
+}
+
+async function ensureContentApi(tabId) {
+  const check = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => Boolean(window.NimsFastSummary && window.NimsFastSummary.navigateToCrWiseReports)
+  }).catch(() => []);
+  if ((check || []).some((item) => item.result)) return;
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["src/navigationCore.js"] }).catch(() => {});
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["src/contentUtils.js"] }).catch(() => {});
+  await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["src/contentScript.js"] }).catch(() => {});
 }
 
 async function loadHelperSettings() {
@@ -147,14 +258,7 @@ async function prepareAndDiagnoseActiveTab() {
     throw new Error("Open a NIMS page before running summary");
   }
 
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
-    files: ["src/contentUtils.js"]
-  }).catch(() => {});
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames: true },
-    files: ["src/contentScript.js"]
-  }).catch(() => {});
+  await ensureContentApi(tab.id);
 
   const injections = await chrome.scripting.executeScript({
     target: { tabId: tab.id, allFrames: true },
@@ -178,11 +282,20 @@ async function prepareAndDiagnoseActiveTab() {
 
 function collectFrameDiagnostic() {
   const utils = window.NimsFastSummaryUtils;
+  const core = window.NimsReportCore;
   const rows = utils ? utils.extractReportRows(document, location.href) : [];
+  const stage = core && core.detectNimsPageStage ? core.detectNimsPageStage(document) : { stage: "unknown", framesChecked: 1 };
+  const frame = core && core.collectFrames ? (core.collectFrames(document)[0] || {}) : {};
   return {
     url: location.href,
     title: document.title || "",
     totalTr: document.querySelectorAll("tr").length,
+    depth: frame.depth || 0,
+    detectedStage: stage.stage || "unknown",
+    hasCrWiseMenu: Boolean(frame.hasCrWiseMenu),
+    hasInvestigationModule: Boolean(frame.hasInvestigationModule),
+    hasCrSearchForm: Boolean(frame.hasCrSearchForm),
+    hasSetPdfTemplate: Boolean(frame.setPdfTemplate && frame.setPdfTemplate.discovered),
     viewReportRows: Array.from(document.querySelectorAll("tr")).filter((row) => /view\s*report/i.test(row.innerText || row.textContent || "")).length,
     hasSummary: Boolean(window.NimsFastSummary),
     hasUtils: Boolean(window.NimsFastSummaryUtils),
