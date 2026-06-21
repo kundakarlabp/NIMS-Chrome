@@ -145,7 +145,7 @@
     const cr = hasCrSearchEvidence(doc, safeUrl);
     if (cr.present) return { stage: NIMS_PAGE_STAGE.CR_SEARCH, safePath: safeUrl || "", evidence: cr.evidence };
     if (findCrWiseReportMenuTargetInDocument(doc).ok) return { stage: NIMS_PAGE_STAGE.INVESTIGATION_MENU, safePath: safeUrl || "", evidence: ["cr_wise_menu_id"] };
-    if (findInvestigationModuleTargetInDocument(doc).ok || plausibleHomeWithMenuFunction(doc)) return { stage: NIMS_PAGE_STAGE.HOME, safePath: safeUrl || "", evidence: ["investigation_module"] };
+    if (findInvestigationModuleTargetInDocument(doc).ok || plausibleHomeWithMenuFunction(doc) || hasLoggedInShellEvidence(doc)) return { stage: NIMS_PAGE_STAGE.HOME, safePath: safeUrl || "", evidence: ["investigation_module"] };
     if (hasLoginEvidence(doc, safeUrl)) return { stage: NIMS_PAGE_STAGE.LOGIN, safePath: safeUrl || "", evidence: ["login_form"] };
     return { stage: NIMS_PAGE_STAGE.UNKNOWN, safePath: safeUrl || "", evidence };
   }
@@ -169,6 +169,7 @@
   }
 
   function hasLoginEvidence(doc, safeUrl) {
+    if (hasLoggedInShellEvidence(doc)) return false;
     const password = doc.querySelector('input[type="password"]');
     const user = doc.querySelector('input[name*="user" i], input[id*="user" i], input[name*="login" i], input[id*="login" i], input[type="text"]');
     const formText = compactText(Array.from(doc.querySelectorAll('form, label, button, input[type="submit"]')).map((el) => `${textOf(el)} ${el.value || ""}`).join(" "));
@@ -198,6 +199,20 @@
   }
 
   function plausibleHomeWithMenuFunction(doc) { return Boolean(doc.defaultView && typeof doc.defaultView.menuSelected === "function") && /module|menu|home/i.test(compactText(textOf(doc.body || doc)).slice(0, 1000)); }
+
+  // Recognise the authenticated e-Sushrut G-5 shell by stable visible markers,
+  // independent of the exact menu DOM (which varies and broke onclick-based
+  // home detection). The live shell shows "Home Menu", the module menu bar, and
+  // a "Welcome,"/e-Sushrut banner — none of which appear on the login page.
+  const SHELL_MODULE_NAMES = ["registration", "investigation", "tariff search", "mis reports", "inventory", "ipd", "hems", "opd", "adt"];
+  function hasLoggedInShellEvidence(doc) {
+    const text = compactText(textOf((doc && doc.body) || doc || "")).toLowerCase();
+    if (!text) return false;
+    const hasHomeMenu = /home\s*menu/.test(text);
+    const hasBrand = /e-?sushrut|nizam'?s institute of medical sciences|welcome,/.test(text);
+    const moduleHits = SHELL_MODULE_NAMES.reduce((n, name) => (text.includes(name) ? n + 1 : n), 0);
+    return hasHomeMenu && hasBrand && moduleHits >= 3;
+  }
 
   function findCrWiseReportMenuTarget(doc) {
     const docs = accessibleDocumentsRecursive(doc || root.document).sort((a, b) => Number(!a.visibleThroughAncestors) - Number(!b.visibleThroughAncestors) || a.depth - b.depth);
@@ -241,6 +256,7 @@
     }
     if (stage === NIMS_PAGE_STAGE.HOME) {
       const target = findInvestigationModuleTarget(rootDoc);
+      if (shouldUseCanonicalFallback(stage, "clicked_investigation_module") || !target.ok) return navigateCanonicalCrWiseEndpoint(rootDoc, target.ok ? "investigation_click_no_transition" : "investigation_module_not_found");
       return performNavigationTarget(stage, "clicked_investigation_module", target, "investigation_module_not_found");
     }
     return navigationResult(false, NIMS_PAGE_STAGE.UNKNOWN, "none", false, "navigation_target_not_found");
@@ -298,7 +314,7 @@
     const docs = accessibleDocumentsRecursive(doc || root.document)
       .filter((item) => item.visibleThroughAncestors && item.win)
       .map((item) => ({ item, diagnostic: getCurrentDocumentNavigationDiagnostic(item.doc, item.depth, item.visibleThroughAncestors) }))
-      .filter((entry) => entry.diagnostic.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU || entry.diagnostic.hasCrWiseMenu || /HISInvestigationG5/i.test(entry.diagnostic.safePath || ""));
+      .filter((entry) => entry.diagnostic.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU || entry.diagnostic.stage === NIMS_PAGE_STAGE.HOME || entry.diagnostic.hasCrWiseMenu || /HISInvestigationG5/i.test(entry.diagnostic.safePath || ""));
     docs.sort((a, b) => (b.item.depth - a.item.depth) || navigationStageScore(b.diagnostic) - navigationStageScore(a.diagnostic));
     const selected = docs[0];
     if (!selected) return { ok: false, errorCode: "investigation_context_not_confirmed" };

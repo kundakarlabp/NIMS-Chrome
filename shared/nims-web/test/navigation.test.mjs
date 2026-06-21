@@ -150,3 +150,43 @@ test('visible session expired is terminal over action target', () => {
   assert.equal(result.stage, 'session_expired');
   assert.equal(result.errorCode, 'session_expired');
 });
+
+const g5Shell = `<!doctype html><body>
+  <div>e-Sushrut G-5 Nizam's Institute of Medical Sciences</div>
+  <div>Welcome, Kundakarla Bhanu Prasad</div>
+  <nav><span>Registration</span><span>OPD</span><span>ADT</span><span class="active">Investigation</span><span>PIS</span><span>IPD</span><span>HEMS</span><span>Inventory</span><span>Tariff Search</span><span>MIS Reports</span></nav>
+  <div>Home Menu</div>
+</body>`;
+
+test('live e-Sushrut G-5 shell without a menuSelected button is detected as home, not login', () => {
+  const { core } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action');
+  assert.equal(core.detectCurrentDocumentStage(document).stage, 'home');
+});
+
+test('G-5 shell with a lingering password field is still home, not login', () => {
+  const { core } = loadCore(g5Shell + '<form><input type="password"><input type="text" name="user"><button>Login</button></form>', 'https://nimsts.edu.in/AHIMSG5/home');
+  assert.equal(core.detectCurrentDocumentStage(document).stage, 'home');
+});
+
+test('home with unresponsive Investigation menu falls back to canonical CR endpoint on retry', () => {
+  const { core } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/home');
+  const first = core.navigateToCrWiseReports(document);
+  const second = core.navigateToCrWiseReports(document);
+  assert.equal(first.action, 'clicked_investigation_module');
+  assert.equal(second.action, 'canonical_endpoint_fallback');
+  assert.equal(second.canonicalFallbackAttempted, true);
+  assert.equal(second.safePath, 'nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+});
+
+test('home with no Investigation control and no menu function falls back to canonical immediately', () => {
+  const { core, dom } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/home');
+  delete dom.window.menuSelected;
+  const result = core.navigateToCrWiseReports(document);
+  assert.equal(result.action, 'canonical_endpoint_fallback');
+  assert.equal(result.canonicalFallbackAttempted, true);
+});
+
+test('genuine login page is still classified login (shell guard does not over-trigger)', () => {
+  const { core } = loadCore(`<!doctype html><form><label>User ID</label><input name="userName"><label>Password</label><input type="password"><button>Login</button></form>`, 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action');
+  assert.equal(core.detectCurrentDocumentStage(document).stage, 'login');
+});
