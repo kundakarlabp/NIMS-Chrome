@@ -317,4 +317,36 @@ class NimsNavigationCoordinatorTest {
             observed
         )
     }
+
+    @Test
+    fun failedJavaScriptDecodingReturnsControlledError() {
+        assertEquals("navigation_js_decode_failed", NimsNavigationStep.fromRawJson("not-json").errorCode)
+        assertEquals("navigation_js_empty_result", NimsNavigationStep.fromRawJson("null").errorCode)
+    }
+
+    @Test
+    fun investigationStepsRetryOnlyWithinBounds() = runTest {
+        var calls = 0
+        val coordinator = NimsNavigationCoordinator(maxAttempts = 2, retryDelayMs = 1, stepTimeoutMs = 50, maxDurationMs = 500)
+        val outcome = coordinator.execute(stepProvider = {
+            calls += 1
+            NimsNavigationStep(ok = true, stage = "investigation_menu", action = "clicked_cr_wise_menu", done = false, errorCode = "")
+        })
+        assertEquals(2, calls)
+        assertEquals(NimsNavigationOutcome.Failed(errorCode = "navigation_target_not_found"), outcome)
+    }
+
+    @Test
+    fun canonicalFallbackStateDoesNotCreateInfiniteLoop() = runTest {
+        var calls = 0
+        val coordinator = NimsNavigationCoordinator(maxAttempts = 3, retryDelayMs = 1, stepTimeoutMs = 50, maxDurationMs = 500)
+        val outcome = coordinator.execute(stepProvider = {
+            calls += 1
+            if (calls == 1) NimsNavigationStep(ok = true, stage = "investigation_menu", action = "canonical_endpoint_fallback", done = false, errorCode = "")
+            else NimsNavigationStep(ok = true, stage = "cr_search", action = "none", done = true, errorCode = "")
+        })
+        assertEquals(2, calls)
+        assertEquals(NimsNavigationOutcome.CrSearchReady, outcome)
+    }
+
 }

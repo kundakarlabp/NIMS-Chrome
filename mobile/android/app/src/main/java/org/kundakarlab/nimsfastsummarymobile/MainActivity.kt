@@ -397,8 +397,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun evaluateNavigationStep(): NimsNavigationStep = suspendCancellableCoroutine { continuation ->
-        evaluateCore("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { json ->
-            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromJson(json))
+        evaluateJson("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { rawJson ->
+            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromRawJson(rawJson))
         }
     }
 
@@ -682,13 +682,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun evaluateCore(expression: String, callback: (JSONObject) -> Unit) {
-        evaluateJson(expression) { callback(JSONObject(it)) }
+        evaluateJson(expression) { raw ->
+            val json = runCatching { JSONObject(raw) }.getOrElse { JSONObject().put("ok", false).put("errorCode", "navigation_js_decode_failed") }
+            callback(json)
+        }
     }
 
     private fun evaluateJson(expression: String, callback: (String) -> Unit) {
         val core = assets.open("nimsReportCore.js").bufferedReader().use { it.readText() }
-        webView.evaluateJavascript("$core\n(function(){ return $expression; })();") { value ->
-            callback(decodeJsString(value))
+        webView.evaluateJavascript("$core\n(function(){ try { return $expression; } catch (error) { return JSON.stringify({ ok: false, stage: 'unknown', action: 'none', done: false, errorCode: 'navigation_js_exception' }); } })();") { value ->
+            callback(runCatching { decodeJsString(value) }.getOrDefault(""))
         }
     }
 
