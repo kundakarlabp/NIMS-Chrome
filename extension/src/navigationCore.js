@@ -3,6 +3,7 @@
   const CR_WISE_MENU_ID = "Cr_No_Wise_Result_Report_Printing_New";
   const CR_WISE_ENDPOINT = "/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt";
   const NIMS_PAGE_STAGE = Object.freeze({ LOGIN: "login", HOME: "home", INVESTIGATION_MENU: "investigation_menu", CR_SEARCH: "cr_search", REPORT_LIST: "report_list", REPORT_VIEWER: "report_viewer", SESSION_EXPIRED: "session_expired", UNKNOWN: "unknown" });
+  const NAVIGATION_ACTION_COOLDOWN_MS = 1500;
 
   function diagnosePage(doc) {
     const frames = collectFrames(doc || root.document);
@@ -31,7 +32,7 @@
   }
 
   function collectFrames(doc) {
-    return accessibleDocuments(doc || root.document).map((item) => frameDiagnostic(item.doc, item.safeUrl || item.url, item.depth));
+    return accessibleDocuments(doc || root.document).map((item) => frameDiagnostic(item.doc, item.safeUrl || item.url, item.depth, item.visibleThroughAncestors));
   }
 
   function safeDocumentHref(doc) {
@@ -41,17 +42,18 @@
   function accessibleDocumentsRecursive(startDoc, maxDepth = 6) {
     const output = [];
     const visited = new Set();
-    function visit(currentDoc, depth, frameElement) {
+    function visit(currentDoc, depth, frameElement, parentVisible) {
       if (!currentDoc || depth > maxDepth || visited.has(currentDoc)) return;
       visited.add(currentDoc);
-      output.push({ doc: currentDoc, win: currentDoc.defaultView || null, depth, frameElement: frameElement || null, safeUrl: safeHostPath(safeDocumentHref(currentDoc)) });
+      const visibleThroughAncestors = parentVisible && isElementVisible(frameElement);
+      output.push({ doc: currentDoc, win: currentDoc.defaultView || null, depth, frameElement: frameElement || null, safeUrl: safeHostPath(safeDocumentHref(currentDoc)), visibleThroughAncestors });
       let frames = [];
       try { frames = Array.from(currentDoc.querySelectorAll("iframe, frame")); } catch { frames = []; }
       for (const frame of frames) {
-        try { if (frame.contentDocument) visit(frame.contentDocument, depth + 1, frame); } catch { }
+        try { if (frame.contentDocument) visit(frame.contentDocument, depth + 1, frame, visibleThroughAncestors); } catch { }
       }
     }
-    visit(startDoc || root.document, 0, null);
+    visit(startDoc || root.document, 0, null, true);
     return output;
   }
 
@@ -59,35 +61,79 @@
     return accessibleDocumentsRecursive(doc || root.document);
   }
 
-  function frameDiagnostic(doc, url, depth) {
+  function frameDiagnostic(doc, url, depth, visibleThroughAncestors = true) {
     const rows = extractReportRows(doc, url);
     const stage = detectSingleDocumentStage(doc, url, rows);
+    const crWise = findCrWiseReportMenuTargetInDocument(doc);
+    const investigation = findInvestigationModuleTargetInDocument(doc);
+    const setPdfTemplate = getSafeSetPdfTemplate(doc);
     return {
+      safePath: safeHostPath(url || safeDocumentHref(doc)),
       url: safeHostPath(url || safeDocumentHref(doc)),
       title: compactText(doc.title || "").slice(0, 80),
       depth: Number(depth || 0),
+      visibleThroughAncestors: Boolean(visibleThroughAncestors),
+      visible: Boolean(visibleThroughAncestors),
       detectedStage: stage.stage,
-      hasCrWiseMenu: Boolean(findCrWiseReportMenuTargetInDocument(doc).ok),
-      hasInvestigationModule: Boolean(findInvestigationModuleTargetInDocument(doc).ok),
+      stage: stage.stage,
+      evidence: stage.evidence || [],
+      actionable: Boolean(crWise.ok || investigation.ok),
+      targetMethod: crWise.ok ? crWise.method : (investigation.ok ? investigation.method : ""),
+      hasCrWiseMenu: Boolean(crWise.ok),
+      hasInvestigationModule: Boolean(investigation.ok),
       hasCrSearchForm: hasCrSearchEvidence(doc, url).present,
       viewReportRows: rows.length,
       printReportRows: rows.filter((row) => row.onclick_function_name === "printReport").length,
-      setPdfTemplate: getSafeSetPdfTemplate(doc)
+      hasSetPdfTemplate: Boolean(setPdfTemplate && setPdfTemplate.discovered),
+      setPdfTemplate
     };
   }
 
 
   function detectNimsPageStage(doc) {
     const docs = accessibleDocumentsRecursive(doc || root.document);
-    const evidence = [];
-    let best = { stage: NIMS_PAGE_STAGE.UNKNOWN, safePath: "", framesChecked: docs.length, evidence };
-    const priority = [NIMS_PAGE_STAGE.REPORT_LIST, NIMS_PAGE_STAGE.CR_SEARCH, NIMS_PAGE_STAGE.REPORT_VIEWER, NIMS_PAGE_STAGE.INVESTIGATION_MENU, NIMS_PAGE_STAGE.HOME, NIMS_PAGE_STAGE.SESSION_EXPIRED, NIMS_PAGE_STAGE.LOGIN, NIMS_PAGE_STAGE.UNKNOWN];
-    for (const item of docs) {
-      const rows = extractReportRows(item.doc, item.safeUrl);
-      const stage = detectSingleDocumentStage(item.doc, item.safeUrl, rows);
-      if (priority.indexOf(stage.stage) < priority.indexOf(best.stage)) best = { ...stage, safePath: item.safeUrl, framesChecked: docs.length };
-    }
-    return best;
+    const candidates = (docs.some((item) => item.visibleThroughAncestors) ? docs.filter((item) => item.visibleThroughAncestors) : docs)
+      .map((item) => ({ item, diagnostic: getCurrentDocumentNavigationDiagnostic(item.doc, item.depth, item.visibleThroughAncestors) }))
+      .filter((entry) => navigationStageScore(entry.diagnostic) > 0);
+    if (!candidates.length) return { stage: NIMS_PAGE_STAGE.UNKNOWN, safePath: "", framesChecked: docs.length, evidence: [] };
+    candidates.sort((a, b) => compareStageDiagnostics(a.diagnostic, b.diagnostic));
+    const best = candidates[0].diagnostic;
+    return { stage: best.stage, safePath: best.safePath, framesChecked: docs.length, evidence: best.evidence || [] };
+  }
+
+  function detectCurrentDocumentStage(doc) {
+    const currentDoc = doc || root.document;
+    return detectSingleDocumentStage(currentDoc, safeHostPath(safeDocumentHref(currentDoc)), extractReportRows(currentDoc, safeDocumentHref(currentDoc)));
+  }
+
+  function getCurrentDocumentNavigationDiagnostic(doc, depth = 0, visibleThroughAncestors = true) {
+    const currentDoc = doc || root.document;
+    const safePath = safeHostPath(safeDocumentHref(currentDoc));
+    const rows = extractReportRows(currentDoc, safePath);
+    const stage = detectSingleDocumentStage(currentDoc, safePath, rows);
+    const crWise = findCrWiseReportMenuTargetInDocument(currentDoc);
+    const investigation = findInvestigationModuleTargetInDocument(currentDoc);
+    const crSearch = hasCrSearchEvidence(currentDoc, safePath);
+    const action = stage.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU && crWise.ok
+      ? "clicked_cr_wise_menu"
+      : stage.stage === NIMS_PAGE_STAGE.HOME && investigation.ok
+        ? "clicked_investigation_module"
+        : "none";
+    return {
+      stage: stage.stage,
+      actionable: action !== "none",
+      action,
+      visible: Boolean(visibleThroughAncestors) && isDocumentVisible(currentDoc),
+      depth: Number(depth || 0),
+      safePath,
+      evidence: stage.evidence || [],
+      targetMethod: crWise.ok ? crWise.method : (investigation.ok ? investigation.method : ""),
+      hasInvestigationModule: Boolean(investigation.ok),
+      hasCrWiseMenu: Boolean(crWise.ok),
+      hasCrSearchForm: crSearch.present,
+      viewReportRows: rows.length,
+      hasSetPdfTemplate: Boolean(getSafeSetPdfTemplate(currentDoc))
+    };
   }
 
   function detectSingleDocumentStage(doc, safeUrl, rows) {
@@ -121,7 +167,9 @@
   }
 
   function findInvestigationModuleTarget(doc) {
-    for (const item of accessibleDocumentsRecursive(doc || root.document)) {
+    const docs = accessibleDocumentsRecursive(doc || root.document).sort((a, b) => Number(!a.visibleThroughAncestors) - Number(!b.visibleThroughAncestors) || a.depth - b.depth);
+    for (const item of docs) {
+      if (!item.visibleThroughAncestors) continue;
       const found = findInvestigationModuleTargetInDocument(item.doc);
       if (found.ok) return { ...found, doc: item.doc, win: item.win };
       if (plausibleHomeWithMenuFunction(item.doc) && item.win && typeof item.win.menuSelected === "function") return { ok: true, method: "frame_function", doc: item.doc, win: item.win };
@@ -143,7 +191,9 @@
   function plausibleHomeWithMenuFunction(doc) { return Boolean(doc.defaultView && typeof doc.defaultView.menuSelected === "function") && /module|menu|home/i.test(compactText(textOf(doc.body || doc)).slice(0, 1000)); }
 
   function findCrWiseReportMenuTarget(doc) {
-    for (const item of accessibleDocumentsRecursive(doc || root.document)) {
+    const docs = accessibleDocumentsRecursive(doc || root.document).sort((a, b) => Number(!a.visibleThroughAncestors) - Number(!b.visibleThroughAncestors) || a.depth - b.depth);
+    for (const item of docs) {
+      if (!item.visibleThroughAncestors) continue;
       const found = findCrWiseReportMenuTargetInDocument(item.doc);
       if (found.ok) return { ...found, doc: item.doc, win: item.win };
     }
@@ -153,8 +203,13 @@
   function findCrWiseReportMenuTargetInDocument(doc) {
     const exact = doc.getElementById(CR_WISE_MENU_ID);
     if (exact && isUsableClickable(exact) && crWiseElementLooksValid(exact)) return { ok: true, method: "exact_id", element: exact };
-    const endpoint = Array.from(doc.querySelectorAll("[onclick]")).find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_ENDPOINT) && isUsableClickable(el));
-    if (endpoint) return { ok: true, method: "compatibility_fallback", element: endpoint };
+    const candidates = Array.from(doc.querySelectorAll("[onclick], a, button, [role='button']")).filter((el) => isUsableClickable(el) && !el.closest("table"));
+    const endpoint = candidates.find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_ENDPOINT));
+    if (endpoint) return { ok: true, method: "exact_endpoint", element: endpoint };
+    const menuId = candidates.find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_MENU_ID));
+    if (menuId) return { ok: true, method: "exact_menu_id", element: menuId };
+    const label = candidates.find((el) => compactText(textOf(el) || el.value || "") === "Cr No Wise Result Report Printing New");
+    if (label) return { ok: true, method: "exact_label", element: label };
     return { ok: false, reason: "cr_wise_menu_not_found" };
   }
 
@@ -171,24 +226,95 @@
     if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return { ok: false, stage, action: "none", done: false, errorCode: "session_expired" };
     if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) {
       const target = findCrWiseReportMenuTarget(doc || root.document);
-      if (!target.ok) return { ok: false, stage, action: "none", done: false, errorCode: "cr_wise_menu_not_found" };
-      safeClick(target.element);
-      return { ok: true, stage, action: "clicked_cr_wise_menu", done: false };
+      return performNavigationTarget(stage, "clicked_cr_wise_menu", target, "cr_wise_menu_not_found");
     }
     if (stage === NIMS_PAGE_STAGE.HOME) {
       const target = findInvestigationModuleTarget(doc || root.document);
-      if (!target.ok) return { ok: false, stage, action: "none", done: false, errorCode: "investigation_module_not_found" };
-      if (target.element) safeClick(target.element); else if (target.win && typeof target.win.menuSelected === "function") target.win.menuSelected("Investigation", true);
-      return { ok: true, stage, action: "clicked_investigation_module", done: false };
+      return performNavigationTarget(stage, "clicked_investigation_module", target, "investigation_module_not_found");
     }
     return { ok: false, stage: NIMS_PAGE_STAGE.UNKNOWN, action: "none", done: false, errorCode: "navigation_target_not_found" };
   }
 
+  function navigateCurrentDocumentStep(doc) {
+    const currentDoc = doc || root.document;
+    const diagnostic = getCurrentDocumentNavigationDiagnostic(currentDoc, 0, true);
+    const stage = diagnostic.stage;
+    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return { ok: true, stage, action: "none", done: true };
+    if (stage === NIMS_PAGE_STAGE.LOGIN) return { ok: false, stage, action: "none", done: false, errorCode: "manual_login_required" };
+    if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return { ok: false, stage, action: "none", done: false, errorCode: "session_expired" };
+    if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) return performNavigationTarget(stage, "clicked_cr_wise_menu", findCrWiseReportMenuTargetInDocument(currentDoc), "cr_wise_menu_not_found");
+    if (stage === NIMS_PAGE_STAGE.HOME) return performNavigationTarget(stage, "clicked_investigation_module", findInvestigationModuleTargetInDocument(currentDoc), "investigation_module_not_found");
+    return { ok: false, stage: NIMS_PAGE_STAGE.UNKNOWN, action: "none", done: false, errorCode: "navigation_target_not_found" };
+  }
+
+  function performNavigationTarget(stage, action, target, missingCode) {
+    if (!target || !target.ok) return { ok: false, stage, action: "none", done: false, errorCode: missingCode };
+    const key = actionCooldownKey(stage, action);
+    if (!canPerformNavigationAction(key)) return { ok: true, stage, action: "cooldown", done: false };
+    let clicked = false;
+    if (target.element) clicked = safeClick(target.element);
+    else if (target.win && action === "clicked_investigation_module" && typeof target.win.menuSelected === "function") { target.win.menuSelected("Investigation", true); clicked = true; }
+    return clicked ? { ok: true, stage, action, done: false } : { ok: false, stage, action: "none", done: false, errorCode: "click_failed" };
+  }
+
   function safeClick(target) {
-    if (!target) return;
+    if (!target) return false;
     try { target.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }); } catch { }
-    try { target.click(); return; } catch { }
-    try { target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: target.ownerDocument.defaultView })); } catch { }
+    try { target.click(); return true; } catch { }
+    try {
+      const view = target.ownerDocument && target.ownerDocument.defaultView;
+      const event = new view.MouseEvent("click", { bubbles: true, cancelable: true, view });
+      return target.dispatchEvent(event);
+    } catch { return false; }
+  }
+
+
+  function actionCooldownKey(stage, action) {
+    return `${stage}:${action}`;
+  }
+
+  function canPerformNavigationAction(key) {
+    const now = Date.now();
+    const scope = root.window || root;
+    const previous = scope.__NIMS_LAST_NAVIGATION_ACTION__;
+    if (previous && previous.key === key && now - previous.time < NAVIGATION_ACTION_COOLDOWN_MS) return false;
+    scope.__NIMS_LAST_NAVIGATION_ACTION__ = { key, time: now };
+    return true;
+  }
+
+  function isDocumentVisible(doc) {
+    try {
+      if (!doc || !doc.defaultView) return true;
+      if (doc.defaultView.frameElement) return isElementVisible(doc.defaultView.frameElement);
+      return true;
+    } catch { return true; }
+  }
+
+  function isElementVisible(element) {
+    if (!element) return true;
+    if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
+    const win = element.ownerDocument && element.ownerDocument.defaultView;
+    let style = null;
+    try { style = win && win.getComputedStyle ? win.getComputedStyle(element) : null; } catch { style = null; }
+    if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0)) return false;
+    try { if (element.getClientRects && element.getClientRects().length === 0) return false; } catch { }
+    return true;
+  }
+
+  function navigationStageScore(frame) {
+    const scores = { session_expired: 9000, report_list: 8000, cr_search: 7000, report_viewer: 6000, investigation_menu: 5000, home: 4000, login: 3000, unknown: 0 };
+    return scores[frame && frame.stage] || scores[frame && frame.detectedStage] || 0;
+  }
+
+  function compareStageDiagnostics(a, b) {
+    const scoreDiff = navigationStageScore(b) - navigationStageScore(a);
+    if (scoreDiff) return scoreDiff;
+    if (Boolean(b.actionable) !== Boolean(a.actionable)) return Number(Boolean(b.actionable)) - Number(Boolean(a.actionable));
+    const depthDiff = Number(a.depth || 0) - Number(b.depth || 0);
+    if (depthDiff) return depthDiff;
+    const evidenceDiff = ((b.evidence || []).length) - ((a.evidence || []).length);
+    if (evidenceDiff) return evidenceDiff;
+    return 0;
   }
 
   function isUsableClickable(el) {
@@ -433,7 +559,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
+  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

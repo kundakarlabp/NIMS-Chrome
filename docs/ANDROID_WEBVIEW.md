@@ -28,11 +28,14 @@ The debug-signed APK is created under `mobile/android/app/build/outputs/apk/debu
 1. Install the debug-signed APK.
 2. Confirm the app starts in **On-device only** mode and does not ask for a Railway URL or API key.
 3. Log in manually in the NIMS WebView.
-4. Open `CR No Wise Result Report Printing New`.
-5. Tap `Diagnose Page`.
-6. Tap `Discover Mapping`.
-7. Tap `Test One`.
-8. If one report parses successfully, run `Fast`, `Cultures`, or `Full`.
+4. Tap `Open CR Reports`.
+5. Wait for `CR-wise report page ready. Enter the CR number.`
+6. Enter the CR number manually.
+7. Submit the NIMS search form manually and wait for report rows.
+8. Tap `Diagnose Page`.
+9. Tap `Discover Mapping`.
+10. Tap `Test One`.
+11. If one report parses successfully, run `Fast`, `Cultures`, or `Full`.
 
 Bulk buttons are blocked until `Test One` validates the current in-memory mapping.
 
@@ -83,6 +86,6 @@ Railway settings are optional legacy/advanced functionality. **Automatic with Ra
 8. Run Test One Report.
 9. Run Fast, Cultures or Full.
 
-Login, CAPTCHA/OTP, password entry and CR-number entry remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
+Login, CAPTCHA/OTP, password entry and CR-number entry and CR form submission remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list; zero View Report rows on CR search is normal. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
 
 Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, CR search page ready, and Report list not yet loaded.

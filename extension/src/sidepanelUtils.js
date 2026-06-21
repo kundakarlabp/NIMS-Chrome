@@ -47,7 +47,7 @@
     let parsed;
     try { parsed = input instanceof URL ? input : new URL(input || ""); } catch { return "BLOCKED_SCHEME"; }
     if (parsed.protocol !== "https:") return "BLOCKED_SCHEME";
-    if (parsed.username || parsed.password) return "BLOCKED_NIMS";
+    if (parsed.username || parsed.password) return "BLOCKED_UNSAFE";
     const host = parsed.hostname.toLowerCase();
     const isTrusted = ALLOWED_NIMS_HOSTS.has(host);
     if (!isTrusted) return "EXTERNAL_HTTPS";
@@ -74,6 +74,51 @@
     return best;
   }
 
+
+  function isTerminalNavigationStage(stage) {
+    return ["session_expired", "report_list", "cr_search", "login"].includes(stage);
+  }
+
+  function navigationStageScore(frame) {
+    const stage = frame && (frame.stage || frame.detectedStage);
+    const scores = { session_expired: 9000, report_list: 8000, cr_search: 7000, report_viewer: 6000, investigation_menu: 5000, home: 4000, login: 3000 };
+    return scores[stage] || 0;
+  }
+
+  function selectTerminalNavigationState(frames) {
+    const visible = (Array.isArray(frames) ? frames : []).filter((frame) => frame.visible || frame.visibleThroughAncestors);
+    for (const stage of ["session_expired", "report_list", "cr_search", "login"]) {
+      const match = visible.find((frame) => (frame.stage || frame.detectedStage) === stage);
+      if (match) return match;
+    }
+    return null;
+  }
+
+  function targetMethodScore(method) {
+    return ({ exact_id: 400, exact_onclick: 350, exact_endpoint: 300, exact_menu_id: 250, exact_label: 200, exact_text: 150, compatibility_fallback: 100, frame_function: 50 })[method] || 0;
+  }
+
+  function compareNavigationFrames(a, b) {
+    const stageDiff = navigationStageScore(b) - navigationStageScore(a);
+    if (stageDiff) return stageDiff;
+    const methodDiff = targetMethodScore(b && b.targetMethod) - targetMethodScore(a && a.targetMethod);
+    if (methodDiff) return methodDiff;
+    const depthDiff = Number((a && a.depth) || 0) - Number((b && b.depth) || 0);
+    if (depthDiff) return depthDiff;
+    return Number((a && a.frameId) || 0) - Number((b && b.frameId) || 0);
+  }
+
+  function selectNavigationTarget(frames) {
+    const items = Array.isArray(frames) ? frames : [];
+    const terminal = selectTerminalNavigationState(items);
+    if (terminal) return { kind: "terminal", frame: terminal };
+    const candidates = items
+      .filter((frame) => (frame.visible || frame.visibleThroughAncestors) && frame.actionable && ["investigation_menu", "home"].includes(frame.stage || frame.detectedStage))
+      .sort(compareNavigationFrames);
+    if (!candidates.length) return null;
+    return { kind: "action", frame: candidates[0] };
+  }
+
   function sanitizeDiagnosticResult(diagnostic) {
     const clean = sanitizeDiagnosticValue(diagnostic || {});
     if (clean.activeTabUrl) clean.activeTabUrl = safeDisplayUrl(clean.activeTabUrl);
@@ -93,6 +138,10 @@
     sanitizeDiagnosticValue,
     classifyNimsUrl,
     frameScore,
+    isTerminalNavigationStage,
+    navigationStageScore,
+    selectTerminalNavigationState,
+    selectNavigationTarget,
     selectBestFrameDiagnostic,
     sanitizeDiagnosticResult
   };

@@ -368,7 +368,10 @@
     clearMapping,
     scanAndInject,
     detectNimsPageStage: (doc) => window.NimsReportCore && window.NimsReportCore.detectNimsPageStage(doc || document),
-    navigateToCrWiseReports: (doc) => window.NimsReportCore && window.NimsReportCore.navigateToCrWiseReports(doc || document)
+    navigateToCrWiseReports: (doc) => window.NimsReportCore && window.NimsReportCore.navigateToCrWiseReports(doc || document),
+    detectCurrentDocumentStage: (doc) => window.NimsReportCore && window.NimsReportCore.detectCurrentDocumentStage(doc || document),
+    getCurrentDocumentNavigationDiagnostic: (doc) => window.NimsReportCore && window.NimsReportCore.getCurrentDocumentNavigationDiagnostic(doc || document),
+    navigateCurrentDocumentStep: (doc) => window.NimsReportCore && window.NimsReportCore.navigateCurrentDocumentStep(doc || document)
   };
 
   if (document.readyState === "loading") {

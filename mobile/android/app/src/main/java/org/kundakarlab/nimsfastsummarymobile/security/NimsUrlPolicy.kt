@@ -7,7 +7,8 @@ enum class UrlClassification {
     ALLOWED_NIMS,
     BLOCKED_NIMS,
     EXTERNAL_HTTPS,
-    BLOCKED_SCHEME
+    BLOCKED_SCHEME,
+    BLOCKED_UNSAFE
 }
 
 object NimsUrlPolicy {
@@ -23,9 +24,11 @@ object NimsUrlPolicy {
 
     fun isAllowed(uri: Uri): Boolean = classify(uri) == UrlClassification.ALLOWED_NIMS
 
-    fun isAllowedUrl(url: String): Boolean {
-        val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        return classifyParts(uri.scheme, uri.host, uri.rawUserInfo, uri.rawPath.orEmpty(), uri.port) == UrlClassification.ALLOWED_NIMS
+    fun isAllowedUrl(url: String): Boolean = classifyUrl(url) == UrlClassification.ALLOWED_NIMS
+
+    fun classifyUrl(url: String): UrlClassification {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return UrlClassification.BLOCKED_UNSAFE
+        return classifyParts(uri.scheme, uri.host, uri.rawUserInfo, uri.rawPath.orEmpty(), uri.port)
     }
 
     fun isTrustedNimsHost(uri: Uri): Boolean = uri.scheme.equals("https", ignoreCase = true) &&
@@ -49,10 +52,12 @@ object NimsUrlPolicy {
 
     private fun classifyParts(scheme: String?, host: String?, userInfo: String?, rawPath: String, port: Int): UrlClassification {
         if (!scheme.equals("https", ignoreCase = true)) return UrlClassification.BLOCKED_SCHEME
-        val normalizedHost = host?.lowercase() ?: return UrlClassification.EXTERNAL_HTTPS
+        if (userInfo != null) return UrlClassification.BLOCKED_UNSAFE
+        val normalizedHost = host?.lowercase() ?: return UrlClassification.BLOCKED_UNSAFE
         val trustedHost = normalizedHost in allowedHosts
+        if (port != -1 && port != 443) return if (trustedHost) UrlClassification.BLOCKED_NIMS else UrlClassification.BLOCKED_UNSAFE
         if (!trustedHost) return UrlClassification.EXTERNAL_HTTPS
-        if (userInfo != null || (port != -1 && port != 443) || isMalformedPath(rawPath)) return UrlClassification.BLOCKED_NIMS
+        if (isMalformedPath(rawPath)) return UrlClassification.BLOCKED_NIMS
         return if (allowedPathPrefixes.any { rawPath.startsWith(it) }) UrlClassification.ALLOWED_NIMS else UrlClassification.BLOCKED_NIMS
     }
 

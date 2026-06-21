@@ -20,15 +20,16 @@ class NimsWebViewClient(
                 return true
             }
             UrlClassification.EXTERNAL_HTTPS -> {
-                if (!request.isForMainFrame) return true
-                try {
+                if (!request.isForMainFrame || !request.hasGesture()) return true
+                return try {
                     view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                    true
                 } catch (_: ActivityNotFoundException) {
-                    // No raw URL logging.
+                    true
                 }
-                return true
             }
-            UrlClassification.BLOCKED_SCHEME -> return true
+            UrlClassification.BLOCKED_SCHEME,
+            UrlClassification.BLOCKED_UNSAFE -> return true
         }
     }
 

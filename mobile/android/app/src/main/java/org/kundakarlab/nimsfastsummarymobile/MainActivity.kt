@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -79,6 +80,9 @@ import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import org.kundakarlab.nimsfastsummarymobile.security.UrlClassification
+import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationCoordinator
+import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationOutcome
+import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationStep
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
@@ -89,7 +93,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
@@ -105,6 +108,7 @@ import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 
@@ -130,6 +134,7 @@ class MainActivity : ComponentActivity() {
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private var navigationJob: Job? = null
+    private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
@@ -240,31 +245,38 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                    val handled = AtomicBoolean(false)
+                    fun cleanupPopup(popupView: WebView) {
+                        popupView.stopLoading()
+                        popupView.webChromeClient = null
+                        popupView.webViewClient = null
+                        popupView.post { runCatching { popupView.destroy() } }
+                    }
+                    fun handlePopupUrlOnce(popupView: WebView, uri: Uri, isMainFrame: Boolean): Boolean {
+                        if (!handled.compareAndSet(false, true)) return true
+                        when (NimsUrlPolicy.classify(uri)) {
+                            UrlClassification.ALLOWED_NIMS -> webView.loadUrl(uri.toString())
+                            UrlClassification.EXTERNAL_HTTPS -> if (isMainFrame && isUserGesture) {
+                                runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            }
+                            UrlClassification.BLOCKED_NIMS,
+                            UrlClassification.BLOCKED_SCHEME,
+                            UrlClassification.BLOCKED_UNSAFE -> log("Blocked popup navigation")
+                        }
+                        cleanupPopup(popupView)
+                        return true
+                    }
                     val popup = WebView(view.context).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.useWideViewPort = true
                         settings.loadWithOverviewMode = true
                         webViewClient = object : WebViewClient() {
-                            override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean {
-                                when (NimsUrlPolicy.classify(request.url)) {
-                                    UrlClassification.ALLOWED_NIMS -> webView.loadUrl(request.url.toString())
-                                    UrlClassification.EXTERNAL_HTTPS -> if (request.isForMainFrame && isUserGesture) startActivity(Intent(Intent.ACTION_VIEW, request.url))
-                                    else -> log("Blocked popup navigation")
-                                }
-                                popupView.stopLoading()
-                                popupView.post { popupView.destroy() }
-                                return true
-                            }
+                            override fun shouldOverrideUrlLoading(popupView: WebView, request: WebResourceRequest): Boolean =
+                                handlePopupUrlOnce(popupView, request.url, request.isForMainFrame)
 
                             override fun onPageFinished(popupView: WebView, url: String) {
-                                val uri = android.net.Uri.parse(url)
-                                when (NimsUrlPolicy.classify(uri)) {
-                                    UrlClassification.ALLOWED_NIMS -> webView.loadUrl(url)
-                                    UrlClassification.EXTERNAL_HTTPS -> if (isUserGesture) startActivity(Intent(Intent.ACTION_VIEW, uri))
-                                    else -> if (url.isNotBlank() && url != "about:blank") log("Blocked popup navigation")
-                                }
-                                popupView.post { popupView.destroy() }
+                                if (url.isNotBlank() && url != "about:blank") handlePopupUrlOnce(popupView, Uri.parse(url), true)
                             }
                         }
                     }
@@ -348,40 +360,28 @@ class MainActivity : ComponentActivity() {
 
 
     private fun openCrWiseReports() {
-        navigationJob?.cancel()
+        cancelNavigation()
+        val generation = ++navigationGeneration
+        val coordinator = NimsNavigationCoordinator()
         navigationJob = lifecycleScope.launch {
             navigationInProgress = true
             setState(AppState.HELPER_READY, "Checking current NIMS page…")
-            try {
-                repeat(MAX_NAVIGATION_ATTEMPTS) {
-                    ensureActive()
-                    val result = evaluateNavigationStep()
-                    when (result.stage) {
-                        "cr_search" -> {
-                            setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
-                            return@launch
-                        }
-                        "report_list" -> {
-                            setState(AppState.REPORT_PAGE_READY, "Report list detected.")
-                            return@launch
-                        }
-                        "login" -> {
-                            setState(AppState.ERROR, "Manual NIMS login required.")
-                            return@launch
-                        }
-                        "session_expired" -> {
-                            setState(AppState.ERROR, "NIMS session expired. Login again.")
-                            return@launch
-                        }
-                        else -> setState(AppState.HELPER_READY, navigationMessage(result))
-                    }
-                    delay(NAVIGATION_RETRY_DELAY_MS)
+            val outcome = coordinator.run(
+                stepProvider = { evaluateNavigationStep() },
+                onStep = { step -> if (generation == navigationGeneration) setState(AppState.HELPER_READY, navigationMessage(step)) }
+            )
+            if (generation == navigationGeneration) {
+                when (outcome) {
+                    NimsNavigationOutcome.CrSearchReady -> setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
+                    NimsNavigationOutcome.ReportListReady -> setState(AppState.REPORT_PAGE_READY, "Report list detected.")
+                    NimsNavigationOutcome.ManualLoginRequired -> setState(AppState.ERROR, "Manual NIMS login required.")
+                    NimsNavigationOutcome.SessionExpired -> setState(AppState.ERROR, "NIMS session expired. Login again.")
+                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out. Run Diagnose and retry.")
+                    NimsNavigationOutcome.Cancelled -> Unit
+                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports. Use Diagnose and retry.")
                 }
-                setState(AppState.ERROR, "Unable to open CR-wise reports. Use Diagnose and retry.")
-            } catch (_: CancellationException) {
-                // Expected cancellation.
-            } finally {
                 navigationInProgress = false
+                navigationJob = null
             }
         }
     }
@@ -395,7 +395,9 @@ class MainActivity : ComponentActivity() {
     private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
         "clicked_investigation_module" -> "Opening Investigation…"
         "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
+        "cooldown" -> "Waiting for NIMS navigation…"
         else -> when (result.errorCode) {
+            "navigation_step_timeout" -> "Checking current NIMS page…"
             "investigation_module_not_found" -> "Unable to locate the Investigation menu."
             "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
             else -> "Checking current NIMS page…"
@@ -403,6 +405,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cancelNavigation() {
+        navigationGeneration += 1
         navigationJob?.cancel()
         navigationJob = null
         navigationInProgress = false
@@ -804,8 +807,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
-        private const val MAX_NAVIGATION_ATTEMPTS = 14
-        private const val NAVIGATION_RETRY_DELAY_MS = 750L
     }
 }
 
@@ -1260,24 +1261,6 @@ private fun abnormalityColor(value: Abnormality): Color {
 }
 
 private var webViewSessionCleaned = false
-
-data class NimsNavigationStep(
-    val ok: Boolean,
-    val stage: String,
-    val action: String,
-    val done: Boolean,
-    val errorCode: String
-) {
-    companion object {
-        fun fromJson(json: JSONObject): NimsNavigationStep = NimsNavigationStep(
-            ok = json.optBoolean("ok", false),
-            stage = json.optString("stage", "unknown"),
-            action = json.optString("action", "none"),
-            done = json.optBoolean("done", false),
-            errorCode = json.optString("errorCode", "")
-        )
-    }
-}
 
 data class ReportFetchResult(
     val contentType: String,

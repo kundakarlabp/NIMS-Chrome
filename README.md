@@ -44,16 +44,18 @@ source .venv/bin/activate
 5. First test on the mock page below.
 6. Open NIMS HIS.
 7. Login manually.
-8. Open `CR No Wise Result Report Printing New`.
-9. Enter the CR number and wait for the report-list table.
-10. Open the NIMS Fast Summary side panel.
-11. Click `Diagnose Page`.
-12. Confirm the `HISInvestigationG5` iframe has `View Report` rows.
-13. Confirm helper status shows `ok`.
-14. Click `Discover Mapping`. This performs one controlled `View Report` click to learn the current NIMS `printReport(...)` network request shape.
-15. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF and validate the mapping only if the helper parses at least one value or culture.
-16. Only after `Test Direct Fetch` succeeds, click `Bulk Fast Summary` or `Bulk Full Summary`.
-17. Verify the generated values against source reports before clinical decisions.
+8. Open the NIMS Fast Summary side panel.
+9. Click `Open CR Reports`.
+10. Wait for `CR-wise report page ready. Enter the CR number.`
+11. Enter the CR number manually in NIMS.
+12. Submit the NIMS search form manually and wait for the report-list table.
+13. Click `Diagnose Page`.
+14. Confirm the active NIMS frame has `View Report` rows. Zero rows on the CR search page is normal before manual CR submission.
+15. Confirm helper status shows `ok`.
+16. Click `Discover Mapping`. This performs one controlled `View Report` click only after report rows exist.
+17. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF and validate the mapping only if the helper parses at least one value or culture.
+18. Only after `Test Direct Fetch` succeeds, click `Bulk Fast Summary`, `Bulk Cultures Only`, or `Bulk Full Summary`.
+19. Verify the generated values against source reports before clinical decisions.
 
 ### Desktop With Railway Helper
 
@@ -76,7 +78,7 @@ NIMS_HELPER_MAX_BODY_MB=25
 5. In the extension side panel, set `Helper mode` to `Remote Railway`.
 6. Enter the Railway helper URL and API key.
 7. Click `Test Helper Connection`.
-8. Continue the normal workflow: `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
+8. Continue the normal workflow: `Open CR Reports` -> manual CR entry/submission -> `Diagnose Page` -> `Discover Mapping` -> `Test Direct Fetch` -> `Bulk Fast Summary`.
 
 The extension still performs direct NIMS report fetching in the browser session. Only report PDF/HTML/text content is sent to the helper for parsing. If Railway returns `Remote helper unauthorized. Check API key.`, update the saved API key.
 
@@ -89,8 +91,11 @@ Default workflow:
 1. Install the debug-signed APK on the phone.
 2. Open NIMS in the in-app WebView.
 3. Login manually.
-4. Open `CR No Wise Result Report Printing New`.
-5. Run `Diagnose Page` → `Discover Mapping` → `Test One` → `Fast`, `Cultures`, or `Full`.
+4. Tap `Open CR Reports`.
+5. Wait for `CR-wise report page ready. Enter the CR number.`
+6. Enter the CR number manually in NIMS.
+7. Submit the NIMS search form manually and wait for the report list.
+8. Run `Diagnose Page` → `Discover Mapping` → `Test One` → `Fast`, `Cultures`, or `Full`.
 
 Android defaults to **On-device only**. No Railway URL or API key is required. Text/HTML reports and text-based PDFs are processed locally; image-only PDFs are unsupported because OCR is not included. Raw reports, raw HTML, raw PDF bytes, cookies, full report URLs, query strings, hidden form values, and transient report filenames are not persisted or uploaded. Summary JSON and physician notes are encrypted locally with Android Keystore AES/GCM. Railway modes remain optional legacy/advanced functionality only.
 
@@ -216,6 +221,6 @@ See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, cr
 8. Run Test One Report.
 9. Run Fast, Cultures or Full.
 
-Login, CAPTCHA/OTP, password entry and CR-number entry remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
+Login, CAPTCHA/OTP, password entry and CR-number entry and CR form submission remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list; zero View Report rows on CR search is normal. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
 
 Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, CR search page ready, and Report list not yet loaded.
