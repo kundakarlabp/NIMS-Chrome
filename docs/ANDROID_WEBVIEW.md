@@ -86,6 +86,6 @@ Railway settings are optional legacy/advanced functionality. **Automatic with Ra
 8. Run Test One Report.
 9. Run Fast, Cultures or Full.
 
-Login, CAPTCHA/OTP, password entry and CR-number entry and CR form submission remain manual. Navigation uses exact NIMS menu IDs where available, is bounded, and stops at the CR search page or report list; zero View Report rows on CR search is normal. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
+Login, CAPTCHA/OTP, password entry and CR-number entry and CR form submission remain manual. Navigation uses exact NIMS menu IDs where available, treats loginLogin.action as authenticated unless credential controls are present, confirms state after menu clicks, and can fall back to the HTTPS canonical CR-wise Investigation endpoint after an Investigation-context click fails to transition; it stops at the CR search page or report list, and zero View Report rows on CR search is normal. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
 
-Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, CR search page ready, and Report list not yet loaded.
+Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, canonical endpoint fallback attempted, CR search page ready, and Report list not yet loaded. Login and CR-number form submission remain manual.

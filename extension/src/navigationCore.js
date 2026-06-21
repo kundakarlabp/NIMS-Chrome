@@ -142,9 +142,9 @@
     if (/session\s+expired|invalid\s+session|login\s+required|session\s+timeout|timed\s*out/.test(text)) return { stage: NIMS_PAGE_STAGE.SESSION_EXPIRED, safePath: safeUrl || "", evidence: ["session_text"] };
     if ((rows || []).length > 0) return { stage: NIMS_PAGE_STAGE.REPORT_LIST, safePath: safeUrl || "", evidence: ["view_report_rows"] };
     if (getSafeSetPdfTemplate(doc)) return { stage: NIMS_PAGE_STAGE.REPORT_VIEWER, safePath: safeUrl || "", evidence: ["set_pdf_template"] };
-    if (findCrWiseReportMenuTargetInDocument(doc).ok) return { stage: NIMS_PAGE_STAGE.INVESTIGATION_MENU, safePath: safeUrl || "", evidence: ["cr_wise_menu_id"] };
     const cr = hasCrSearchEvidence(doc, safeUrl);
     if (cr.present) return { stage: NIMS_PAGE_STAGE.CR_SEARCH, safePath: safeUrl || "", evidence: cr.evidence };
+    if (findCrWiseReportMenuTargetInDocument(doc).ok) return { stage: NIMS_PAGE_STAGE.INVESTIGATION_MENU, safePath: safeUrl || "", evidence: ["cr_wise_menu_id"] };
     if (findInvestigationModuleTargetInDocument(doc).ok || plausibleHomeWithMenuFunction(doc)) return { stage: NIMS_PAGE_STAGE.HOME, safePath: safeUrl || "", evidence: ["investigation_module"] };
     if (hasLoginEvidence(doc, safeUrl)) return { stage: NIMS_PAGE_STAGE.LOGIN, safePath: safeUrl || "", evidence: ["login_form"] };
     return { stage: NIMS_PAGE_STAGE.UNKNOWN, safePath: safeUrl || "", evidence };
@@ -152,18 +152,27 @@
 
   function hasCrSearchEvidence(doc, safeUrl) {
     const evidence = [];
-    if (String(safeUrl || safeDocumentHref(doc)).toLowerCase().includes("viewcrnowisereportprocess.cnt")) evidence.push("target_endpoint");
+    const href = String(safeUrl || safeDocumentHref(doc)).toLowerCase();
+    if (href.includes("viewcrnowisereportprocess.cnt")) evidence.push("target_endpoint");
+    const forms = Array.from(doc.querySelectorAll("form"));
     const inputs = Array.from(doc.querySelectorAll("input, textarea, select"));
-    const crInput = inputs.some((el) => /cr\s*(no|number)|crno|crnumber/i.test(`${el.id || ""} ${el.name || ""}`));
-    const labelText = compactText(Array.from(doc.querySelectorAll("label, th, td, h1, h2, h3, legend")).map(textOf).join(" "));
-    if (crInput) evidence.push("cr_input_present");
+    const crInputs = inputs.filter((el) => /patcrno|cr\s*(no|number)|crno|crnumber/i.test(`${el.id || ""} ${el.name || ""}`));
+    const livePatCrNo = crInputs.some((el) => /patcrno/i.test(`${el.id || ""} ${el.name || ""}`) && (!el.maxLength || Number(el.maxLength) === 15 || String(el.getAttribute("maxlength") || "") === "15"));
+    const form = forms.find((el) => /viewExternalInvFB/i.test(el.name || el.id || "") || String(el.getAttribute("action") || "").includes(CR_WISE_ENDPOINT));
+    const hmode = inputs.some((el) => /hmode/i.test(el.name || el.id || "") && String(el.type || "").toLowerCase() === "hidden");
+    const labelText = compactText(Array.from(doc.querySelectorAll("label, th, td, h1, h2, h3, legend, span, div")).map(textOf).join(" "));
+    if (crInputs.length) evidence.push(livePatCrNo ? "pat_cr_no_input" : "cr_input_present");
+    if (form) evidence.push("cr_form");
+    if (hmode) evidence.push("hmode_field");
     if (/CR\s*No|CR\s*Number|CR\s*Wise\s*Result\s*Report\s*Printing/i.test(labelText)) evidence.push("cr_context_present");
-    return { present: evidence.includes("target_endpoint") || (crInput && evidence.includes("cr_context_present")), evidence };
+    return { present: evidence.includes("target_endpoint") || livePatCrNo || (crInputs.length > 0 && evidence.includes("cr_context_present")) || Boolean(form && crInputs.length && hmode), evidence };
   }
 
   function hasLoginEvidence(doc, safeUrl) {
-    if (String(safeUrl || "").toLowerCase().includes("login")) return true;
-    return Boolean(doc.querySelector('input[type="password"]')) && Boolean(doc.querySelector('input[type="text"], input[name*="user" i], input[id*="user" i]'));
+    const password = doc.querySelector('input[type="password"]');
+    const user = doc.querySelector('input[name*="user" i], input[id*="user" i], input[name*="login" i], input[id*="login" i], input[type="text"]');
+    const formText = compactText(Array.from(doc.querySelectorAll('form, label, button, input[type="submit"]')).map((el) => `${textOf(el)} ${el.value || ""}`).join(" "));
+    return Boolean(password && user && /login|sign\s*in|password|user/i.test(formText));
   }
 
   function findInvestigationModuleTarget(doc) {
@@ -183,7 +192,7 @@
     if (exact) return { ok: true, method: "exact_onclick", element: exact };
     const fallback = Array.from(doc.querySelectorAll("a, button, input, [role='button'], [onclick]")).find((el) => {
       const label = compactText(textOf(el) || el.value || "");
-      return label === "Investigation" && label.length <= 24 && !/Enquiry|Report/i.test(label) && !el.closest("table") && isUsableClickable(el);
+      return label === "Investigation" && label.length <= 24 && !/Enquiry|Report/i.test(label) && isUsableClickable(el);
     });
     return fallback ? { ok: true, method: "exact_text", element: fallback } : { ok: false, reason: "investigation_module_not_found" };
   }
@@ -203,7 +212,7 @@
   function findCrWiseReportMenuTargetInDocument(doc) {
     const exact = doc.getElementById(CR_WISE_MENU_ID);
     if (exact && isUsableClickable(exact) && crWiseElementLooksValid(exact)) return { ok: true, method: "exact_id", element: exact };
-    const candidates = Array.from(doc.querySelectorAll("[onclick], a, button, [role='button']")).filter((el) => isUsableClickable(el) && !el.closest("table"));
+    const candidates = Array.from(doc.querySelectorAll("[onclick], a, button, [role='button']")).filter((el) => isUsableClickable(el));
     const endpoint = candidates.find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_ENDPOINT));
     if (endpoint) return { ok: true, method: "exact_endpoint", element: endpoint };
     const menuId = candidates.find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_MENU_ID));
@@ -219,27 +228,106 @@
   }
 
   function navigateToCrWiseReports(doc) {
-    const detected = detectNimsPageStage(doc || root.document);
+    const rootDoc = doc || root.document;
+    const detected = detectNimsPageStage(rootDoc);
     const stage = detected.stage;
-    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return { ok: true, stage, action: "none", done: true };
-    if (stage === NIMS_PAGE_STAGE.LOGIN) return { ok: false, stage, action: "none", done: false, errorCode: "manual_login_required" };
-    if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return { ok: false, stage, action: "none", done: false, errorCode: "session_expired" };
+    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return navigationResult(true, stage, "none", true);
+    if (stage === NIMS_PAGE_STAGE.LOGIN) return navigationResult(false, stage, "none", false, "manual_login_required");
+    if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return navigationResult(false, stage, "none", false, "session_expired");
     if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) {
-      const target = findCrWiseReportMenuTarget(doc || root.document);
+      const target = findCrWiseReportMenuTarget(rootDoc);
+      if (shouldUseCanonicalFallback(stage, "clicked_cr_wise_menu") || !target.ok) return navigateCanonicalCrWiseEndpoint(rootDoc, target.ok ? "cr_wise_click_no_transition" : "cr_wise_menu_not_found");
       return performNavigationTarget(stage, "clicked_cr_wise_menu", target, "cr_wise_menu_not_found");
     }
     if (stage === NIMS_PAGE_STAGE.HOME) {
-      const target = findInvestigationModuleTarget(doc || root.document);
+      const target = findInvestigationModuleTarget(rootDoc);
       return performNavigationTarget(stage, "clicked_investigation_module", target, "investigation_module_not_found");
     }
-    return { ok: false, stage: NIMS_PAGE_STAGE.UNKNOWN, action: "none", done: false, errorCode: "navigation_target_not_found" };
+    return navigationResult(false, NIMS_PAGE_STAGE.UNKNOWN, "none", false, "navigation_target_not_found");
+  }
+
+  function navigationResult(ok, stage, action, done, errorCode, extra) {
+    const result = { ok: Boolean(ok), stage, action, done: Boolean(done) };
+    if (errorCode) result.errorCode = errorCode;
+    const state = getNavigationState();
+    result.canonicalFallbackAttempted = Boolean(extra && extra.canonicalFallbackAttempted);
+    result.transitionObserved = Boolean(done || (state.lastStage && state.lastStage !== stage));
+    if (extra && extra.safePath) result.safePath = extra.safePath;
+    if (extra && Number.isFinite(extra.frameDepth)) result.frameDepth = extra.frameDepth;
+    state.lastStage = stage;
+    state.lastAction = action;
+    return result;
+  }
+
+  function getNavigationState() {
+    const scope = root.window || root;
+    if (!scope.__NIMS_CR_NAVIGATION_STATE__) scope.__NIMS_CR_NAVIGATION_STATE__ = {};
+    return scope.__NIMS_CR_NAVIGATION_STATE__;
+  }
+
+  function shouldUseCanonicalFallback(stage, action) {
+    const state = getNavigationState();
+    return state.provisionalAction === action && state.provisionalStage === stage;
+  }
+
+  function rememberProvisionalNavigation(stage, action) {
+    const state = getNavigationState();
+    state.provisionalStage = stage;
+    state.provisionalAction = action;
+  }
+
+  function clearProvisionalNavigation() {
+    const state = getNavigationState();
+    state.provisionalStage = "";
+    state.provisionalAction = "";
+  }
+
+  function navigateCanonicalCrWiseEndpoint(doc, reason) {
+    const target = findCanonicalNavigationDocument(doc || root.document);
+    if (!target.ok) return navigationResult(false, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "none", false, target.errorCode || reason || "canonical_endpoint_rejected", { canonicalFallbackAttempted: true });
+    try {
+      target.win.location.assign(target.url);
+      clearProvisionalNavigation();
+      return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "canonical_endpoint_fallback", false, "", { canonicalFallbackAttempted: true, safePath: safeHostPath(target.url), frameDepth: target.depth });
+    } catch {
+      return navigationResult(false, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "none", false, "canonical_navigation_failed", { canonicalFallbackAttempted: true, safePath: safeHostPath(target.url), frameDepth: target.depth });
+    }
+  }
+
+  function findCanonicalNavigationDocument(doc) {
+    const docs = accessibleDocumentsRecursive(doc || root.document)
+      .filter((item) => item.visibleThroughAncestors && item.win)
+      .map((item) => ({ item, diagnostic: getCurrentDocumentNavigationDiagnostic(item.doc, item.depth, item.visibleThroughAncestors) }))
+      .filter((entry) => entry.diagnostic.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU || entry.diagnostic.hasCrWiseMenu || /HISInvestigationG5/i.test(entry.diagnostic.safePath || ""));
+    docs.sort((a, b) => (b.item.depth - a.item.depth) || navigationStageScore(b.diagnostic) - navigationStageScore(a.diagnostic));
+    const selected = docs[0];
+    if (!selected) return { ok: false, errorCode: "investigation_context_not_confirmed" };
+    const href = safeDocumentHref(selected.item.doc) || (root.location && root.location.href) || "";
+    const resolved = resolveCanonicalCrWiseUrl(href);
+    if (!resolved.ok) return resolved;
+    return { ok: true, win: selected.item.win, url: resolved.url, depth: selected.item.depth };
+  }
+
+  function resolveCanonicalCrWiseUrl(baseHref) {
+    try {
+      const url = new URL(CR_WISE_ENDPOINT, baseHref);
+      if (url.protocol !== "https:") return { ok: false, errorCode: "canonical_endpoint_rejected" };
+      if (!NIMS_ALLOWED_HOSTS.has(url.hostname)) return { ok: false, errorCode: "canonical_endpoint_rejected" };
+      if (url.port) return { ok: false, errorCode: "canonical_endpoint_rejected" };
+      if (url.pathname !== CR_WISE_ENDPOINT) return { ok: false, errorCode: "canonical_endpoint_rejected" };
+      url.search = "";
+      url.hash = "";
+      return { ok: true, url: url.href };
+    } catch {
+      return { ok: false, errorCode: "canonical_endpoint_rejected" };
+    }
   }
 
   function navigateCurrentDocumentStep(doc) {
     const currentDoc = doc || root.document;
     const diagnostic = getCurrentDocumentNavigationDiagnostic(currentDoc, 0, true);
     const stage = diagnostic.stage;
-    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return { ok: true, stage, action: "none", done: true };
+    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return navigationResult(true, stage, "none", true);
     if (stage === NIMS_PAGE_STAGE.LOGIN) return { ok: false, stage, action: "none", done: false, errorCode: "manual_login_required" };
     if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return { ok: false, stage, action: "none", done: false, errorCode: "session_expired" };
     if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) return performNavigationTarget(stage, "clicked_cr_wise_menu", findCrWiseReportMenuTargetInDocument(currentDoc), "cr_wise_menu_not_found");
@@ -248,13 +336,14 @@
   }
 
   function performNavigationTarget(stage, action, target, missingCode) {
-    if (!target || !target.ok) return { ok: false, stage, action: "none", done: false, errorCode: missingCode };
+    if (!target || !target.ok) return navigationResult(false, stage, "none", false, missingCode);
     const key = actionCooldownKey(stage, action);
-    if (!canPerformNavigationAction(key)) return { ok: true, stage, action: "cooldown", done: false };
+    if (!canPerformNavigationAction(key)) return navigationResult(true, stage, "cooldown", false);
     let clicked = false;
     if (target.element) clicked = safeClick(target.element);
     else if (target.win && action === "clicked_investigation_module" && typeof target.win.menuSelected === "function") { target.win.menuSelected("Investigation", true); clicked = true; }
-    return clicked ? { ok: true, stage, action, done: false } : { ok: false, stage, action: "none", done: false, errorCode: "click_failed" };
+    if (clicked) { rememberProvisionalNavigation(stage, action); return navigationResult(true, stage, action, false); }
+    return navigationResult(false, stage, "none", false, "click_failed");
   }
 
   function safeClick(target) {
@@ -296,8 +385,10 @@
     const win = element.ownerDocument && element.ownerDocument.defaultView;
     let style = null;
     try { style = win && win.getComputedStyle ? win.getComputedStyle(element) : null; } catch { style = null; }
-    if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0)) return false;
-    try { if (element.getClientRects && element.getClientRects().length === 0) return false; } catch { }
+    if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.opacity !== "" && Number(style.opacity) === 0)) return false;
+    if (!/^(IFRAME|FRAME)$/i.test(element.tagName || "")) {
+      try { if (element.getClientRects && element.getClientRects().length === 0) return false; } catch { }
+    }
     return true;
   }
 
@@ -559,7 +650,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
+  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, resolveCanonicalCrWiseUrl, navigateToCrWiseReports };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);
