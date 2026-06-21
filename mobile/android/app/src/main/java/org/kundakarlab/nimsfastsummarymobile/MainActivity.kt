@@ -367,9 +367,18 @@ class MainActivity : ComponentActivity() {
         navigationJob = lifecycleScope.launch {
             navigationInProgress = true
             setState(AppState.HELPER_READY, "Checking current NIMS page…")
-            val outcome = coordinator.run(
-                stepProvider = { evaluateNavigationStep() },
-                onStep = { step -> if (generation == navigationGeneration) setState(AppState.HELPER_READY, navigationMessage(step)) }
+            val outcome = coordinator.execute(
+                stepProvider = {
+                    evaluateNavigationStep()
+                },
+                onStep = { step ->
+                    if (generation == navigationGeneration) {
+                        setState(
+                            AppState.HELPER_READY,
+                            navigationMessage(step)
+                        )
+                    }
+                }
             )
             if (generation == navigationGeneration) {
                 when (outcome) {

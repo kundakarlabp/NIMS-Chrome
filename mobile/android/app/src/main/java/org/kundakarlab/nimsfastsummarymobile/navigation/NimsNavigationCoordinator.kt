@@ -14,7 +14,7 @@ class NimsNavigationCoordinator(
     private val stepTimeoutMs: Long = DEFAULT_STEP_TIMEOUT_MS,
     private val maxDurationMs: Long = DEFAULT_MAX_DURATION_MS
 ) {
-    suspend fun run(
+    suspend fun execute(
         stepProvider: suspend () -> NimsNavigationStep,
         onStep: suspend (NimsNavigationStep) -> Unit = {}
     ): NimsNavigationOutcome {
@@ -22,23 +22,45 @@ class NimsNavigationCoordinator(
             withTimeout(maxDurationMs) {
                 repeat(maxAttempts) {
                     coroutineContext.ensureActive()
-                    val step = withTimeoutOrNull(stepTimeoutMs) { stepProvider() } ?: NimsNavigationStep(
+
+                    val step = withTimeoutOrNull(stepTimeoutMs) {
+                        stepProvider()
+                    } ?: NimsNavigationStep(
                         ok = false,
                         stage = "unknown",
                         action = "none",
                         done = false,
                         errorCode = "navigation_step_timeout"
                     )
+
                     onStep(step)
+
                     when (step.stage) {
-                        "cr_search" -> return@withTimeout NimsNavigationOutcome.CrSearchReady
-                        "report_list" -> return@withTimeout NimsNavigationOutcome.ReportListReady
-                        "login" -> return@withTimeout NimsNavigationOutcome.ManualLoginRequired
-                        "session_expired" -> return@withTimeout NimsNavigationOutcome.SessionExpired
+                        "cr_search" -> {
+                            return@withTimeout NimsNavigationOutcome.CrSearchReady
+                        }
+
+                        "report_list" -> {
+                            return@withTimeout NimsNavigationOutcome.ReportListReady
+                        }
+
+                        "login" -> {
+                            return@withTimeout NimsNavigationOutcome.ManualLoginRequired
+                        }
+
+                        "session_expired" -> {
+                            return@withTimeout NimsNavigationOutcome.SessionExpired
+                        }
                     }
-                    delay(retryDelayMs)
+
+                    if (it < maxAttempts - 1) {
+                        delay(retryDelayMs)
+                    }
                 }
-                NimsNavigationOutcome.Failed("navigation_target_not_found")
+
+                NimsNavigationOutcome.Failed(
+                    errorCode = "navigation_target_not_found"
+                )
             }
         } catch (_: TimeoutCancellationException) {
             NimsNavigationOutcome.Timeout
