@@ -3,7 +3,8 @@
   const CR_WISE_MENU_ID = "Cr_No_Wise_Result_Report_Printing_New";
   const CR_WISE_ENDPOINT = "/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt";
   const NIMS_PAGE_STAGE = Object.freeze({ LOGIN: "login", HOME: "home", INVESTIGATION_MENU: "investigation_menu", CR_SEARCH: "cr_search", REPORT_LIST: "report_list", REPORT_VIEWER: "report_viewer", SESSION_EXPIRED: "session_expired", UNKNOWN: "unknown" });
-  const NAVIGATION_ACTION_COOLDOWN_MS = 1500;
+  const NAVIGATION_ACTION_COOLDOWN_MS = 4500;
+  const NAVIGATION_UNCHANGED_CHECKS_REQUIRED = 3;
 
   function diagnosePage(doc) {
     const frames = collectFrames(doc || root.document);
