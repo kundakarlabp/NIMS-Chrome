@@ -91,14 +91,12 @@ test('one navigation step performs at most one action and first CR-wise click is
   assert.equal(window.clicked, 1);
 });
 
-test('if still in Investigation after provisional CR-wise click, canonical fallback is used', () => {
+test('repeated CR-wise anchor clicks are throttled by cooldown (single navigation)', () => {
   const { core } = loadCore(`<!doctype html>${crMenu}`);
   const first = core.navigateToCrWiseReports(document);
   const second = core.navigateToCrWiseReports(document);
   assert.equal(first.action, 'clicked_cr_wise_menu');
-  assert.equal(second.action, 'canonical_endpoint_fallback');
-  assert.equal(second.canonicalFallbackAttempted, true);
-  assert.equal(second.safePath, 'nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+  assert.equal(second.action, 'cooldown');
 });
 
 test('canonical fallback resolves only to approved NIMS HTTPS origin', () => {
@@ -168,22 +166,18 @@ test('G-5 shell with a lingering password field is still home, not login', () =>
   assert.equal(core.detectCurrentDocumentStage(document).stage, 'home');
 });
 
-test('home with unresponsive Investigation menu falls back to canonical CR endpoint on retry', () => {
+test('home shell selects Investigation via native menuSelected (no URL assignment)', () => {
   const { core } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/home');
   const first = core.navigateToCrWiseReports(document);
-  const second = core.navigateToCrWiseReports(document);
-  assert.equal(first.action, 'clicked_investigation_module');
-  assert.equal(second.action, 'canonical_endpoint_fallback');
-  assert.equal(second.canonicalFallbackAttempted, true);
-  assert.equal(second.safePath, 'nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+  assert.equal(first.stage, 'home');
+  assert.equal(first.action, 'selected_investigation');
 });
 
-test('home with no Investigation control and no menu function falls back to canonical immediately', () => {
+test('home shell without menuSelected falls back to native top callMenu (not URL assignment)', () => {
   const { core, dom } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/home');
   delete dom.window.menuSelected;
   const result = core.navigateToCrWiseReports(document);
-  assert.equal(result.action, 'canonical_endpoint_fallback');
-  assert.equal(result.canonicalFallbackAttempted, true);
+  assert.equal(result.action, 'called_top_menu_function');
 });
 
 test('genuine login page is still classified login (shell guard does not over-trigger)', () => {
@@ -215,13 +209,57 @@ test('G-5 frameset (markers split across frames, letter-spaced labels) is detect
   assert.equal(core.detectNimsPageStage(d).stage, 'home');
 });
 
-test('G-5 frameset navigates to canonical CR endpoint when the menu click does not transition', () => {
+test('G-5 frameset shell drives navigation via native menuSelected (no URL assignment)', () => {
   const { core, document: d } = loadFrameset();
   const first = core.navigateToCrWiseReports(d);
-  const second = core.navigateToCrWiseReports(d);
-  assert.equal(first.action, 'clicked_investigation_module');
-  assert.equal(second.action, 'canonical_endpoint_fallback');
-  assert.equal(second.safePath, 'nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+  assert.equal(first.action, 'selected_investigation');
+  assert.equal(first.stage, 'home');
+});
+
+// Real post-Investigation structure: top shell holds #frmMainMenu (with the exact
+// CR-wise anchor) and later the dynamic result iframe.
+function loadRealShell({ withReportFrame = false, reportRows = false, crForm = false } = {}) {
+  const top = `<!doctype html><html><body><iframe id="frmMainMenu"></iframe>${withReportFrame ? '<iframe id="Cr No Wise Result Report Printing New_iframe"></iframe>' : ''}</body></html>`;
+  const dom = new JSDOM(top, { url: 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action', runScripts: 'dangerously' });
+  const d = dom.window.document;
+  dom.window.menuSelected = () => {};
+  dom.window.callMenu = () => {};
+  const write = (id, html) => { const cd = d.getElementById(id).contentDocument; cd.open(); cd.write('<!doctype html><html><body>' + html + '</body></html>'); cd.close(); try { cd.defaultView.callMenu = () => {}; } catch {} };
+  write('frmMainMenu', `<a id="Cr_No_Wise_Result_Report_Printing_New" onclick="callMenu('/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt','Cr_No_Wise_Result_Report_Printing_New')">Cr No Wise Result Report Printing New</a>`);
+  if (withReportFrame) {
+    const body = reportRows
+      ? `<table><tr><td>Patient</td><td><a onclick="printReport('X')">View Report</a></td></tr></table>`
+      : crForm
+        ? `<form name="viewExternalInvFB" action="/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"><input type="hidden" name="hmode" value="SHOWPATDETAILS"><input name="patCrNo" maxlength="15"></form>`
+        : ``;
+    write('Cr No Wise Result Report Printing New_iframe', body);
+  }
+  globalThis.window = dom.window; globalThis.document = d; globalThis.location = dom.window.location;
+  delete require.cache[require.resolve(corePath)];
+  return { dom, core: require(corePath), document: d };
+}
+
+test('frmMainMenu present: clicks the exact CR-wise anchor (native callMenu workflow)', () => {
+  const { core, document: d } = loadRealShell();
+  let clicked = 0;
+  d.getElementById('frmMainMenu').contentDocument.getElementById('Cr_No_Wise_Result_Report_Printing_New').addEventListener('click', () => { clicked += 1; });
+  const result = core.navigateToCrWiseReports(d);
+  assert.equal(result.action, 'clicked_cr_wise_menu');
+  assert.equal(clicked, 1);
+});
+
+test('result iframe with printReport rows is report_list (done, no further action)', () => {
+  const { core, document: d } = loadRealShell({ withReportFrame: true, reportRows: true });
+  const result = core.navigateToCrWiseReports(d);
+  assert.equal(result.stage, 'report_list');
+  assert.equal(result.done, true);
+});
+
+test('result iframe with a patCrNo form (no rows) is cr_search (done)', () => {
+  const { core, document: d } = loadRealShell({ withReportFrame: true, crForm: true });
+  const result = core.navigateToCrWiseReports(d);
+  assert.equal(result.stage, 'cr_search');
+  assert.equal(result.done, true);
 });
 
 test('login frameset with a real credential form in a frame is still login', () => {

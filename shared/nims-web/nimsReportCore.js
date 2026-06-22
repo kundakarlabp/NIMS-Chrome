@@ -2,6 +2,9 @@
   const NIMS_ALLOWED_HOSTS = new Set(["nimsts.edu.in", "www.nimsts.edu.in"]);
   const CR_WISE_MENU_ID = "Cr_No_Wise_Result_Report_Printing_New";
   const CR_WISE_ENDPOINT = "/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt";
+  const CR_WISE_MENU_LABEL = "Cr No Wise Result Report Printing New";
+  const MENU_FRAME_ID = "frmMainMenu";
+  const REPORT_FRAME_ID = "Cr No Wise Result Report Printing New_iframe";
   const NIMS_PAGE_STAGE = Object.freeze({ LOGIN: "login", HOME: "home", INVESTIGATION_MENU: "investigation_menu", CR_SEARCH: "cr_search", REPORT_LIST: "report_list", REPORT_VIEWER: "report_viewer", SESSION_EXPIRED: "session_expired", UNKNOWN: "unknown" });
   const NAVIGATION_ACTION_COOLDOWN_MS = 4500;
   const NAVIGATION_UNCHANGED_CHECKS_REQUIRED = 3;
@@ -289,23 +292,110 @@
   }
 
   function navigateToCrWiseReports(doc) {
-    const rootDoc = doc || root.document;
-    const detected = detectNimsPageStage(rootDoc);
-    const stage = detected.stage;
-    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return navigationResult(true, stage, "none", true);
-    if (stage === NIMS_PAGE_STAGE.LOGIN) return navigationResult(false, stage, "none", false, "manual_login_required");
-    if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return navigationResult(false, stage, "none", false, "session_expired");
-    if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) {
-      const target = findCrWiseReportMenuTarget(rootDoc);
-      if (shouldUseCanonicalFallback(stage, "clicked_cr_wise_menu") || !target.ok) return navigateCanonicalCrWiseEndpoint(rootDoc, target.ok ? "cr_wise_click_no_transition" : "cr_wise_menu_not_found");
-      return performNavigationTarget(stage, "clicked_cr_wise_menu", target, "cr_wise_menu_not_found");
+    return navigateNimsContract(doc || root.document);
+  }
+
+  // Drive navigation through the real e-Sushrut contract:
+  //   top menuSelected("Investigation", true)  -> refreshes #frmMainMenu
+  //   #frmMainMenu anchor #Cr_No_Wise_Result_Report_Printing_New (callMenu)
+  //   -> parent.callMenu attaches the SSO ticket + addTab() builds the result
+  //      iframe #"Cr No Wise Result Report Printing New_iframe".
+  // Never assign the endpoint URL directly: that bypasses the SSO ticket, NIMS
+  // URL validation and addTab(), landing on a blank/login/wrong frame.
+  function navigateNimsContract(doc) {
+    const topDoc = resolveTopDocument(doc);
+    const topWindow = (topDoc && topDoc.defaultView) || root.window || root;
+
+    if (detectSessionExpiredInTree(topDoc)) return navigationResult(false, NIMS_PAGE_STAGE.SESSION_EXPIRED, "none", false, "session_expired");
+
+    let entries;
+    try { entries = accessibleDocumentsRecursive(topDoc); } catch { entries = [{ doc: topDoc }]; }
+    const docs = entries.map((entry) => entry.doc).filter(Boolean);
+
+    // 1. Result list (genuine printReport rows) has the highest priority: the CR
+    //    form and the result list share URL and form name, so only DOM evidence
+    //    separates them.
+    if (docs.some((d) => hasGenuineViewReportRows(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.REPORT_LIST, "none", true); }
+    // 2. CR-number form: a patCrNo input that is not hidden. (Rows already claimed
+    //    report_list above, so a remaining patCrNo means the form, not results.)
+    if (docs.some((d) => hasVisibleCrNumberForm(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
+    // The exact result iframe exists but has not populated yet: wait, do not click.
+    if (frameDocById(topDoc, REPORT_FRAME_ID)) return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "waiting_for_report_frame", false);
+
+    // 3. Click the exact CR-wise anchor (preferred in #frmMainMenu). This runs the
+    //    native callMenu -> parent.callMenu (SSO ticket) -> addTab() workflow.
+    const anchor = findExactCrWiseAnchor(topDoc, docs);
+    if (anchor) {
+      if (!canPerformNavigationAction(actionCooldownKey(NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu"))) return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "cooldown", false);
+      if (safeClick(anchor)) { rememberProvisionalNavigation(NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu"); return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu", false); }
     }
-    if (stage === NIMS_PAGE_STAGE.HOME) {
-      const target = findInvestigationModuleTarget(rootDoc);
-      if (shouldUseCanonicalFallback(stage, "clicked_investigation_module") || !target.ok) return navigateCanonicalCrWiseEndpoint(rootDoc, target.ok ? "investigation_click_no_transition" : "investigation_module_not_found");
-      return performNavigationTarget(stage, "clicked_investigation_module", target, "investigation_module_not_found");
+
+    // 4. Menu-frame callMenu when the anchor is not present.
+    const menuDoc = frameDocById(topDoc, MENU_FRAME_ID);
+    if (menuDoc && menuDoc.defaultView && typeof menuDoc.defaultView.callMenu === "function") {
+      try { menuDoc.defaultView.callMenu(CR_WISE_ENDPOINT, CR_WISE_MENU_ID); rememberProvisionalNavigation(NIMS_PAGE_STAGE.INVESTIGATION_MENU, "called_child_menu_function"); return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "called_child_menu_function", false); } catch { }
     }
-    return navigationResult(false, NIMS_PAGE_STAGE.UNKNOWN, "none", false, "navigation_target_not_found");
+
+    // 5. Top shell: select Investigation (refreshes #frmMainMenu so the anchor
+    //    appears next poll). Cooldown-gated to avoid re-selecting every poll.
+    if (topWindow && typeof topWindow.menuSelected === "function") {
+      if (!canPerformNavigationAction(actionCooldownKey(NIMS_PAGE_STAGE.HOME, "selected_investigation"))) return navigationResult(true, NIMS_PAGE_STAGE.HOME, "cooldown", false);
+      try { topWindow.menuSelected("Investigation", true); rememberProvisionalNavigation(NIMS_PAGE_STAGE.HOME, "selected_investigation"); return navigationResult(true, NIMS_PAGE_STAGE.HOME, "selected_investigation", false); } catch { }
+    }
+
+    // 6. Native top callMenu as last resort (still attaches SSO ticket + addTab).
+    if (topWindow && typeof topWindow.callMenu === "function") {
+      try { topWindow.callMenu(CR_WISE_ENDPOINT, CR_WISE_MENU_LABEL); return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "called_top_menu_function", false); } catch { }
+    }
+
+    // 7. Only a genuine, readable credential form is manual-login.
+    if (hasReadableLoginForm(topDoc)) return navigationResult(false, NIMS_PAGE_STAGE.LOGIN, "none", false, "manual_login_required");
+    // 8. Authenticated shell present but native hooks not ready yet: keep waiting.
+    if (hasLoggedInShellEvidence(topDoc)) return navigationResult(true, NIMS_PAGE_STAGE.HOME, "waiting_for_shell", false);
+    return navigationResult(false, NIMS_PAGE_STAGE.UNKNOWN, "none", false, "navigation_contract_not_found");
+  }
+
+  function findExactCrWiseAnchor(topDoc, docs) {
+    const menuDoc = frameDocById(topDoc, MENU_FRAME_ID);
+    const ordered = menuDoc ? [menuDoc].concat(docs) : docs;
+    for (const d of ordered) {
+      try { const el = d && d.getElementById && d.getElementById(CR_WISE_MENU_ID); if (el && isUsableClickable(el)) return el; } catch { }
+    }
+    return null;
+  }
+
+  function resolveTopDocument(doc) {
+    const current = doc || root.document;
+    try { const top = current.defaultView && current.defaultView.top; if (top && top.document) return top.document; } catch { }
+    return current;
+  }
+
+  function frameDocById(topDoc, id) {
+    try { const el = topDoc.getElementById(id); if (!el) return null; try { return el.contentDocument || null; } catch { return null; } } catch { return null; }
+  }
+
+  function hasGenuineViewReportRows(doc) {
+    if (!doc) return false;
+    try { return extractReportRows(doc, safeHostPath(safeDocumentHref(doc))).some((row) => row.onclick_function_name === "printReport"); } catch { return false; }
+  }
+
+  function hasVisibleCrNumberForm(doc) {
+    if (!doc) return false;
+    try {
+      const pat = doc.querySelector('input[name="patCrNo"], input[id="patCrNo"]');
+      if (!pat) return false;
+      if (String(pat.type || "").toLowerCase() === "hidden") return false;
+      if (pat.hidden || pat.getAttribute("aria-hidden") === "true") return false;
+      const win = doc.defaultView;
+      try { const st = win && win.getComputedStyle ? win.getComputedStyle(pat) : null; if (st && (st.display === "none" || st.visibility === "hidden")) return false; } catch { }
+      return true;
+    } catch { return false; }
+  }
+
+  function detectSessionExpiredInTree(topDoc) {
+    let docs;
+    try { docs = accessibleDocumentsRecursive(topDoc); } catch { docs = [{ doc: topDoc }]; }
+    return docs.some((entry) => { try { const text = compactText((entry.doc.body && textOf(entry.doc.body)) || "").toLowerCase(); return /session\s+expired|invalid\s+session|login\s+required|session\s+timeout|timed\s*out/.test(text); } catch { return false; } });
   }
 
   function navigationResult(ok, stage, action, done, errorCode, extra) {
@@ -401,15 +491,7 @@
   }
 
   function navigateCurrentDocumentStep(doc) {
-    const currentDoc = doc || root.document;
-    const diagnostic = getCurrentDocumentNavigationDiagnostic(currentDoc, 0, true);
-    const stage = diagnostic.stage;
-    if (stage === NIMS_PAGE_STAGE.REPORT_LIST || stage === NIMS_PAGE_STAGE.CR_SEARCH) return navigationResult(true, stage, "none", true);
-    if (stage === NIMS_PAGE_STAGE.LOGIN) return { ok: false, stage, action: "none", done: false, errorCode: "manual_login_required" };
-    if (stage === NIMS_PAGE_STAGE.SESSION_EXPIRED) return { ok: false, stage, action: "none", done: false, errorCode: "session_expired" };
-    if (stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU) return performNavigationTarget(stage, "clicked_cr_wise_menu", findCrWiseReportMenuTargetInDocument(currentDoc), "cr_wise_menu_not_found");
-    if (stage === NIMS_PAGE_STAGE.HOME) return performNavigationTarget(stage, "clicked_investigation_module", findInvestigationModuleTargetInDocument(currentDoc), "investigation_module_not_found");
-    return { ok: false, stage: NIMS_PAGE_STAGE.UNKNOWN, action: "none", done: false, errorCode: "navigation_target_not_found" };
+    return navigateNimsContract(doc || root.document);
   }
 
   function performNavigationTarget(stage, action, target, missingCode) {
