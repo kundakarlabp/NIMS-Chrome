@@ -169,7 +169,12 @@
     if (form) evidence.push("cr_form");
     if (hmode) evidence.push("hmode_field");
     if (/CR\s*No|CR\s*Number|CR\s*Wise\s*Result\s*Report\s*Printing/i.test(labelText)) evidence.push("cr_context_present");
-    return { present: evidence.includes("target_endpoint") || livePatCrNo || (crInputs.length > 0 && evidence.includes("cr_context_present")) || Boolean(form && crInputs.length && hmode), evidence };
+    // A patCrNo input that has actually rendered is the essential, reliable
+    // signal. The endpoint URL alone is NOT a ready CR form: the dynamic iframe
+    // receives the URL before its form has loaded, so accepting target_endpoint
+    // here would declare "CR page ready" while the frame is still blank.
+    const present = Boolean(livePatCrNo && (Boolean(form) || hmode || evidence.includes("cr_context_present")));
+    return { present, evidence };
   }
 
   function hasLoginEvidence(doc, safeUrl) {
@@ -319,6 +324,10 @@
     // 2. CR-number form: a patCrNo input that is not hidden. (Rows already claimed
     //    report_list above, so a remaining patCrNo means the form, not results.)
     if (docs.some((d) => hasVisibleCrNumberForm(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
+    // 2b. A genuine, readable credential form means the session is not authenticated
+    //     - respect it before attempting any menu navigation, even if stale shell
+    //     elements linger in the DOM.
+    if (hasReadableLoginForm(topDoc)) return navigationResult(false, NIMS_PAGE_STAGE.LOGIN, "none", false, "manual_login_required");
     // The exact result iframe exists but has not populated yet: wait, do not click.
     if (frameDocById(topDoc, REPORT_FRAME_ID)) return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "waiting_for_report_frame", false);
 

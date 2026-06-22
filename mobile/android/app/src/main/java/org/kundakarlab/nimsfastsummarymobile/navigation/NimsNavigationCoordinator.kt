@@ -35,20 +35,20 @@ class NimsNavigationCoordinator(
 
                     onStep(step)
 
-                    when (step.stage) {
-                        "cr_search" -> {
+                    when {
+                        step.stage == "cr_search" && step.done -> {
                             return@withTimeout NimsNavigationOutcome.CrSearchReady
                         }
 
-                        "report_list" -> {
+                        step.stage == "report_list" && step.done -> {
                             return@withTimeout NimsNavigationOutcome.ReportListReady
                         }
 
-                        "login" -> {
+                        step.stage == "login" -> {
                             return@withTimeout NimsNavigationOutcome.ManualLoginRequired
                         }
 
-                        "session_expired" -> {
+                        step.stage == "session_expired" -> {
                             return@withTimeout NimsNavigationOutcome.SessionExpired
                         }
                     }

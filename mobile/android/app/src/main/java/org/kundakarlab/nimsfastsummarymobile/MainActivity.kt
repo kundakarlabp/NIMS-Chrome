@@ -366,12 +366,14 @@ class MainActivity : ComponentActivity() {
         val coordinator = NimsNavigationCoordinator()
         navigationJob = lifecycleScope.launch {
             navigationInProgress = true
+            var lastStep: NimsNavigationStep? = null
             setState(AppState.HELPER_READY, "Checking current NIMS page…")
             val outcome = coordinator.execute(
                 stepProvider = {
                     evaluateNavigationStep()
                 },
                 onStep = { step ->
+                    lastStep = step
                     if (generation == navigationGeneration) {
                         setState(
                             AppState.HELPER_READY,
@@ -381,14 +383,15 @@ class MainActivity : ComponentActivity() {
                 }
             )
             if (generation == navigationGeneration) {
+                val where = lastStep?.let { " (last: ${it.stage}/${it.action}${if (it.errorCode.isBlank()) "" else "/" + it.errorCode})" } ?: ""
                 when (outcome) {
                     NimsNavigationOutcome.CrSearchReady -> setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
                     NimsNavigationOutcome.ReportListReady -> setState(AppState.REPORT_PAGE_READY, "Report list detected.")
                     NimsNavigationOutcome.ManualLoginRequired -> setState(AppState.ERROR, "Manual NIMS login required.")
                     NimsNavigationOutcome.SessionExpired -> setState(AppState.ERROR, "NIMS session expired. Login again.")
-                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out. Run Diagnose and retry.")
+                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out$where. Run Diagnose and retry.")
                     NimsNavigationOutcome.Cancelled -> Unit
-                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports. Use Diagnose and retry.")
+                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports$where. Use Diagnose and retry.")
                 }
                 navigationInProgress = false
                 navigationJob = null
@@ -403,11 +406,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
+        "selected_investigation" -> "Opening Investigation…"
         "clicked_investigation_module" -> "Opening Investigation…"
         "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
+        "called_child_menu_function", "called_top_menu_function" -> "Opening CR-wise reports…"
+        "waiting_for_report_frame" -> "Loading CR-wise report page…"
+        "waiting_for_shell" -> "Waiting for NIMS menu to load…"
         "cooldown" -> "Waiting for NIMS navigation…"
         else -> when (result.errorCode) {
             "navigation_step_timeout" -> "Checking current NIMS page…"
+            "manual_login_required" -> "Login to NIMS manually, then tap Open CR Reports."
+            "navigation_contract_not_found" -> "Waiting for the NIMS page to load…"
             "investigation_module_not_found" -> "Unable to locate the Investigation menu."
             "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
             else -> "Checking current NIMS page…"
