@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIMS Fast Summary",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local fast summary tables for NIMS HIS reports after manual login.",
   "permissions": [
     "storage",
@@ -48,7 +48,9 @@
       "js": [
         "src/navigationCore.js",
         "src/contentUtils.js",
-        "src/contentScript.js"
+        "src/contentScript.js",
+        "src/manualAnalysisUtils.js",
+        "src/manualAnalysis.js"
       ],
       "css": [
         "src/styles.css"

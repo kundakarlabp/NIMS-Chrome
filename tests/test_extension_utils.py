@@ -133,7 +133,7 @@ def test_manifest_includes_hisinvestigation_all_frames() -> None:
     assert set(manifest["host_permissions"]).issuperset(expected_hosts)
     script = manifest["content_scripts"][0]
     assert script["all_frames"] is True
-    assert script["js"] == ["src/navigationCore.js", "src/contentUtils.js", "src/contentScript.js"]
+    assert script["js"] == ["src/navigationCore.js", "src/contentUtils.js", "src/contentScript.js", "src/manualAnalysisUtils.js", "src/manualAnalysis.js"]
     assert script["run_at"] == "document_idle"
     assert {
         "https://nimsts.edu.in/AHIMSG5/*",

@@ -88,6 +88,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
@@ -193,7 +194,7 @@ class MainActivity : ComponentActivity() {
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
-                    onOpenCrReports = { openCrWiseReports() },
+                    onOpenCrReports = { runMode("bulk_fast") },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
@@ -470,7 +471,62 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // MANUAL_RESULTS_ONE_CLICK
+    // The user navigates to the submitted CR result list manually. Any bulk
+    // action now performs discovery -> one-report validation -> requested run.
+    // No NIMS menu or frame navigation is attempted here.
     private fun runMode(mode: String) {
+        val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
+        if (mode !in bulkModes || mappingValidated) {
+            runModeInternal(mode)
+            return
+        }
+        if (navigationInProgress) {
+            setState(AppState.HELPER_READY, "Analysis startup is already running.")
+            return
+        }
+
+        cancelNavigation()
+        cancelActiveProcessing()
+        mapping = null
+        mappingValidated = false
+        navigationInProgress = true
+        setState(AppState.HELPER_READY, "Checking the visible NIMS report-result list…")
+
+        discoverMapping()
+        navigationJob = lifecycleScope.launch {
+            try {
+                var checks = 0
+                while (mapping == null && checks < 30) {
+                    delay(500)
+                    checks += 1
+                }
+                if (mapping == null) {
+                    setState(AppState.ERROR, "No usable visible report rows were found. Navigate manually to the submitted CR report list and retry.")
+                    return@launch
+                }
+
+                setState(AppState.FETCHING, "Testing one visible report before bulk analysis…")
+                runModeInternal("test_direct")
+                checks = 0
+                while (!mappingValidated && checks < 90) {
+                    delay(500)
+                    checks += 1
+                }
+                if (!mappingValidated) {
+                    setState(AppState.ERROR, "One-report validation did not succeed. Keep the result list visible and retry.")
+                    return@launch
+                }
+
+                setState(AppState.FETCHING, "Mapping validated. Starting analysis…")
+                runModeInternal(mode)
+            } finally {
+                navigationInProgress = false
+            }
+        }
+    }
+
+    private fun runModeInternal(mode: String) {
         val currentMapping = mapping
         if (currentMapping == null) {
             setState(AppState.ERROR, "Mapping not discovered. Tap Discover after opening the report list.")
@@ -1021,7 +1077,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR Reports") } }
+            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Analyze Current Results") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }
             item { Button(onClick = onTestOne) { Text("Test One") } }
