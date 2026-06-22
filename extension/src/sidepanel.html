@@ -12,6 +12,15 @@
         <h1>NIMS Fast Summary</h1>
       </div>
       <div class="safety-warning">Clinical safety: verify values against source reports before clinical decisions.</div>
+      <section class="manual-workflow">
+        <h2>Manual results workflow</h2>
+        <p>Navigate in NIMS manually: Investigation → CR No Wise Result Report Printing New → enter CR number → submit. Keep the result table visible, then click once.</p>
+        <button id="analyzeCurrentResults" class="primary-manual-action">Analyze Current Results</button>
+      </section>
+      <details class="manual-advanced-actions">
+        <summary>Advanced tools</summary>
+        <div id="manualAdvancedActionSlot" class="mode-actions"></div>
+      </details>
       <div class="mode-actions primary-actions">
         <button id="openCrReports">Open CR Reports</button>
         <button id="diagnosePage">Diagnose Page</button>
@@ -88,6 +97,8 @@
     </main>
     <script src="sidepanelUtils.js"></script>
     <script src="sidepanel.js"></script>
+    <script src="manualAnalysisUtils.js"></script>
+    <script src="manualSidepanel.js"></script>
   </body>
 </html>
 

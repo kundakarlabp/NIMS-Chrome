@@ -1,5 +1,19 @@
 # NIMS Fast Summary
 
+## Manual navigation and one-click analysis
+
+Automatic NIMS menu navigation is intentionally disabled in the normal workflow.
+
+1. Log in to NIMS manually.
+2. Navigate manually to **Investigation → CR No Wise Result Report Printing New**.
+3. Enter the CR number and submit it manually.
+4. Keep the report-result table with visible **View Report** rows on screen.
+5. Click **Analyze Current Results**.
+
+That single action selects only the frame containing genuine visible one-argument `printReport(...)` rows, learns the report request from one row, validates one fetched report, and then starts Fast analysis. It does not infer login state, click NIMS menus, or navigate to a canonical endpoint.
+
+Advanced Diagnose/Discover/Test controls remain under **Advanced tools** for troubleshooting only.
+
 NIMS Fast Summary summarizes NIMS e-Sushrut/HIS report-list pages after the user logs in manually. It does not automate login, store credentials, bypass captcha/OTP/session expiry, or call external AI services.
 
 Recommended modes:
@@ -209,18 +223,3 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
 
 
-## NIMS CR-wise navigation workflow
-
-1. Open the app/extension and log in to NIMS manually.
-2. Use **Open CR Reports**.
-3. The tool opens Investigation → CR No Wise Result Report Printing New with bounded, frame-aware clicks.
-4. Enter the CR number manually in the NIMS page.
-5. Submit the NIMS search form manually.
-6. After the report list appears, run Diagnose Page.
-7. Run Discover Mapping.
-8. Run Test One Report.
-9. Run Fast, Cultures or Full.
-
-Login, CAPTCHA/OTP, password entry and CR-number entry and CR form submission remain manual. Navigation uses exact NIMS menu IDs where available, treats loginLogin.action as authenticated unless credential controls are present, confirms state after menu clicks, and can fall back to the HTTPS canonical CR-wise Investigation endpoint after an Investigation-context click fails to transition; it stops at the CR search page or report list, and zero View Report rows on CR search is normal. If NIMS changes its frames or menu handlers, Diagnose reports the detected stage and recommended next step. Always verify source reports before clinical decisions.
-
-Troubleshooting states include: Manual login required, Session expired, Investigation menu not found, CR-wise menu not found, canonical endpoint fallback attempted, CR search page ready, and Report list not yet loaded. Login and CR-number form submission remain manual.
