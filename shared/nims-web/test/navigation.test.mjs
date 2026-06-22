@@ -190,3 +190,57 @@ test('genuine login page is still classified login (shell guard does not over-tr
   const { core } = loadCore(`<!doctype html><form><label>User ID</label><input name="userName"><label>Password</label><input type="password"><button>Login</button></form>`, 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action');
   assert.equal(core.detectCurrentDocumentStage(document).stage, 'login');
 });
+
+// Faithful e-Sushrut G-5 frameset: header / module-bar / content live in SEPARATE
+// same-origin frames, and the module labels are letter-spaced ("O P D", "M I S
+// Reports") exactly as the live DOM renders them.
+function loadFrameset(url = 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action', withMenuButton = true) {
+  const top = `<!doctype html><html><body><iframe id="h"></iframe><iframe id="m"></iframe><iframe id="c"></iframe></body></html>`;
+  const dom = new JSDOM(top, { url, runScripts: 'dangerously' });
+  const d = dom.window.document;
+  dom.window.menuSelected = () => {};
+  const fill = (id, html) => { const cd = d.getElementById(id).contentDocument; cd.open(); cd.write('<!doctype html><html><body>' + html + '</body></html>'); cd.close(); try { cd.defaultView.menuSelected = () => {}; } catch {} };
+  const investigation = withMenuButton ? `<div onclick="menuSelected('Investigation', true)">Investigation</div>` : `<div>Investigation</div>`;
+  fill('h', `e-Sushrut G-5 Nizam's Institute of Medical Sciences Welcome, Kundakarla Bhanu Prasad Cash in Hand`);
+  fill('m', `<div>Registration</div><div>O P D</div><div>A D T</div>${investigation}<div>P I S</div><div>I P D</div><div>H E M S</div><div>Inventory</div><div>Tariff Search</div><div>M I S Reports</div><div>Home Menu</div>`);
+  fill('c', ``);
+  globalThis.window = dom.window; globalThis.document = d; globalThis.location = dom.window.location;
+  delete require.cache[require.resolve(corePath)];
+  return { dom, core: require(corePath), document: d };
+}
+
+test('G-5 frameset (markers split across frames, letter-spaced labels) is detected as home with no clickable menu', () => {
+  const { core, document: d } = loadFrameset('https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action', false);
+  delete d.defaultView.menuSelected;
+  assert.equal(core.detectNimsPageStage(d).stage, 'home');
+});
+
+test('G-5 frameset navigates to canonical CR endpoint when the menu click does not transition', () => {
+  const { core, document: d } = loadFrameset();
+  const first = core.navigateToCrWiseReports(d);
+  const second = core.navigateToCrWiseReports(d);
+  assert.equal(first.action, 'clicked_investigation_module');
+  assert.equal(second.action, 'canonical_endpoint_fallback');
+  assert.equal(second.safePath, 'nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+});
+
+test('login frameset with a real credential form in a frame is still login', () => {
+  const top = `<!doctype html><html><body><iframe id="f"></iframe></body></html>`;
+  const dom = new JSDOM(top, { url: 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action', runScripts: 'dangerously' });
+  const d = dom.window.document;
+  const cd = d.getElementById('f').contentDocument; cd.open(); cd.write(`<!doctype html><body><form><label>User ID</label><input name="userName"><label>Password</label><input type="password"><button>Login</button></form></body>`); cd.close();
+  globalThis.window = dom.window; globalThis.document = d; globalThis.location = dom.window.location;
+  delete require.cache[require.resolve(corePath)];
+  const core = require(corePath);
+  assert.equal(core.detectNimsPageStage(d).stage, 'login');
+});
+
+test('cross-origin/empty NIMS frameset with no readable login form is treated as logged-in home', () => {
+  const top = `<!doctype html><html><body><iframe id="a"></iframe><iframe id="b"></iframe></body></html>`;
+  const dom = new JSDOM(top, { url: 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action', runScripts: 'dangerously' });
+  const d = dom.window.document;
+  globalThis.window = dom.window; globalThis.document = d; globalThis.location = dom.window.location;
+  delete require.cache[require.resolve(corePath)];
+  const core = require(corePath);
+  assert.equal(core.detectNimsPageStage(d).stage, 'home');
+});

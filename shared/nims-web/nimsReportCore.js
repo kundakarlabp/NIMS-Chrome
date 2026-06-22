@@ -205,14 +205,59 @@
   // independent of the exact menu DOM (which varies and broke onclick-based
   // home detection). The live shell shows "Home Menu", the module menu bar, and
   // a "Welcome,"/e-Sushrut banner — none of which appear on the login page.
-  const SHELL_MODULE_NAMES = ["registration", "investigation", "tariff search", "mis reports", "inventory", "ipd", "hems", "opd", "adt"];
+  // Distinctive e-Sushrut shell tokens, compared after stripping ALL whitespace
+  // so letter-spaced labels in the live DOM ("O P D", "M I S Reports", "H E M S")
+  // still match ("opd", "misreports", "hems").
+  const SHELL_TOKENS = ["homemenu", "registration", "investigation", "misreports", "tariffsearch", "inventory", "esushrut", "cashinhand", "opd", "adt", "pis", "ipd", "hems"];
+  // Aggregate visible text across the whole accessible frame tree. e-Sushrut G-5
+  // is a frameset: the header ("Welcome"/e-Sushrut), the module bar and "Home
+  // Menu" live in SEPARATE same-origin frames, so no single document carries all
+  // the evidence. Collecting the subtree lets the top document recognise the
+  // shell the way the extension's all_frames injection does per-frame.
+  function collectFrameTreeText(doc) {
+    let docs;
+    try { docs = accessibleDocumentsRecursive(doc || root.document); } catch { docs = [{ doc }]; }
+    return docs.map((entry) => { try { return textOf((entry.doc && entry.doc.body) || entry.doc || ""); } catch { return ""; } }).join("  ");
+  }
+  function hasReadableLoginForm(doc) {
+    let docs;
+    try { docs = accessibleDocumentsRecursive(doc || root.document); } catch { docs = [{ doc }]; }
+    return docs.some((entry) => {
+      try {
+        const d = entry.doc; if (!d) return false;
+        if (!d.querySelector('input[type="password"]')) return false;
+        const user = d.querySelector('input[type="text"], input[name*="user" i], input[id*="user" i], input[name*="login" i], input[id*="login" i]');
+        const txt = compactText(textOf(d.body || d)).toLowerCase();
+        return Boolean(user) && /login|sign\s*in|password/.test(txt);
+      } catch { return false; }
+    });
+  }
+  function hasUnreadableFrames(doc) {
+    let frames = [];
+    try { frames = Array.from((doc || root.document).querySelectorAll("iframe, frame")); } catch { return false; }
+    if (!frames.length) return false;
+    return frames.some((frame) => {
+      try { const cd = frame.contentDocument; if (!cd || !cd.body) return true; return compactText(textOf(cd.body)).length === 0; } catch { return true; }
+    });
+  }
+  function onNimsContext(doc) {
+    const href = safeDocumentHref(doc) || (root.location && root.location.href) || "";
+    try { return NIMS_ALLOWED_HOSTS.has(new URL(href).hostname); } catch { return /nimsts\.edu\.in/i.test(href); }
+  }
   function hasLoggedInShellEvidence(doc) {
-    const text = compactText(textOf((doc && doc.body) || doc || "")).toLowerCase();
-    if (!text) return false;
-    const hasHomeMenu = /home\s*menu/.test(text);
-    const hasBrand = /e-?sushrut|nizam'?s institute of medical sciences|welcome,/.test(text);
-    const moduleHits = SHELL_MODULE_NAMES.reduce((n, name) => (text.includes(name) ? n + 1 : n), 0);
-    return hasHomeMenu && hasBrand && moduleHits >= 3;
+    const text = compactText(collectFrameTreeText(doc)).toLowerCase();
+    const squished = text.replace(/[\s\u00a0]+/g, "");
+    const hits = SHELL_TOKENS.reduce((n, token) => (squished.includes(token) ? n + 1 : n), 0);
+    const welcome = /welcome/.test(text) || /nizam.?s\s+institute\s+of\s+medical\s+sciences/.test(text);
+    if (hits >= 4 || (welcome && hits >= 2)) return true;
+    // Cross-origin / unintrospectable frameset on a NIMS context with no readable
+    // login form: treat as the logged-in shell so navigation can jump straight to
+    // the CR endpoint (the session cookie is valid; if it is not, NIMS redirects
+    // to login and the next poll re-detects login). The stage cascade only reaches
+    // this check after report/cr/investigation stages, so it never overrides a
+    // page that is already useful.
+    if (onNimsContext(doc) && hasUnreadableFrames(doc) && !hasReadableLoginForm(doc)) return true;
+    return false;
   }
 
   function findCrWiseReportMenuTarget(doc) {
@@ -312,17 +357,32 @@
   }
 
   function findCanonicalNavigationDocument(doc) {
-    const docs = accessibleDocumentsRecursive(doc || root.document)
-      .filter((item) => item.visibleThroughAncestors && item.win)
+    const accessible = accessibleDocumentsRecursive(doc || root.document).filter((item) => item.visibleThroughAncestors && item.win);
+    const ranked = accessible
       .map((item) => ({ item, diagnostic: getCurrentDocumentNavigationDiagnostic(item.doc, item.depth, item.visibleThroughAncestors) }))
       .filter((entry) => entry.diagnostic.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU || entry.diagnostic.stage === NIMS_PAGE_STAGE.HOME || entry.diagnostic.hasCrWiseMenu || /HISInvestigationG5/i.test(entry.diagnostic.safePath || ""));
-    docs.sort((a, b) => (b.item.depth - a.item.depth) || navigationStageScore(b.diagnostic) - navigationStageScore(a.diagnostic));
-    const selected = docs[0];
+    ranked.sort((a, b) => (b.item.depth - a.item.depth) || navigationStageScore(b.diagnostic) - navigationStageScore(a.diagnostic));
+    const selected = ranked[0];
     if (!selected) return { ok: false, errorCode: "investigation_context_not_confirmed" };
-    const href = safeDocumentHref(selected.item.doc) || (root.location && root.location.href) || "";
-    const resolved = resolveCanonicalCrWiseUrl(href);
+    // The CR endpoint is an absolute path, so any approved-origin base resolves
+    // it. Draw the base from the selected frame, any accessible frame, or the
+    // top window, so a frame with an unusable (about:blank / mid-load) href does
+    // not block navigation.
+    const baseHrefs = [safeDocumentHref(selected.item.doc)]
+      .concat(accessible.map((item) => safeDocumentHref(item.doc)))
+      .concat([(root.location && root.location.href) || "", safeTopHref()]);
+    let resolved = { ok: false, errorCode: "canonical_endpoint_rejected" };
+    for (const base of baseHrefs) {
+      if (!base) continue;
+      const candidate = resolveCanonicalCrWiseUrl(base);
+      if (candidate.ok) { resolved = candidate; break; }
+    }
     if (!resolved.ok) return resolved;
     return { ok: true, win: selected.item.win, url: resolved.url, depth: selected.item.depth };
+  }
+
+  function safeTopHref() {
+    try { return (root.window && root.window.top && root.window.top.location && root.window.top.location.href) || ""; } catch { return ""; }
   }
 
   function resolveCanonicalCrWiseUrl(baseHref) {
