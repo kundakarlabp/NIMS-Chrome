@@ -313,27 +313,30 @@
 
     if (detectSessionExpiredInTree(topDoc)) return navigationResult(false, NIMS_PAGE_STAGE.SESSION_EXPIRED, "none", false, "session_expired");
 
-    let entries;
-    try { entries = accessibleDocumentsRecursive(topDoc); } catch { entries = [{ doc: topDoc }]; }
-    const docs = entries.map((entry) => entry.doc).filter(Boolean);
+    // 1. The active CR-wise result iframe (exact id) is authoritative. Require a
+    //    VISIBLE genuine printReport row (report_list) or a VISIBLE patCrNo input
+    //    (cr_search). Otherwise it is still loading: wait, do not click.
+    const reportDoc = frameDocById(topDoc, REPORT_FRAME_ID);
+    if (reportDoc) {
+      if (hasVisibleGenuineReportRows(reportDoc)) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.REPORT_LIST, "none", true); }
+      if (hasVisibleCrNumberForm(reportDoc)) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
+      return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "waiting_for_report_frame", false);
+    }
 
-    // 1. Result list (genuine printReport rows) has the highest priority: the CR
-    //    form and the result list share URL and form name, so only DOM evidence
-    //    separates them.
-    if (docs.some((d) => hasGenuineViewReportRows(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.REPORT_LIST, "none", true); }
-    // 2. CR-number form: a patCrNo input that is not hidden. (Rows already claimed
-    //    report_list above, so a remaining patCrNo means the form, not results.)
-    if (docs.some((d) => hasVisibleCrNumberForm(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
-    // 2b. A genuine, readable credential form means the session is not authenticated
-    //     - respect it before attempting any menu navigation, even if stale shell
-    //     elements linger in the DOM.
+    // 2. Fallback for per-frame execution (extension all_frames) and non-frameset
+    //    pages: scan only VISIBLE documents, so a hidden/stale tab is never
+    //    mistaken for the current result list or CR form.
+    let entries;
+    try { entries = accessibleDocumentsRecursive(topDoc); } catch { entries = [{ doc: topDoc, visibleThroughAncestors: true }]; }
+    const visibleDocs = entries.filter((entry) => entry.visibleThroughAncestors !== false).map((entry) => entry.doc).filter(Boolean);
+    if (visibleDocs.some((d) => hasVisibleGenuineReportRows(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.REPORT_LIST, "none", true); }
+    if (visibleDocs.some((d) => hasVisibleCrNumberForm(d))) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
+    // 3. A genuine, readable credential form means the session is not authenticated.
     if (hasReadableLoginForm(topDoc)) return navigationResult(false, NIMS_PAGE_STAGE.LOGIN, "none", false, "manual_login_required");
-    // The exact result iframe exists but has not populated yet: wait, do not click.
-    if (frameDocById(topDoc, REPORT_FRAME_ID)) return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "waiting_for_report_frame", false);
 
     // 3. Click the exact CR-wise anchor (preferred in #frmMainMenu). This runs the
     //    native callMenu -> parent.callMenu (SSO ticket) -> addTab() workflow.
-    const anchor = findExactCrWiseAnchor(topDoc, docs);
+    const anchor = findExactCrWiseAnchor(topDoc, visibleDocs);
     if (anchor) {
       if (!canPerformNavigationAction(actionCooldownKey(NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu"))) return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "cooldown", false);
       if (safeClick(anchor)) { rememberProvisionalNavigation(NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu"); return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "clicked_cr_wise_menu", false); }
@@ -383,21 +386,37 @@
     try { const el = topDoc.getElementById(id); if (!el) return null; try { return el.contentDocument || null; } catch { return null; } } catch { return null; }
   }
 
-  function hasGenuineViewReportRows(doc) {
+  // Visibility check that works without layout (jsdom) yet still rejects the
+  // hidden/inactive EasyUI tabs and rows on a real device, which are hidden via
+  // display:none / visibility:hidden / hidden / aria-hidden.
+  function isContentVisible(el) {
+    if (!el || !el.isConnected) return false;
+    if (el.hidden || el.getAttribute("aria-hidden") === "true") return false;
+    const win = el.ownerDocument && el.ownerDocument.defaultView;
+    try { const s = win && win.getComputedStyle ? win.getComputedStyle(el) : null; if (s && (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse")) return false; } catch { }
+    return true;
+  }
+
+  function hasVisibleGenuineReportRows(doc) {
     if (!doc) return false;
-    try { return extractReportRows(doc, safeHostPath(safeDocumentHref(doc))).some((row) => row.onclick_function_name === "printReport"); } catch { return false; }
+    try {
+      return Array.from(doc.querySelectorAll("tr")).some((row) => {
+        if (!isContentVisible(row)) return false;
+        return Array.from(row.querySelectorAll("[onclick]")).some((button) => {
+          if (!isContentVisible(button)) return false;
+          const parsed = parseFunctionArgs(button.getAttribute("onclick") || "");
+          return parsed.functionName === "printReport" && parsed.args.length === 1;
+        });
+      });
+    } catch { return false; }
   }
 
   function hasVisibleCrNumberForm(doc) {
     if (!doc) return false;
     try {
       const pat = doc.querySelector('input[name="patCrNo"], input[id="patCrNo"]');
-      if (!pat) return false;
-      if (String(pat.type || "").toLowerCase() === "hidden") return false;
-      if (pat.hidden || pat.getAttribute("aria-hidden") === "true") return false;
-      const win = doc.defaultView;
-      try { const st = win && win.getComputedStyle ? win.getComputedStyle(pat) : null; if (st && (st.display === "none" || st.visibility === "hidden")) return false; } catch { }
-      return true;
+      if (!pat || String(pat.type || "").toLowerCase() === "hidden") return false;
+      return isContentVisible(pat);
     } catch { return false; }
   }
 
@@ -443,61 +462,6 @@
     state.provisionalAction = "";
   }
 
-  function navigateCanonicalCrWiseEndpoint(doc, reason) {
-    const target = findCanonicalNavigationDocument(doc || root.document);
-    if (!target.ok) return navigationResult(false, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "none", false, target.errorCode || reason || "canonical_endpoint_rejected", { canonicalFallbackAttempted: true });
-    try {
-      target.win.location.assign(target.url);
-      clearProvisionalNavigation();
-      return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "canonical_endpoint_fallback", false, "", { canonicalFallbackAttempted: true, safePath: safeHostPath(target.url), frameDepth: target.depth });
-    } catch {
-      return navigationResult(false, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "none", false, "canonical_navigation_failed", { canonicalFallbackAttempted: true, safePath: safeHostPath(target.url), frameDepth: target.depth });
-    }
-  }
-
-  function findCanonicalNavigationDocument(doc) {
-    const accessible = accessibleDocumentsRecursive(doc || root.document).filter((item) => item.visibleThroughAncestors && item.win);
-    const ranked = accessible
-      .map((item) => ({ item, diagnostic: getCurrentDocumentNavigationDiagnostic(item.doc, item.depth, item.visibleThroughAncestors) }))
-      .filter((entry) => entry.diagnostic.stage === NIMS_PAGE_STAGE.INVESTIGATION_MENU || entry.diagnostic.stage === NIMS_PAGE_STAGE.HOME || entry.diagnostic.hasCrWiseMenu || /HISInvestigationG5/i.test(entry.diagnostic.safePath || ""));
-    ranked.sort((a, b) => (b.item.depth - a.item.depth) || navigationStageScore(b.diagnostic) - navigationStageScore(a.diagnostic));
-    const selected = ranked[0];
-    if (!selected) return { ok: false, errorCode: "investigation_context_not_confirmed" };
-    // The CR endpoint is an absolute path, so any approved-origin base resolves
-    // it. Draw the base from the selected frame, any accessible frame, or the
-    // top window, so a frame with an unusable (about:blank / mid-load) href does
-    // not block navigation.
-    const baseHrefs = [safeDocumentHref(selected.item.doc)]
-      .concat(accessible.map((item) => safeDocumentHref(item.doc)))
-      .concat([(root.location && root.location.href) || "", safeTopHref()]);
-    let resolved = { ok: false, errorCode: "canonical_endpoint_rejected" };
-    for (const base of baseHrefs) {
-      if (!base) continue;
-      const candidate = resolveCanonicalCrWiseUrl(base);
-      if (candidate.ok) { resolved = candidate; break; }
-    }
-    if (!resolved.ok) return resolved;
-    return { ok: true, win: selected.item.win, url: resolved.url, depth: selected.item.depth };
-  }
-
-  function safeTopHref() {
-    try { return (root.window && root.window.top && root.window.top.location && root.window.top.location.href) || ""; } catch { return ""; }
-  }
-
-  function resolveCanonicalCrWiseUrl(baseHref) {
-    try {
-      const url = new URL(CR_WISE_ENDPOINT, baseHref);
-      if (url.protocol !== "https:") return { ok: false, errorCode: "canonical_endpoint_rejected" };
-      if (!NIMS_ALLOWED_HOSTS.has(url.hostname)) return { ok: false, errorCode: "canonical_endpoint_rejected" };
-      if (url.port) return { ok: false, errorCode: "canonical_endpoint_rejected" };
-      if (url.pathname !== CR_WISE_ENDPOINT) return { ok: false, errorCode: "canonical_endpoint_rejected" };
-      url.search = "";
-      url.hash = "";
-      return { ok: true, url: url.href };
-    } catch {
-      return { ok: false, errorCode: "canonical_endpoint_rejected" };
-    }
-  }
 
   function navigateCurrentDocumentStep(doc) {
     return navigateNimsContract(doc || root.document);
@@ -818,7 +782,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, resolveCanonicalCrWiseUrl, navigateToCrWiseReports };
+  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

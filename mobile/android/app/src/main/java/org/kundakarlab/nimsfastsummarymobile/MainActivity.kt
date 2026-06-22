@@ -362,6 +362,8 @@ class MainActivity : ComponentActivity() {
 
     private fun openCrWiseReports() {
         cancelNavigation()
+        mapping = null
+        mappingValidated = false
         val generation = ++navigationGeneration
         val coordinator = NimsNavigationCoordinator()
         navigationJob = lifecycleScope.launch {
