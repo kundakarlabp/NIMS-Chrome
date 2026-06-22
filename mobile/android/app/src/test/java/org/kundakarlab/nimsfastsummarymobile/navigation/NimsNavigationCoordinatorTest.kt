@@ -342,7 +342,7 @@ class NimsNavigationCoordinatorTest {
         val coordinator = NimsNavigationCoordinator(maxAttempts = 3, retryDelayMs = 1, stepTimeoutMs = 50, maxDurationMs = 500)
         val outcome = coordinator.execute(stepProvider = {
             calls += 1
-            if (calls == 1) NimsNavigationStep(ok = true, stage = "investigation_menu", action = "canonical_endpoint_fallback", done = false, errorCode = "")
+            if (calls == 1) NimsNavigationStep(ok = true, stage = "investigation_menu", action = "called_top_menu_function", done = false, errorCode = "")
             else NimsNavigationStep(ok = true, stage = "cr_search", action = "none", done = true, errorCode = "")
         })
         assertEquals(2, calls)

@@ -282,3 +282,13 @@ test('cross-origin/empty NIMS frameset with no readable login form is treated as
   const core = require(corePath);
   assert.equal(core.detectNimsPageStage(d).stage, 'home');
 });
+
+test('CR endpoint URL alone with no patCrNo input is not classified cr_search', () => {
+  const { core } = loadCore(`<!doctype html><body>Loading…</body>`, 'https://nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+  assert.notEqual(core.detectCurrentDocumentStage(document).stage, 'cr_search');
+});
+
+test('CR endpoint URL with a rendered patCrNo input is cr_search', () => {
+  const { core } = loadCore(`<!doctype html>${crForm}`, 'https://nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
+  assert.equal(core.detectCurrentDocumentStage(document).stage, 'cr_search');
+});
