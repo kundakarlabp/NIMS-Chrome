@@ -99,15 +99,6 @@ test('repeated CR-wise anchor clicks are throttled by cooldown (single navigatio
   assert.equal(second.action, 'cooldown');
 });
 
-test('canonical fallback resolves only to approved NIMS HTTPS origin', () => {
-  const { core } = loadCore(`<!doctype html>`);
-  assert.equal(core.resolveCanonicalCrWiseUrl('https://nimsts.edu.in/AHIMSG5/home').ok, true);
-  assert.equal(core.resolveCanonicalCrWiseUrl('https://www.nimsts.edu.in/AHIMSG5/home').ok, true);
-  assert.equal(core.resolveCanonicalCrWiseUrl('http://nimsts.edu.in/AHIMSG5/home').ok, false);
-  assert.equal(core.resolveCanonicalCrWiseUrl('https://evil.example/AHIMSG5/home').ok, false);
-  assert.equal(core.resolveCanonicalCrWiseUrl('not a url').ok, false);
-  assert.equal(core.resolveCanonicalCrWiseUrl('javascript:alert(1)').ok, false);
-});
 
 test('CR input value is never read, cleared, modified or submitted', () => {
   const { core } = loadCore(`<!doctype html>${crForm}`, 'https://nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
@@ -291,4 +282,23 @@ test('CR endpoint URL alone with no patCrNo input is not classified cr_search', 
 test('CR endpoint URL with a rendered patCrNo input is cr_search', () => {
   const { core } = loadCore(`<!doctype html>${crForm}`, 'https://nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
   assert.equal(core.detectCurrentDocumentStage(document).stage, 'cr_search');
+});
+
+test('hidden/stale report rows are not classified report_list', () => {
+  const { core } = loadCore(`<!doctype html><table><tr style="display:none"><td><a onclick="printReport('X')">View Report</a></td></tr></table>`, 'https://nimsts.edu.in/AHIMSG5/home');
+  const result = core.navigateToCrWiseReports(document);
+  assert.notEqual(result.stage, 'report_list');
+});
+
+test('visible genuine report rows are classified report_list (done)', () => {
+  const { core } = loadCore(`<!doctype html><table><tr><td>Patient</td><td><a onclick="printReport('X')">View Report</a></td></tr></table>`, 'https://nimsts.edu.in/AHIMSG5/home');
+  const result = core.navigateToCrWiseReports(document);
+  assert.equal(result.stage, 'report_list');
+  assert.equal(result.done, true);
+});
+
+test('canonical direct-navigation functions are not exported (cannot run)', () => {
+  const { core } = loadCore(`<!doctype html>`);
+  assert.equal(typeof core.resolveCanonicalCrWiseUrl, 'undefined');
+  assert.equal(typeof core.navigateCanonicalCrWiseEndpoint, 'undefined');
 });
