@@ -5,42 +5,36 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const bridge = require("../../shared/nims-web/nimsAndroidFrameBridge.js");
 
-function fakeCore(rows, template) {
+// Fake NimsFastSummaryUtils (the extension's contentUtils API surface the bridge uses).
+function fakeUtils(rows) {
   return {
-    extractReportRows: () => rows,
-    transientPayloadForRow: (row) => ({ ok: true, transientPrintReportArg: `arg-${row.row_index}` }),
-    discoverSetPdfTemplate: () => template,
-    clickFirstReportForMode: () => ({ ok: true })
+    hasReportRows: () => rows.length > 0,
+    extractReportRows: () => rows
   };
 }
 
-const genuine = { row_index: 0, onclick_function_name: "printReport", onclick_arg_count: 1 };
-const notGenuine = { row_index: 1, onclick_function_name: "openSomething", onclick_arg_count: 2 };
+const rowA = { row_index: 0, report_name: "CBC", source_url: "https://nimsts.edu.in/r/AAA" };
+const rowB = { row_index: 1, report_name: "ESR", source_url: "https://nimsts.edu.in/r/BBB" };
 
-test("buildFrameReport returns null for a frame with no genuine rows", () => {
-  const core = fakeCore([notGenuine], { discovered: true, endpoint: "h/p" });
-  assert.equal(bridge.buildFrameReport(core, {}, "h/p"), null);
+test("buildFrameReport returns null when the frame has no report rows", () => {
+  assert.equal(bridge.buildFrameReport(fakeUtils([]), {}, "h/p"), null);
 });
 
-test("buildFrameReport enriches genuine rows with the printReport argument", () => {
-  const core = fakeCore([genuine, notGenuine], { discovered: true, endpoint: "h/p", origin: "https://x", pathname: "/p", modeParamName: "hmode", argumentParameterName: "fileName" });
-  const report = bridge.buildFrameReport(core, {}, "host/path");
+test("buildFrameReport returns the rows the extension extracted (with source_url)", () => {
+  const report = bridge.buildFrameReport(fakeUtils([rowA, rowB]), {}, "host/path");
   assert.equal(report.type, "nims_report_frame");
-  assert.equal(report.rowCount, 1);
-  assert.equal(report.rows[0].transientPrintReportArg, "arg-0");
-  assert.equal(report.template.endpoint, "h/p");
+  assert.equal(report.rowCount, 2);
+  assert.equal(report.rows[1].source_url, "https://nimsts.edu.in/r/BBB");
 });
 
-test("buildFrameReport omits an undiscovered template", () => {
-  const core = fakeCore([genuine], null);
-  const report = bridge.buildFrameReport(core, {}, "host/path");
-  assert.equal(report.rowCount, 1);
-  assert.equal(report.template, null);
-});
-
-test("frameReportKey changes when rows or template change (debounce)", () => {
-  const a = bridge.buildFrameReport(fakeCore([genuine], null), {}, "h");
-  const b = bridge.buildFrameReport(fakeCore([genuine], { discovered: true, endpoint: "h/p" }), {}, "h");
+test("frameReportKey changes when the patient's rows change (debounce)", () => {
+  const a = bridge.buildFrameReport(fakeUtils([rowA]), {}, "h");
+  const b = bridge.buildFrameReport(fakeUtils([rowB]), {}, "h");
   assert.notEqual(bridge.frameReportKey(a), bridge.frameReportKey(b));
   assert.equal(bridge.frameReportKey(a), bridge.frameReportKey(a));
+});
+
+test("buildFrameReport tolerates a utils without hasReportRows", () => {
+  const report = bridge.buildFrameReport({ extractReportRows: () => [rowA] }, {}, "h");
+  assert.equal(report.rowCount, 1);
 });
