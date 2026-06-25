@@ -223,6 +223,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
         val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
+        val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
         val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -309,9 +310,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (coreJs != null && bridgeJs != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            if (coreJs != null && utilsJs != null && bridgeJs != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 runCatching {
-                    WebViewCompat.addDocumentStartJavaScript(this, "$coreJs\n$bridgeJs", setOf("*"))
+                    WebViewCompat.addDocumentStartJavaScript(this, "$coreJs\n$utilsJs\n$bridgeJs", setOf("*"))
                 }
             }
         }
@@ -558,7 +559,8 @@ class MainActivity : ComponentActivity() {
         val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
         val tpl = report.optJSONObject("template")
         if (tpl == null) {
-            setState(AppState.HELPER_READY, "Learning the report request from the visible frame. Keep it visible and tap again in a moment.")
+            val rowCount = report.optJSONArray("rows")?.length() ?: 0
+            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible) using the extension's reader. Fetch and summarize wiring is the next step.")
             return
         }
         val template = ReportTemplate(
