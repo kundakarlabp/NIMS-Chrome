@@ -11,6 +11,7 @@
 
   function diagnosePage(doc) {
     const frames = collectFrames(doc || root.document);
+    const reach = frameReachReport(doc || root.document);
     const best = frames.slice().sort((a, b) => frameScore(b) - frameScore(a))[0] || null;
     const stage = detectNimsPageStage(doc || root.document);
     return {
@@ -25,6 +26,8 @@
       bestFramePath: best ? best.url : "",
       viewReportRows: best ? best.viewReportRows : 0,
       printReportRows: best ? best.printReportRows : 0,
+      reachableDocuments: reach.reachableDocuments,
+      blockedFrames: reach.blockedFrames,
       setPdfTemplateDiscovered: Boolean(best && best.setPdfTemplate && best.setPdfTemplate.discovered)
     };
   }
@@ -63,6 +66,33 @@
 
   function accessibleDocuments(doc) {
     return accessibleDocumentsRecursive(doc || root.document);
+  }
+
+  // Counts child frames whose document cannot be reached from this frame -
+  // cross-origin isolation (or not-yet-loaded). On Android the core runs only
+  // in the top frame, so a non-zero blockedFrames on the report page is the
+  // signature of the report iframe being a different origin (e.g. www. vs apex,
+  // or the HISInvestigationG5 app host), which is why same-origin recursion
+  // finds zero rows there while the all_frames extension works.
+  function frameReachReport(startDoc, maxDepth = 6) {
+    let reachableDocuments = 0;
+    let blockedFrames = 0;
+    const visited = new Set();
+    function visit(currentDoc, depth) {
+      if (!currentDoc || depth > maxDepth || visited.has(currentDoc)) return;
+      visited.add(currentDoc);
+      reachableDocuments += 1;
+      let frames = [];
+      try { frames = Array.from(currentDoc.querySelectorAll("iframe, frame")); } catch { frames = []; }
+      for (const frame of frames) {
+        let childDoc = null;
+        try { childDoc = frame.contentDocument; } catch { childDoc = null; }
+        if (childDoc) visit(childDoc, depth + 1);
+        else blockedFrames += 1;
+      }
+    }
+    visit(startDoc || root.document, 0);
+    return { reachableDocuments, blockedFrames };
   }
 
   function frameDiagnostic(doc, url, depth, visibleThroughAncestors = true) {
@@ -782,7 +812,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
+  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);
