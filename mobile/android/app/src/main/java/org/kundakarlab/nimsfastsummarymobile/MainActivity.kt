@@ -436,10 +436,14 @@ class MainActivity : ComponentActivity() {
     private fun diagnosePage() {
         evaluateCore("JSON.stringify(NimsReportCore.diagnosePage(document))") { json ->
             val rows = DiagnosePageContract.viewReportRows(json)
+            val blocked = DiagnosePageContract.blockedFrames(json)
+            val reachable = DiagnosePageContract.reachableDocuments(json)
             if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
+            } else if (rows == 0 && blocked > 0) {
+                setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
             }
-            log("Page diagnostics rows=$rows mappingReady=${rows > 0}")
+            log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
         }
     }
 

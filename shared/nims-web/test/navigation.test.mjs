@@ -302,3 +302,24 @@ test('canonical direct-navigation functions are not exported (cannot run)', () =
   assert.equal(typeof core.resolveCanonicalCrWiseUrl, 'undefined');
   assert.equal(typeof core.navigateCanonicalCrWiseEndpoint, 'undefined');
 });
+
+test('frameReachReport counts cross-origin (throwing) child frames as blocked', () => {
+  const { core } = loadCore(`<!doctype html>`);
+  // Build a synthetic top document: one same-origin child (reachable) and one
+  // cross-origin child whose contentDocument getter throws (like a real frame
+  // on a different origin in a WebView top frame).
+  const reachableChild = { querySelectorAll: () => [] };
+  const sameOriginFrame = { get contentDocument() { return reachableChild; } };
+  const crossOriginFrame = { get contentDocument() { throw new Error('SecurityError: cross-origin'); } };
+  const topDoc = { querySelectorAll: (sel) => /iframe|frame/.test(sel) ? [sameOriginFrame, crossOriginFrame] : [] };
+  const report = core.frameReachReport(topDoc);
+  assert.equal(report.blockedFrames, 1);          // the cross-origin frame
+  assert.equal(report.reachableDocuments, 2);     // top + same-origin child
+});
+
+test('diagnosePage exposes blockedFrames and reachableDocuments', () => {
+  const { core } = loadCore(`<!doctype html><body></body>`);
+  const d = core.diagnosePage(document);
+  assert.equal(typeof d.blockedFrames, 'number');
+  assert.equal(typeof d.reachableDocuments, 'number');
+});
