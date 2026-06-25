@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.5.1"
+        versionCode = 9
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -66,6 +66,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.webkit:webkit:1.12.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     debugImplementation("androidx.compose.ui:ui-tooling")

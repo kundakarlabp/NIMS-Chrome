@@ -18,6 +18,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -118,6 +120,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
+    private var crossFrameReport: JSONObject? = null
     private var webViewUserAgent = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
@@ -219,6 +222,8 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
+        val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
+        val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -292,6 +297,23 @@ class MainActivity : ComponentActivity() {
                 onPageChanged = { safeUrl -> currentPage = safeUrl.ifBlank { "NIMS" } },
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") }
             )
+            // All-frames bridge (mirrors the extension's all_frames model). The
+            // top frame cannot read a cross-origin result iframe, so inject the
+            // core + bridge into every frame and let the frame that owns the rows
+            // post them back via nimsAndroidBridge. Feature-gated; if unsupported,
+            // the existing same-origin top-frame path still runs.
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                runCatching {
+                    WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("*")) { _, message, _, _, _ ->
+                        message.data?.let { data -> post { onFrameReport(data) } }
+                    }
+                }
+            }
+            if (coreJs != null && bridgeJs != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                runCatching {
+                    WebViewCompat.addDocumentStartJavaScript(this, "$coreJs\n$bridgeJs", setOf("*"))
+                }
+            }
         }
     }
 
@@ -475,12 +497,123 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Receives the report-frame announcement posted by nimsAndroidFrameBridge.js
+    // from whichever frame (even cross-origin) actually contains the result rows.
+    private fun onFrameReport(data: String) {
+        val json = runCatching { JSONObject(data) }.getOrNull() ?: return
+        if (json.optString("type") != "nims_report_frame") return
+        crossFrameReport = json
+        val rowCount = json.optJSONArray("rows")?.length() ?: 0
+        val hasTemplate = json.optJSONObject("template") != null
+        log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
+        if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
+            appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Current Results.")
+        }
+    }
+
+    // Single-mode run using only the cross-frame announcement (rows already carry
+    // their printReport argument; the template is already discovered). No
+    // top-frame DOM access, so it is origin-independent. selectRowsForMode is a
+    // pure function evaluated on the announced rows.
+    private fun runFrameBridgeMode(mode: String, report: JSONObject, template: ReportTemplate) {
+        mapping = template
+        val rowsArr = report.optJSONArray("rows") ?: JSONArray()
+        if (rowsArr.length() == 0) {
+            setState(AppState.ERROR, "No usable report rows from the visible frame. Keep the result list visible and retry.")
+            return
+        }
+        evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rowsArr}, '$mode'))") { selectedText ->
+            val selectedAll = runCatching { JSONArray(selectedText) }.getOrDefault(JSONArray())
+            val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
+                JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
+            } else {
+                selectedAll
+            }
+            if (selected.length() == 0) {
+                setState(AppState.ERROR, "No matching report rows for this mode in the visible frame.")
+                return@evaluateJson
+            }
+            val prepared = mutableListOf<PreparedReportRequest>()
+            for (i in 0 until selected.length()) {
+                val row = selected.optJSONObject(i) ?: continue
+                val transient = row.optString("transientPrintReportArg")
+                if (transient.isBlank()) {
+                    log("Skipping ${row.optString("report_name", "report")}: report argument missing")
+                    continue
+                }
+                prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
+            }
+            if (prepared.isEmpty()) {
+                setState(AppState.ERROR, "Visible report rows had no usable print argument.")
+                return@evaluateJson
+            }
+            log("Frame-bridge selected ${prepared.size} reports for $mode")
+            startFetchParseSummarize(mode, prepared)
+        }
+    }
+
+    // Cross-frame entry: validate one report (if needed) then run the bulk mode.
+    private fun runModeViaFrameBridge(mode: String, report: JSONObject) {
+        val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
+        val tpl = report.optJSONObject("template")
+        if (tpl == null) {
+            setState(AppState.HELPER_READY, "Learning the report request from the visible frame. Keep it visible and tap again in a moment.")
+            return
+        }
+        val template = ReportTemplate(
+            origin = tpl.optString("origin"),
+            pathname = tpl.optString("pathname"),
+            modeParamName = tpl.optString("modeParamName", "hmode"),
+            modeParamValue = tpl.optString("modeParamValue", "PRINTREPORT"),
+            argumentParameterName = tpl.optString("argumentParameterName", "fileName")
+        )
+        if (mode !in bulkModes || mappingValidated) {
+            runFrameBridgeMode(mode, report, template)
+            return
+        }
+        if (navigationInProgress) {
+            setState(AppState.HELPER_READY, "Analysis startup is already running.")
+            return
+        }
+        cancelNavigation()
+        cancelActiveProcessing()
+        navigationInProgress = true
+        setState(AppState.FETCHING, "Testing one visible report before bulk analysis…")
+        runFrameBridgeMode("test_direct", report, template)
+        navigationJob = lifecycleScope.launch {
+            try {
+                var checks = 0
+                while (!mappingValidated && checks < 90) {
+                    delay(500)
+                    checks += 1
+                }
+                if (!mappingValidated) {
+                    setState(AppState.ERROR, "One-report validation did not succeed. Keep the result list visible and retry.")
+                    return@launch
+                }
+                setState(AppState.FETCHING, "Mapping validated. Starting analysis…")
+                runFrameBridgeMode(mode, report, template)
+            } finally {
+                navigationInProgress = false
+            }
+        }
+    }
+
     // MANUAL_RESULTS_ONE_CLICK
     // The user navigates to the submitted CR result list manually. Any bulk
     // action now performs discovery -> one-report validation -> requested run.
     // No NIMS menu or frame navigation is attempted here.
     private fun runMode(mode: String) {
         val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
+        // Prefer the all-frames bridge: if the frame that owns the rows has
+        // announced them, use that (works even when the result iframe is a
+        // different origin the top frame cannot read).
+        val report = crossFrameReport
+        if (report != null && (report.optJSONArray("rows")?.length() ?: 0) > 0) {
+            runModeViaFrameBridge(mode, report)
+            return
+        }
         if (mode !in bulkModes || mappingValidated) {
             runModeInternal(mode)
             return
@@ -851,6 +984,9 @@ class MainActivity : ComponentActivity() {
         sanitizedSummaryText = ""
         uiSummary = null
         physicianNote = ""
+        crossFrameReport = null
+        mapping = null
+        mappingValidated = false
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 
