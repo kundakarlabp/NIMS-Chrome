@@ -14,12 +14,16 @@ EXPECTED_SKILLS = {
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
-    assert text.startswith("---\n"), "missing opening YAML delimiter"
-    raw, _body = text[4:].split("\n---\n", 1)
+    normalized = text.replace("\r\n", "\n")
+    assert normalized.startswith("---\n"), "missing opening YAML delimiter"
+    raw, separator, _body = normalized[4:].partition("\n---\n")
+    assert separator, "missing closing YAML delimiter"
     metadata: dict[str, str] = {}
     for line in raw.splitlines():
         if not line.strip():
             continue
+        if ":" not in line:
+            raise ValueError(f"Malformed frontmatter line (missing colon): {line}")
         key, value = line.split(":", 1)
         metadata[key.strip()] = value.strip()
     return metadata
