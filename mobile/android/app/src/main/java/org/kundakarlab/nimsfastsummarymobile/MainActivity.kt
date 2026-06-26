@@ -545,7 +545,21 @@ class MainActivity : ComponentActivity() {
     // from whichever frame (even cross-origin) actually contains the result rows.
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
-        if (json.optString("type") != "nims_report_frame") return
+        when (json.optString("type")) {
+            "nims_frame_debug" -> {
+                val errs = json.optJSONArray("errors")
+                val errStr = if (errs != null && errs.length() > 0) {
+                    " err=" + (0 until errs.length()).joinToString("; ") { errs.optString(it) }
+                } else ""
+                log(
+                    "FRAME ${json.optString("url")}: children=${json.optInt("children")} " +
+                        "text=${json.optInt("textLen")} h=${json.optInt("height")}$errStr"
+                )
+                return
+            }
+            "nims_report_frame" -> { /* fall through to handling below */ }
+            else -> return
+        }
         crossFrameReport = json
         val rowCount = json.optJSONArray("rows")?.length() ?: 0
         val hasTemplate = json.optJSONObject("template") != null

@@ -61,8 +61,7 @@ test('patches jQuery that appears only after document-start', () => {
   const w = runShim(); // no jQuery yet
   const jQuery = (() => {});
   jQuery.fn = { offset() { return undefined; } };
-  w.jQuery = jQuery;
-  w.__tick(); // poller runs and patches
+  w.jQuery = jQuery; // assignment is intercepted and patched synchronously
   const off = w.jQuery.fn.offset();
   assert.equal(off.top, 0);
   assert.equal(off.left, 0);
@@ -77,4 +76,38 @@ test('does not double-patch offset', () => {
   w.__tick(); // subsequent poller ticks must not re-wrap
   assert.equal(w.jQuery.fn.offset, firstPatched);
   assert.equal(w.jQuery.fn.__nimsOffsetPatched, true);
+});
+
+test('posts a per-frame content report to the Android bridge', () => {
+  const posted = [];
+  const listeners = {};
+  const fakeWindow = {
+    console: { error() {} },
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout(fn) { fn(); return 1; }, // run synchronously
+    addEventListener(type, fn) { listeners[type] = fn; },
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hislogin/transactions/jsp/st_desk_homeMenuTab_page.jsp' },
+    document: {
+      readyState: 'complete',
+      body: {
+        querySelectorAll() { return { length: 7 }; },
+        innerText: '  Services Special Clinic  ',
+        scrollHeight: 240,
+      },
+    },
+    nimsAndroidBridge: { postMessage(s) { posted.push(s); } },
+  };
+  const context = { window: fakeWindow, URL };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(shimSource, context);
+
+  assert.equal(posted.length, 1);
+  const msg = JSON.parse(posted[0]);
+  assert.equal(msg.type, 'nims_frame_debug');
+  assert.equal(msg.children, 7);
+  assert.equal(msg.height, 240);
+  assert.ok(msg.textLen > 0);
+  assert.match(msg.url, /st_desk_homeMenuTab_page\.jsp$/);
 });

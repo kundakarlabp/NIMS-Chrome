@@ -1,47 +1,41 @@
-// NIMS WebView compatibility shim.
+// NIMS WebView compatibility shim + frame diagnostics.
 //
 // Injected at document-start into EVERY frame of the Android WebView, BEFORE
-// NIMS's own page scripts run. It neutralizes two crashes that were confirmed
-// against the live e-Sushrut page (read-only DevTools/extension inspection):
+// NIMS's own scripts run. It does three things:
 //
-//   1. /AHIMSG5/hissso/script.js returns 404, so the global `date_time` it was
-//      supposed to define is missing. NIMS calls `date_time(...)` inline, which
-//      throws "date_time is not defined" in the WebView and aborts page init.
+//   1. Defines a safe no-op `date_time` (its source, /AHIMSG5/hissso/script.js,
+//      404s, so NIMS's inline `date_time(...)` call would otherwise throw).
 //
-//   2. tabmenu.js line ~576 does `$("#menuStrip").offset().left`, but #menuStrip
-//      does not exist (only #menuContainer does). On desktop that branch isn't
-//      reached; in the WebView it is, so `.offset()` returns undefined and
-//      reading `.left` throws "Cannot read properties of undefined (reading
-//      'left')". That uncaught throw stops the menu/content render, leaving the
-//      area under the menu bar blank.
+//   2. Patches jQuery's `.offset()` to return {top:0,left:0} for an empty set,
+//      so tabmenu.js line ~576 (`$("#menuStrip").offset().left`, with #menuStrip
+//      absent) cannot throw. CRITICAL: this is installed SYNCHRONOUSLY the moment
+//      NIMS assigns window.jQuery / window.$ (via a property hook), not by a timer
+//      poll, because tabmenu.js runs synchronously during load and a polled patch
+//      can land too late to help.
 //
-// Both are defused here without touching NIMS's server files: define a safe
-// no-op `date_time`, and make jQuery's `.offset()` return {top:0,left:0} for an
-// empty set instead of undefined, so the `.left` read can never throw. Empty-set
-// offset is only hit for missing elements, so returning zeros is harmless.
+//   3. Captures uncaught page errors and reports, once per frame, what that frame
+//      actually contains (body child count + text length) to Kotlin via the
+//      nimsAndroidBridge listener. This is how we can finally tell whether the
+//      blank area under the menu is an EMPTY iframe vs a populated-but-hidden one.
 //
-// This file is pure runtime glue (no exports). It must stay tiny, self-guarded,
-// and free of side effects beyond the two fixes above.
+// Pure runtime glue; no exports. Must stay tiny and self-guarded.
 (function () {
   var w = typeof window !== "undefined" ? window : null;
   if (!w) return;
+
   try {
-    // (1) Missing global from the 404'd script.js. Defined as a tolerant no-op
-    // that returns "" whether NIMS uses it as a value or calls it as a function.
+    // (1) Missing global from the 404'd script.js.
     if (typeof w.date_time === "undefined") {
-      try {
-        w.date_time = function () { return ""; };
-      } catch (e) { /* non-writable; ignore */ }
+      try { w.date_time = function () { return ""; }; } catch (e) { /* ignore */ }
     }
 
-    // (2) Guard jQuery.fn.offset so `$(missing).offset().left/top` can't throw.
+    // (2) jQuery.offset guard, installed synchronously on assignment.
     function patchOffset(jq) {
       if (!jq || !jq.fn || jq.fn.__nimsOffsetPatched) return false;
       var orig = jq.fn.offset;
       if (typeof orig !== "function") return false;
       jq.fn.offset = function () {
         var result = orig.apply(this, arguments);
-        // jQuery returns undefined for an empty set; hand back zeros instead.
         if (result === null || typeof result === "undefined") {
           return { top: 0, left: 0 };
         }
@@ -51,16 +45,90 @@
       return true;
     }
 
-    // jQuery isn't loaded yet at document-start, so patch as soon as it appears.
-    if (!patchOffset(w.jQuery) && !patchOffset(w.$)) {
-      if (typeof w.setInterval === "function") {
-        var tries = 0;
-        var iv = w.setInterval(function () {
-          tries += 1;
-          if (patchOffset(w.jQuery) || patchOffset(w.$) || tries > 200) {
-            w.clearInterval(iv); // stop after success or ~10s
+    function hookGlobal(name) {
+      var current;
+      try { current = w[name]; } catch (e) { current = undefined; }
+      // Already present at injection time -> patch immediately.
+      if (current && patchOffset(current)) return true;
+      // Otherwise intercept the assignment NIMS will make, and patch then.
+      try {
+        Object.defineProperty(w, name, {
+          configurable: true,
+          enumerable: true,
+          get: function () { return current; },
+          set: function (val) { current = val; patchOffset(val); }
+        });
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    var hookedJq = hookGlobal("jQuery");
+    var hookedDollar = hookGlobal("$");
+
+    // Fallback poller in case jQuery is assigned through a path the hook missed.
+    if ((!hookedJq || !hookedDollar) && typeof w.setInterval === "function") {
+      var tries = 0;
+      var iv = w.setInterval(function () {
+        tries += 1;
+        if (patchOffset(w.jQuery) || patchOffset(w.$) || tries > 200) {
+          w.clearInterval(iv);
+        }
+      }, 50);
+    }
+
+    // (3) Error capture + one-shot per-frame content report.
+    var capturedErrors = [];
+    w.__nimsShimErrors = capturedErrors;
+    if (typeof w.addEventListener === "function") {
+      w.addEventListener("error", function (ev) {
+        try {
+          var src = (ev && ev.filename ? String(ev.filename).split("/").pop() : "");
+          var msg = ev && ev.message ? String(ev.message) : "error";
+          if (capturedErrors.length < 12) {
+            capturedErrors.push(msg + " @" + src + ":" + (ev && ev.lineno ? ev.lineno : "?"));
           }
-        }, 50);
+        } catch (e) { /* ignore */ }
+      });
+    }
+
+    function reportFrame() {
+      try {
+        var bridge = w.nimsAndroidBridge;
+        if (!bridge || typeof bridge.postMessage !== "function") return false;
+        var doc = w.document;
+        var body = doc && doc.body;
+        var children = body ? body.querySelectorAll("*").length : 0;
+        var textLen = body && body.innerText ? body.innerText.trim().length : 0;
+        var height = body ? (body.scrollHeight || 0) : 0;
+        var path = "";
+        try { var u = new URL(w.location.href); path = u.hostname + u.pathname; } catch (e) {}
+        bridge.postMessage(JSON.stringify({
+          type: "nims_frame_debug",
+          url: path,
+          children: children,
+          textLen: textLen,
+          height: height,
+          errors: capturedErrors.slice(0, 6)
+        }));
+        return true;
+      } catch (e) { return false; }
+    }
+
+    // Report after the frame settles; retry a few times in case the bridge or
+    // content arrives slightly later.
+    if (w.document && typeof w.setTimeout === "function") {
+      var attempts = 0;
+      var fire = function () {
+        attempts += 1;
+        var done = reportFrame();
+        if (!done && attempts < 6) { w.setTimeout(fire, 1000); }
+      };
+      if (w.document.readyState === "loading" && typeof w.addEventListener === "function") {
+        w.addEventListener("DOMContentLoaded", function () { w.setTimeout(fire, 800); }, { once: true });
+      } else {
+        w.setTimeout(fire, 800);
       }
     }
   } catch (e) {
