@@ -229,6 +229,10 @@ class MainActivity : ComponentActivity() {
         val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
         val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
         val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
+        // Runtime compatibility shim: neutralizes NIMS's confirmed crashes
+        // (missing date_time global, and the $("#menuStrip").offset().left throw
+        // in tabmenu.js) so the menu/content render isn't aborted in the WebView.
+        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             // Identify as the desktop Chrome the extension actually works in.
@@ -338,10 +342,20 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (coreJs != null && utilsJs != null && bridgeJs != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                runCatching {
-                    val injected = "try{\n$coreJs\n$utilsJs\n$bridgeJs\n}catch(e){if(window.console&&console.error)console.error('NIMS bridge inject failed',e);}"
-                    WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                // The shim is the render fix and must run first, before NIMS's
+                // own scripts, and even if the reader assets failed to load.
+                val readerJs = if (coreJs != null && utilsJs != null && bridgeJs != null) {
+                    "\n$coreJs\n$utilsJs\n$bridgeJs"
+                } else {
+                    ""
+                }
+                val payload = (shimJs ?: "") + readerJs
+                if (payload.isNotBlank()) {
+                    runCatching {
+                        val injected = "try{\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
+                        WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
+                    }
                 }
             }
         }
