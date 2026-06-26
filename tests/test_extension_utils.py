@@ -589,7 +589,9 @@ def test_android_project_static_security_contract() -> None:
     assert "javaScriptEnabled = true" in main_activity
     assert "allowFileAccess = false" in main_activity
     assert "allowUniversalAccessFromFileURLs = false" in main_activity
-    assert "MIXED_CONTENT_NEVER_ALLOW" in main_activity
+    # Chrome-aligned: passive mixed content allowed, active blocked (matches the
+    # browser the extension relies on). Cleartext at the manifest level stays off.
+    assert "MIXED_CONTENT_COMPATIBILITY_MODE" in main_activity
     assert "loginLogin.action" in main_activity
     assert "CookieManager.getInstance().getCookie" in main_activity
     assert "X-NIMS-HELPER-KEY" in client

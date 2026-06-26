@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.util.Base64
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -222,6 +223,9 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView {
+        // Let a desktop Chrome (chrome://inspect over USB) attach to this WebView,
+        // and let the WebView report its own console/network errors (wired below).
+        runCatching { WebView.setWebContentsDebuggingEnabled(true) }
         val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
         val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
         val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
@@ -241,14 +245,30 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // Real Chrome (which the extension relies on) allows passive mixed
+            // content and blocks only active mixed content. NEVER_ALLOW is stricter
+            // than Chrome and can blank a frame that pulls any http subresource.
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             isFocusable = true
             isFocusableInTouchMode = true
             setInitialScale(85)
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+            // NIMS frames/redirects can be treated as third-party inside a WebView;
+            // with these blocked the session cookie is withheld and the content
+            // frame comes back empty (shell renders, body blank). Chrome allows them.
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, newProgress: Int) {
                     loadProgress = newProgress
+                }
+
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                    val level = consoleMessage.messageLevel()?.name ?: "LOG"
+                    if (level == "ERROR" || level == "WARNING") {
+                        val src = consoleMessage.sourceId()?.substringAfterLast('/').orEmpty()
+                        val msg = consoleMessage.message().orEmpty().take(220)
+                        log("JS $level: $msg ($src:${consoleMessage.lineNumber()})")
+                    }
+                    return true
                 }
 
                 override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
@@ -262,6 +282,7 @@ class MainActivity : ComponentActivity() {
                     }
                     fun handlePopupUrlOnce(popupView: WebView, uri: Uri, isMainFrame: Boolean): Boolean {
                         if (!handled.compareAndSet(false, true)) return true
+                        log("Popup -> ${SafeUrl.stripQuery(uri.toString())}")
                         when (NimsUrlPolicy.classify(uri)) {
                             UrlClassification.ALLOWED_NIMS -> webView.loadUrl(uri.toString())
                             UrlClassification.EXTERNAL_HTTPS -> if (isMainFrame && isUserGesture) {
@@ -296,7 +317,8 @@ class MainActivity : ComponentActivity() {
             }
             webViewClient = NimsWebViewClient(
                 onPageChanged = { safeUrl -> currentPage = safeUrl.ifBlank { "NIMS" } },
-                onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") }
+                onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
+                onResourceError = { detail -> log(detail) }
             )
             // All-frames bridge (mirrors the extension's all_frames model). The
             // top frame cannot read a cross-origin result iframe, so inject the
@@ -312,7 +334,8 @@ class MainActivity : ComponentActivity() {
             }
             if (coreJs != null && utilsJs != null && bridgeJs != null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 runCatching {
-                    WebViewCompat.addDocumentStartJavaScript(this, "$coreJs\n$utilsJs\n$bridgeJs", setOf("*"))
+                    val injected = "try{\n$coreJs\n$utilsJs\n$bridgeJs\n}catch(e){if(window.console&&console.error)console.error('NIMS bridge inject failed',e);}"
+                    WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
                 }
             }
         }
