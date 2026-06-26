@@ -231,6 +231,12 @@ class MainActivity : ComponentActivity() {
         val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
+            // Identify as the desktop Chrome the extension actually works in.
+            // NIMS serves different (and partly broken/404) asset paths to a
+            // "mobile" UA, which makes tabmenu.js crash and the content frame
+            // stay blank. This UA is also reused for the Kotlin report fetch
+            // (captured into webViewUserAgent right after createWebView()).
+            settings.userAgentString = DESKTOP_CHROME_UA
             settings.domStorageEnabled = true
             settings.databaseEnabled = false
             settings.javaScriptCanOpenWindowsAutomatically = true
@@ -240,7 +246,7 @@ class MainActivity : ComponentActivity() {
             settings.builtInZoomControls = true
             settings.displayZoomControls = false
             settings.textZoom = 100
-            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
@@ -1051,6 +1057,10 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
+        // Match a current desktop Chrome so NIMS serves the same desktop assets
+        // and code paths the working browser extension relies on.
+        private const val DESKTOP_CHROME_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
     }
 }
