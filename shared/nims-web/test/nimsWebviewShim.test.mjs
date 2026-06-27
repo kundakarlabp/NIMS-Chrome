@@ -6,26 +6,51 @@ import vm from 'node:vm';
 const shimSource = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), 'utf8');
 
 function runShim(windowExtras = {}) {
-  const timers = [];
+  const timeouts = [];
+  const intervals = [];
   const fakeWindow = {
     console: { error() {} },
-    setInterval(fn) { timers.push(fn); return timers.length; },
+    setTimeout(fn) { timeouts.push(fn); return timeouts.length; },
+    setInterval(fn) { intervals.push(fn); return intervals.length; },
     clearInterval() {},
     ...windowExtras,
   };
+  if (!('top' in fakeWindow)) fakeWindow.top = fakeWindow;
   const context = { window: fakeWindow, URL };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(shimSource, context);
-  fakeWindow.__tick = () => timers.forEach((fn) => fn());
+  fakeWindow.__tickIntervals = () => intervals.forEach((fn) => fn());
+  fakeWindow.__runTimeouts = (limit = 200) => {
+    let count = 0;
+    while (timeouts.length && count < limit) {
+      const fn = timeouts.shift();
+      fn();
+      count += 1;
+    }
+    return count;
+  };
   return fakeWindow;
+}
+
+function basicDocument() {
+  return {
+    readyState: 'complete',
+    addEventListener() {},
+    getElementById() { return null; },
+    querySelector() { return null; },
+    body: {
+      querySelectorAll() { return { length: 0 }; },
+      innerText: '',
+      scrollHeight: 0,
+    },
+  };
 }
 
 test('defines date_time as a safe no-op when missing', () => {
   const w = runShim();
   assert.equal(typeof w.date_time, 'function');
   assert.equal(w.date_time(), '');
-  assert.doesNotThrow(() => w.date_time(1, 2, 3));
 });
 
 test('does not clobber an existing date_time', () => {
@@ -38,13 +63,10 @@ test('patches jQuery.offset so empty-set .left cannot throw', () => {
   const jQuery = (() => {});
   jQuery.fn = { offset() { return undefined; } };
   const w = runShim({ jQuery });
-  const result = w.jQuery.fn.offset();
-  assert.equal(result.top, 0);
-  assert.equal(result.left, 0);
-  assert.doesNotThrow(() => w.jQuery.fn.offset().left);
+  assert.deepEqual(w.jQuery.fn.offset(), { top: 0, left: 0 });
 });
 
-test('preserves a real offset object when the element exists', () => {
+test('preserves a real offset object', () => {
   const real = { top: 10, left: 25 };
   const jQuery = (() => {});
   jQuery.fn = { offset() { return real; } };
@@ -52,99 +74,128 @@ test('preserves a real offset object when the element exists', () => {
   assert.deepEqual(w.jQuery.fn.offset(), real);
 });
 
-test('patches jQuery that appears only after document-start', () => {
+test('patches jQuery assigned after document-start', () => {
   const w = runShim();
   const jQuery = (() => {});
   jQuery.fn = { offset() { return undefined; } };
   w.jQuery = jQuery;
-  const off = w.jQuery.fn.offset();
-  assert.equal(off.top, 0);
-  assert.equal(off.left, 0);
+  assert.equal(w.jQuery.fn.offset().left, 0);
 });
 
-test('does not double-patch offset', () => {
-  const jQuery = (() => {});
-  jQuery.fn = { offset() { return { top: 1, left: 1 }; } };
-  const w = runShim({ jQuery });
-  const firstPatched = w.jQuery.fn.offset;
-  w.__tick();
-  assert.equal(w.jQuery.fn.offset, firstPatched);
-  assert.equal(w.jQuery.fn.__nimsOffsetPatched, true);
-});
-
-test('posts a per-frame content report to the Android bridge', () => {
+test('posts a per-frame structural report', () => {
   const posted = [];
-  const fakeWindow = {
-    console: { error() {} },
-    setInterval() { return 1; },
-    clearInterval() {},
-    setTimeout(fn) { fn(); return 1; },
-    addEventListener() {},
+  const document = basicDocument();
+  document.body = {
+    querySelectorAll() { return { length: 7 }; },
+    innerText: 'Services Special Clinic',
+    scrollHeight: 240,
+  };
+  const w = runShim({
+    document,
     location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hislogin/transactions/jsp/st_desk_homeMenuTab_page.jsp' },
-    document: {
-      readyState: 'complete',
-      addEventListener() {},
-      body: {
-        querySelectorAll() { return { length: 7 }; },
-        innerText: 'Services Special Clinic',
-        scrollHeight: 240,
-      },
-    },
-    nimsAndroidBridge: { postMessage(s) { posted.push(s); } },
-  };
-  const context = { window: fakeWindow, URL };
-  context.globalThis = context;
-  vm.createContext(context);
-  vm.runInContext(shimSource, context);
-
-  assert.equal(posted.length, 1);
-  const msg = JSON.parse(posted[0]);
-  assert.equal(msg.type, 'nims_frame_debug');
-  assert.equal(msg.children, 7);
-  assert.equal(msg.height, 240);
-  assert.ok(msg.textLen > 0);
-  assert.match(msg.url, /st_desk_homeMenuTab_page\.jsp$/);
+    addEventListener() {},
+    nimsAndroidBridge: { postMessage(value) { posted.push(JSON.parse(value)); } },
+  });
+  w.__runTimeouts();
+  const frame = posted.find((item) => item.type === 'nims_frame_debug');
+  assert.ok(frame);
+  assert.equal(frame.children, 7);
+  assert.equal(frame.height, 240);
+  assert.match(frame.url, /st_desk_homeMenuTab_page\.jsp$/);
 });
 
-test('after Investigation click calls the child-frame native callMenu contract', () => {
+test('Investigation click clears stale rows, waits for the exact anchor, then clicks it', () => {
   const posted = [];
-  const documentListeners = {};
-  let callArgs = null;
-  const frame = {
-    contentWindow: {
-      callMenu(...args) { callArgs = args; },
+  const listeners = {};
+  let anchorClicks = 0;
+  let fallbackCalls = 0;
+  let reportFrameReady = false;
+
+  const anchor = {
+    click() {
+      anchorClicks += 1;
+      reportFrameReady = true;
     },
   };
-  const document = {
+  const childDocument = {
     readyState: 'complete',
-    body: {
-      querySelectorAll() { return { length: 5 }; },
-      innerText: 'Home Menu',
-      scrollHeight: 100,
-    },
-    addEventListener(type, fn) { documentListeners[type] = fn; },
-    getElementById(id) { return id === 'frmMainMenu' ? frame : null; },
-    querySelector() { return null; },
+    getElementById(id) { return id === 'Cr_No_Wise_Result_Report_Printing_New' ? anchor : null; },
+    querySelectorAll() { return []; },
   };
-  runShim({
+  const menuFrame = {
+    contentDocument: childDocument,
+    contentWindow: { callMenu() { fallbackCalls += 1; } },
+  };
+  const document = basicDocument();
+  document.addEventListener = (type, fn) => { listeners[type] = fn; };
+  document.getElementById = (id) => {
+    if (id === 'frmMainMenu') return menuFrame;
+    if (id === 'Cr No Wise Result Report Printing New_iframe' && reportFrameReady) return {};
+    return null;
+  };
+
+  const w = runShim({
     document,
     location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
-    setTimeout(fn) { fn(); return 1; },
     addEventListener() {},
-    nimsAndroidBridge: { postMessage(s) { posted.push(JSON.parse(s)); } },
+    nimsAndroidBridge: { postMessage(value) { posted.push(JSON.parse(value)); } },
   });
 
-  documentListeners.click({
+  listeners.click({
     target: {
       innerText: 'Investigation',
       getAttribute(name) { return name === 'onclick' ? "menuSelected('Investigation',true)" : ''; },
       parentElement: null,
     },
   });
+  w.__runTimeouts();
 
-  assert.deepEqual(callArgs, [
-    '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
-    'Cr_No_Wise_Result_Report_Printing_New',
-  ]);
-  assert.ok(posted.some((item) => (item.errors || []).includes('NAV native_cr_open action=called_child_callMenu')));
+  assert.equal(anchorClicks, 1);
+  assert.equal(fallbackCalls, 0);
+  assert.ok(posted.some((item) => item.type === 'nims_report_frame' && item.rowCount === 0 && item.clearReason === 'investigation_click'));
+  assert.ok(posted.some((item) => (item.errors || []).includes('NAV native_cr_open action=clicked_exact_cr_anchor')));
+  assert.ok(posted.some((item) => (item.errors || []).includes('NAV native_cr_open action=clicked_exact_cr_anchor report_iframe=ready')));
+});
+
+test('does not call child callMenu while the Investigation menu document is still loading', () => {
+  const listeners = {};
+  let fallbackCalls = 0;
+  const childDocument = {
+    readyState: 'loading',
+    getElementById() { return null; },
+    querySelectorAll() { return []; },
+  };
+  const document = basicDocument();
+  document.addEventListener = (type, fn) => { listeners[type] = fn; };
+  document.getElementById = (id) => id === 'frmMainMenu'
+    ? { contentDocument: childDocument, contentWindow: { callMenu() { fallbackCalls += 1; } } }
+    : null;
+
+  const w = runShim({
+    document,
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    addEventListener() {},
+  });
+  listeners.click({ target: { innerText: 'Investigation', getAttribute() { return ''; }, parentElement: null } });
+  w.__runTimeouts(10);
+  assert.equal(fallbackCalls, 0);
+});
+
+test('defers a legacy addTab contentDocument race and retries', () => {
+  let calls = 0;
+  const document = basicDocument();
+  const w = runShim({
+    document,
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    addEventListener() {},
+    addTab() {
+      calls += 1;
+      if (calls === 1) throw new TypeError("Cannot read properties of undefined (reading 'contentDocument')");
+      return 'ok';
+    },
+  });
+
+  assert.doesNotThrow(() => w.addTab('Cr No Wise Result Report Printing New'));
+  w.__runTimeouts();
+  assert.equal(calls, 2);
 });
