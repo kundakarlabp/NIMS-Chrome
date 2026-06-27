@@ -28,7 +28,19 @@ jobs:
           node-version: "22"
           cache: "npm"
       - run: npm ci
-      - run: npm test
+      - name: Run navigation tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee npm-test.log
+      - name: Upload navigation test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigation-test-log
+          path: npm-test.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify canonical navigation core sync
         run: python scripts/sync_navigation_core.py --check
 
