@@ -63,7 +63,9 @@ test('patches jQuery.offset so empty-set .left cannot throw', () => {
   const jQuery = (() => {});
   jQuery.fn = { offset() { return undefined; } };
   const w = runShim({ jQuery });
-  assert.deepEqual(w.jQuery.fn.offset(), { top: 0, left: 0 });
+  const offset = w.jQuery.fn.offset();
+  assert.equal(offset.top, 0);
+  assert.equal(offset.left, 0);
 });
 
 test('preserves a real offset object', () => {
@@ -71,7 +73,7 @@ test('preserves a real offset object', () => {
   const jQuery = (() => {});
   jQuery.fn = { offset() { return real; } };
   const w = runShim({ jQuery });
-  assert.deepEqual(w.jQuery.fn.offset(), real);
+  assert.equal(w.jQuery.fn.offset(), real);
 });
 
 test('patches jQuery assigned after document-start', () => {
