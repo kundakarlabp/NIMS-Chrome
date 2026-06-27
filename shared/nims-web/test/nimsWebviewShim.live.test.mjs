@@ -5,18 +5,6 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), 'utf8');
 
-function emptyDocument(url = 'https://example.invalid/app') {
-  return {
-    readyState: 'complete',
-    location: { href: url },
-    body: { innerText: '', scrollHeight: 0, querySelectorAll: () => [] },
-    addEventListener() {},
-    getElementById: () => null,
-    querySelector: () => null,
-    querySelectorAll: () => [],
-  };
-}
-
 function run(extra = {}) {
   const queue = [];
   const win = {
@@ -38,7 +26,19 @@ function run(extra = {}) {
   return win;
 }
 
-test('installs the compatibility guards', () => {
+function emptyDocument() {
+  return {
+    readyState: 'complete',
+    location: { href: 'https://example.invalid/app' },
+    body: { innerText: '', scrollHeight: 0, querySelectorAll: () => [] },
+    addEventListener() {},
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+}
+
+test('installs compatibility guards', () => {
   const jq = () => {};
   jq.fn = { offset: () => undefined };
   const win = run({ jQuery: jq });
@@ -46,7 +46,7 @@ test('installs the compatibility guards', () => {
   assert.equal(win.jQuery.fn.offset().left, 0);
 });
 
-test('retries the completion callback after a frame race', () => {
+test('retries the ajax completion frame race', () => {
   let calls = 0;
   const win = run({
     document: emptyDocument(),
@@ -78,7 +78,7 @@ test('recognises a CR form in the nested report frame', () => {
     return [];
   };
   const innerFrame = {
-    id: 'Cr No Wise Result Report Printing_iframe', hidden: false, parentElement: null,
+    id: 'Cr No Wise Result Report Printing_iframe', name: '', hidden: false, parentElement: null,
     contentDocument: inner,
     getAttribute(name) { return name === 'src' ? '/module/invResultReportPrintingCRNoWise.cnt' : null; },
   };
@@ -86,7 +86,7 @@ test('recognises a CR form in the nested report frame', () => {
   innerFrame.ownerDocument = outer;
   outer.querySelectorAll = (selector) => selector === 'iframe, frame' ? [innerFrame] : [];
   const outerFrame = {
-    id: 'Cr No Wise Result Report Printing New_iframe', hidden: false, parentElement: null,
+    id: 'Cr No Wise Result Report Printing New_iframe', name: '', hidden: false, parentElement: null,
     contentDocument: outer,
     getAttribute(name) { return name === 'src' ? '/module/viewcrnowisereportprocess.cnt' : null; },
   };
