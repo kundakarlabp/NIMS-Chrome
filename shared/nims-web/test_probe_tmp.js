@@ -1,1 +1,0 @@
-(function(w){var f=w.document.getElementById('frmMainMenu');if(f&&f.contentWindow&&typeof f.contentWindow.callMenu==='function'){f.contentWindow.callMenu('/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt','Cr_No_Wise_Result_Report_Printing_New');}})(window);
