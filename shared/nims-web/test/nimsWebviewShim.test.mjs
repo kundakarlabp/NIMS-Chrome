@@ -5,7 +5,6 @@ import vm from 'node:vm';
 
 const shimSource = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), 'utf8');
 
-// Build a minimal fake window with controllable timers and run the shim in it.
 function runShim(windowExtras = {}) {
   const timers = [];
   const fakeWindow = {
@@ -14,11 +13,10 @@ function runShim(windowExtras = {}) {
     clearInterval() {},
     ...windowExtras,
   };
-  const context = { window: fakeWindow };
+  const context = { window: fakeWindow, URL };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(shimSource, context);
-  // Expose a way to advance the jQuery-detection poller.
   fakeWindow.__tick = () => timers.forEach((fn) => fn());
   return fakeWindow;
 }
@@ -37,15 +35,12 @@ test('does not clobber an existing date_time', () => {
 });
 
 test('patches jQuery.offset so empty-set .left cannot throw', () => {
-  const fn = { offset() { return undefined; } };
-  const jQuery = (() => {}) ;
-  jQuery.fn = fn;
+  const jQuery = (() => {});
+  jQuery.fn = { offset() { return undefined; } };
   const w = runShim({ jQuery });
-  // jQuery present at start -> patched immediately.
   const result = w.jQuery.fn.offset();
   assert.equal(result.top, 0);
   assert.equal(result.left, 0);
-  // The exact failing expression from tabmenu.js:576 must now be safe.
   assert.doesNotThrow(() => w.jQuery.fn.offset().left);
 });
 
@@ -58,10 +53,10 @@ test('preserves a real offset object when the element exists', () => {
 });
 
 test('patches jQuery that appears only after document-start', () => {
-  const w = runShim(); // no jQuery yet
+  const w = runShim();
   const jQuery = (() => {});
   jQuery.fn = { offset() { return undefined; } };
-  w.jQuery = jQuery; // assignment is intercepted and patched synchronously
+  w.jQuery = jQuery;
   const off = w.jQuery.fn.offset();
   assert.equal(off.top, 0);
   assert.equal(off.left, 0);
@@ -69,30 +64,29 @@ test('patches jQuery that appears only after document-start', () => {
 
 test('does not double-patch offset', () => {
   const jQuery = (() => {});
-  let calls = 0;
-  jQuery.fn = { offset() { calls += 1; return { top: 1, left: 1 }; } };
+  jQuery.fn = { offset() { return { top: 1, left: 1 }; } };
   const w = runShim({ jQuery });
   const firstPatched = w.jQuery.fn.offset;
-  w.__tick(); // subsequent poller ticks must not re-wrap
+  w.__tick();
   assert.equal(w.jQuery.fn.offset, firstPatched);
   assert.equal(w.jQuery.fn.__nimsOffsetPatched, true);
 });
 
 test('posts a per-frame content report to the Android bridge', () => {
   const posted = [];
-  const listeners = {};
   const fakeWindow = {
     console: { error() {} },
     setInterval() { return 1; },
     clearInterval() {},
-    setTimeout(fn) { fn(); return 1; }, // run synchronously
-    addEventListener(type, fn) { listeners[type] = fn; },
+    setTimeout(fn) { fn(); return 1; },
+    addEventListener() {},
     location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hislogin/transactions/jsp/st_desk_homeMenuTab_page.jsp' },
     document: {
       readyState: 'complete',
+      addEventListener() {},
       body: {
         querySelectorAll() { return { length: 7 }; },
-        innerText: '  Services Special Clinic  ',
+        innerText: 'Services Special Clinic',
         scrollHeight: 240,
       },
     },
@@ -110,4 +104,47 @@ test('posts a per-frame content report to the Android bridge', () => {
   assert.equal(msg.height, 240);
   assert.ok(msg.textLen > 0);
   assert.match(msg.url, /st_desk_homeMenuTab_page\.jsp$/);
+});
+
+test('after Investigation click calls the child-frame native callMenu contract', () => {
+  const posted = [];
+  const documentListeners = {};
+  let callArgs = null;
+  const frame = {
+    contentWindow: {
+      callMenu(...args) { callArgs = args; },
+    },
+  };
+  const document = {
+    readyState: 'complete',
+    body: {
+      querySelectorAll() { return { length: 5 }; },
+      innerText: 'Home Menu',
+      scrollHeight: 100,
+    },
+    addEventListener(type, fn) { documentListeners[type] = fn; },
+    getElementById(id) { return id === 'frmMainMenu' ? frame : null; },
+    querySelector() { return null; },
+  };
+  runShim({
+    document,
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    setTimeout(fn) { fn(); return 1; },
+    addEventListener() {},
+    nimsAndroidBridge: { postMessage(s) { posted.push(JSON.parse(s)); } },
+  });
+
+  documentListeners.click({
+    target: {
+      innerText: 'Investigation',
+      getAttribute(name) { return name === 'onclick' ? "menuSelected('Investigation',true)" : ''; },
+      parentElement: null,
+    },
+  });
+
+  assert.deepEqual(callArgs, [
+    '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
+    'Cr_No_Wise_Result_Report_Printing_New',
+  ]);
+  assert.ok(posted.some((item) => (item.errors || []).includes('NAV native_cr_open action=called_child_callMenu')));
 });
