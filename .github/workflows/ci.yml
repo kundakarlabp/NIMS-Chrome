@@ -62,8 +62,18 @@ jobs:
         working-directory: mobile/android
       - run: ./gradlew clean test lintDebug assembleDebug
         working-directory: mobile/android
-      - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
+      - name: Verify passive WebView runtime assets
         working-directory: mobile/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep contentUtils.js
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsPassiveObserver.js
+          if unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q jquery-3.7.1.min.js; then
+            echo "Bundled jQuery must not be packaged in the passive runtime"
+            exit 1
+          fi
       - name: Verify KVM
         run: |
           ls -l /dev/kvm
