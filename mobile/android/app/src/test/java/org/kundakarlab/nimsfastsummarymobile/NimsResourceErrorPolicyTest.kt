@@ -22,6 +22,16 @@ class NimsResourceErrorPolicyTest {
     }
 
     @Test
+    fun requiredJqueryScriptsAreSurfaced() {
+        val assets = listOf(
+            "https://www.nimsts.edu.in/HISInvestigationG5/js/jquery.min.js",
+            "https://www.nimsts.edu.in/HISInvestigationG5/js/jquery.validate.email.js",
+            "https://www.nimsts.edu.in/HISInvestigationG5/js/additional-methods.min.js"
+        )
+        assets.forEach { assertTrue(it, NimsResourceErrorPolicy.shouldSurface(it, false)) }
+    }
+
+    @Test
     fun documentEndpointsAreSurfacedForChildFrames() {
         val pages = listOf(
             "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action",
