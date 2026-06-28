@@ -5,102 +5,125 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), 'utf8');
 
-function emptyDocument(url = 'https://example.invalid/app') {
+function nimsDocument() {
+  const listeners = new Map();
   return {
     readyState: 'complete',
-    location: { href: url },
-    body: { innerText: '', scrollHeight: 0, querySelectorAll: () => [] },
-    addEventListener() {},
-    getElementById: () => null,
-    querySelector: () => null,
-    querySelectorAll: () => [],
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    addEventListener(type, fn) {
+      const values = listeners.get(type) || [];
+      values.push(fn);
+      listeners.set(type, values);
+    },
+    fire(type, target) {
+      for (const fn of listeners.get(type) || []) fn({ type, target, currentTarget: target, srcElement: target });
+    },
   };
 }
 
 function run(extra = {}) {
   const queue = [];
+  const document = extra.document || nimsDocument();
+  const winListeners = new Map();
   const win = {
     console: { error() {} },
-    location: { href: 'https://example.invalid/app' },
-    addEventListener() {},
+    document,
+    location: {
+      href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action',
+      hostname: 'www.nimsts.edu.in',
+      protocol: 'https:',
+    },
+    addEventListener(type, fn) {
+      const values = winListeners.get(type) || [];
+      values.push(fn);
+      winListeners.set(type, values);
+    },
     setTimeout(fn) { queue.push(fn); return queue.length; },
-    setInterval() { return 1; },
-    clearInterval() {},
     ...extra,
   };
+  win.document = document;
   win.top = win;
-  if (win.document) win.document.defaultView = win;
-  const context = { window: win, URL };
+  document.defaultView = win;
+  const context = { window: win, URL, Date };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
-  win.flush = () => { let count = 0; while (queue.length && count < 100) { queue.shift()(); count += 1; } };
+  win.flush = () => {
+    let count = 0;
+    while (queue.length && count < 100) {
+      queue.shift()();
+      count += 1;
+    }
+  };
   return win;
 }
 
-test('installs the compatibility guards', () => {
+test('does not inject jQuery, date_time, offset patches, or navigation behavior', () => {
   const jq = () => {};
   jq.fn = { offset: () => undefined };
-  const win = run({ jQuery: jq });
-  assert.equal(win.date_time(), '');
-  assert.equal(win.jQuery.fn.offset().left, 0);
+  const core = { navigateToCrWiseReports: () => 'unchanged' };
+  const originalNavigate = core.navigateToCrWiseReports;
+  const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
+  win.flush();
+  assert.equal(win.date_time, undefined);
+  assert.equal(win.jQuery.fn.offset(), undefined);
+  assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
 });
 
-test('retries the completion callback after a frame race', () => {
+test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
+  const document = nimsDocument();
+  let received = null;
   let calls = 0;
   const win = run({
-    document: emptyDocument(),
-    ajaxCompleteTab() {
+    document,
+    ajaxCompleteTab(frame) {
       calls += 1;
-      if (calls === 1) throw new TypeError("Cannot read properties of undefined (reading 'contentDocument')");
-      return 'ok';
+      received = frame;
+      return frame.contentDocument.readyState;
     },
   });
-  assert.doesNotThrow(() => win.ajaxCompleteTab('tab', 'response'));
   win.flush();
-  assert.equal(calls, 2);
+
+  const frame = {
+    tagName: 'IFRAME',
+    id: 'Cr No Wise Result Report Printing New_iframe',
+    name: '',
+    ownerDocument: document,
+    isConnected: true,
+    contentDocument: { readyState: 'complete' },
+    getAttribute(name) { return name === 'src' ? '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt' : ''; },
+  };
+  document.fire('load', frame);
+
+  assert.equal(win.ajaxCompleteTab(), 'complete');
+  assert.equal(calls, 1);
+  assert.equal(received, frame);
 });
 
-test('recognises a CR form in the nested report frame', () => {
-  const input = { id: 'patCrNo', name: 'patCrNo', type: 'text', hidden: false, parentElement: null, getAttribute: () => null };
-  Object.defineProperty(input, 'value', { get() { throw new Error('value must not be read'); } });
-  const form = {
-    name: 'InvResultReportPrintingFB', id: '', hidden: false, parentElement: null,
-    getAttribute(name) { return name === 'action' ? '/module/invResultReportPrintingCRNoWise.cnt' : null; },
-  };
-  const inner = emptyDocument();
-  input.ownerDocument = inner;
-  form.ownerDocument = inner;
-  inner.querySelectorAll = (selector) => {
-    if (selector === 'input, textarea, select') return [input];
-    if (selector === 'form') return [form];
-    if (selector.includes('label')) return [{ textContent: 'CR Number' }];
-    return [];
-  };
-  const innerFrame = {
-    id: 'Cr No Wise Result Report Printing_iframe', hidden: false, parentElement: null,
-    contentDocument: inner,
-    getAttribute(name) { return name === 'src' ? '/module/invResultReportPrintingCRNoWise.cnt' : null; },
-  };
-  const outer = emptyDocument();
-  innerFrame.ownerDocument = outer;
-  outer.querySelectorAll = (selector) => selector === 'iframe, frame' ? [innerFrame] : [];
-  const outerFrame = {
-    id: 'Cr No Wise Result Report Printing New_iframe', hidden: false, parentElement: null,
-    contentDocument: outer,
-    getAttribute(name) { return name === 'src' ? '/module/viewcrnowisereportprocess.cnt' : null; },
-  };
-  const top = emptyDocument();
-  outerFrame.ownerDocument = top;
-  top.querySelectorAll = (selector) => selector === 'iframe, frame' ? [outerFrame] : [];
-  const core = {
-    navigateToCrWiseReports: () => ({ stage: 'unknown', done: false }),
-    navigateCurrentDocumentStep: () => ({ stage: 'unknown', done: false }),
-    detectNimsPageStage: () => ({ stage: 'unknown' }),
-    diagnosePage: () => ({}),
-  };
-  const win = run({ document: top, NimsReportCore: core });
-  const result = win.NimsReportCore.navigateToCrWiseReports(top);
-  assert.equal(result.stage, 'cr_search');
-  assert.equal(result.done, true);
+test('fails closed without calling the original function when no recent iframe exists', () => {
+  let calls = 0;
+  const win = run({
+    ajaxCompleteTab() {
+      calls += 1;
+      throw new TypeError("Cannot read properties of undefined (reading 'contentDocument')");
+    },
+  });
+  win.flush();
+  assert.doesNotThrow(() => win.ajaxCompleteTab());
+  assert.equal(calls, 0);
+});
+
+test('does not install on non-NIMS origins', () => {
+  const document = nimsDocument();
+  let calls = 0;
+  const original = () => { calls += 1; };
+  const win = run({
+    document,
+    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', protocol: 'https:' },
+    ajaxCompleteTab: original,
+  });
+  win.flush();
+  assert.equal(win.ajaxCompleteTab, original);
+  win.ajaxCompleteTab();
+  assert.equal(calls, 1);
 });
