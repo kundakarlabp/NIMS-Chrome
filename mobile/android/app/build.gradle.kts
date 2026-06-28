@@ -4,18 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val jqueryWebJar by configurations.creating
-val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
-
-val prepareBundledJquery by tasks.registering(Copy::class) {
-    from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
-        include("META-INF/resources/webjars/jquery/3.7.1/jquery.min.js")
-        eachFile { path = "jquery-3.7.1.min.js" }
-        includeEmptyDirs = false
-    }
-    into(generatedWebAssets)
-}
-
 android {
     namespace = "org.kundakarlab.nimsfastsummarymobile"
     compileSdk = 35
@@ -30,11 +18,7 @@ android {
     }
 
     sourceSets {
-        getByName("main").assets.srcDirs(
-            "src/main/assets",
-            "../../../shared/nims-web",
-            generatedWebAssets
-        )
+        getByName("main").assets.srcDirs("src/main/assets")
     }
 
     buildFeatures {
@@ -54,21 +38,18 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 tasks.register("verifyNimsCoreAsset") {
     doLast {
-        val core = rootProject.file("../../shared/nims-web/nimsReportCore.js")
+        val core = file("src/main/assets/nimsReportCore.js")
         check(core.exists()) {
-            "Missing shared/nims-web/nimsReportCore.js"
+            "Missing src/main/assets/nimsReportCore.js"
         }
     }
 }
 
 tasks.named("preBuild") {
     dependsOn("verifyNimsCoreAsset")
-    dependsOn(prepareBundledJquery)
 }
 
 dependencies {
-    jqueryWebJar("org.webjars:jquery:3.7.1")
-
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)

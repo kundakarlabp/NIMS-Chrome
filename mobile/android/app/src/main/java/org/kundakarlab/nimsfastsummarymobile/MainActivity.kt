@@ -226,13 +226,11 @@ class MainActivity : ComponentActivity() {
         // Let a desktop Chrome (chrome://inspect over USB) attach to this WebView,
         // and let the WebView report its own console/network errors (wired below).
         runCatching { WebView.setWebContentsDebuggingEnabled(true) }
+        val jqueryJs = runCatching { assets.open("jquery-3.7.1.min.js").bufferedReader().use { it.readText() } }.getOrNull()
+        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
         val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
         val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
         val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
-        // Runtime compatibility shim: neutralizes NIMS's confirmed crashes
-        // (missing date_time global, and the $("#menuStrip").offset().left throw
-        // in tabmenu.js) so the menu/content render isn't aborted in the WebView.
-        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             // Identify as the desktop Chrome the extension actually works in.
@@ -343,20 +341,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                // The shim is the render fix and must run first, before NIMS's
-                // own scripts, and even if the reader assets failed to load.
-                val readerJs = if (coreJs != null && utilsJs != null && bridgeJs != null) {
-                    "\n$coreJs\n$utilsJs\n$bridgeJs"
-                } else {
-                    ""
+                val jq = jqueryJs ?: ""
+                val sh = shimJs ?: ""
+                val combined = buildString {
+                    append("try{\n")
+                    append("if (typeof window.jQuery === 'undefined' && typeof window.\$ === 'undefined') {\n")
+                    append(jq)
+                    append("\n}\n")
+                    append(sh)
+                    append("\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}")
                 }
-                val payload = (shimJs ?: "") + readerJs
-                if (payload.isNotBlank()) {
-                    runCatching {
-                        val injected = "try{\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
-                        WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
-                    }
-                }
+                WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    combined,
+                    setOf("https://nimsts.edu.in", "https://www.nimsts.edu.in")
+                )
             }
         }
     }
