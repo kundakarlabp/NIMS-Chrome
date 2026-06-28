@@ -72,7 +72,9 @@ test('installs only the confirmed date_time and offset compatibility guards', ()
   win.flush();
   assert.equal(typeof win.date_time, 'function');
   assert.equal(win.date_time(), '');
-  assert.deepEqual(win.jQuery.fn.offset(), { left: 0, top: 0 });
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 0);
+  assert.equal(offset.top, 0);
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
 });
 
@@ -80,7 +82,9 @@ test('preserves valid offset values and fills only missing coordinates', () => {
   const jq = jqueryWithOffset({ left: 12 });
   const win = run({ jQuery: jq, $: jq });
   win.flush();
-  assert.deepEqual(win.jQuery.fn.offset(), { left: 12, top: 0 });
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 12);
+  assert.equal(offset.top, 0);
 });
 
 test('patches a jQuery instance loaded after document start', () => {
@@ -89,7 +93,9 @@ test('patches a jQuery instance loaded after document start', () => {
   win.jQuery = jq;
   win.$ = jq;
   win.flush();
-  assert.deepEqual(win.jQuery.fn.offset(), { left: 0, top: 0 });
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 0);
+  assert.equal(offset.top, 0);
 });
 
 test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
