@@ -1,7 +1,6 @@
 from pathlib import Path
 
 SOURCE = Path("mobile/android/app/src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt")
-OUTPUT = Path("mobile/android/app/build/generated/nimsMain/org/kundakarlab/nimsfastsummarymobile/MainActivityGenerated.kt")
 
 
 def replace_once(text: str, before: str, after: str, label: str) -> str:
@@ -165,8 +164,7 @@ def main() -> None:
         "report-page guidance",
     )
 
-    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(text, encoding="utf-8")
+    SOURCE.write_text(text, encoding="utf-8")
 
 
 if __name__ == "__main__":
