@@ -31,6 +31,20 @@ object NimsUrlPolicy {
         return classifyParts(uri.scheme, uri.host, uri.rawUserInfo, uri.rawPath.orEmpty(), uri.port)
     }
 
+    /**
+     * The legacy NIMS menu uses javascript: pseudo-links inside an already
+     * authenticated HTTPS page. Blocking those links in shouldOverrideUrlLoading
+     * prevents the native menu handler from creating its content frame.
+     *
+     * This exception is valid only when the currently loaded page is an approved
+     * NIMS HTTPS path. It is never used for report fetching or external URLs.
+     */
+    fun isTrustedLegacyPageScript(currentPageUrl: String, requestedUrl: String): Boolean {
+        if (classifyUrl(currentPageUrl) != UrlClassification.ALLOWED_NIMS) return false
+        if (requestedUrl.length !in 12..4096 || requestedUrl.any { it.code < 0x20 }) return false
+        return requestedUrl.trimStart().startsWith("javascript:", ignoreCase = true)
+    }
+
     fun isTrustedNimsHost(uri: Uri): Boolean = uri.scheme.equals("https", ignoreCase = true) &&
         uri.userInfo == null &&
         (uri.port == -1 || uri.port == 443) &&
