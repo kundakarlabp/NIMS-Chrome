@@ -58,16 +58,44 @@ function run(extra = {}) {
   return win;
 }
 
-test('does not inject jQuery, date_time, offset patches, or navigation behavior', () => {
+function jqueryWithOffset(result) {
   const jq = () => {};
-  jq.fn = { offset: () => undefined };
+  jq.fn = { offset: () => result };
+  return jq;
+}
+
+test('installs only the confirmed date_time and offset compatibility guards', () => {
+  const jq = jqueryWithOffset(undefined);
   const core = { navigateToCrWiseReports: () => 'unchanged' };
   const originalNavigate = core.navigateToCrWiseReports;
   const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
   win.flush();
-  assert.equal(win.date_time, undefined);
-  assert.equal(win.jQuery.fn.offset(), undefined);
+  assert.equal(typeof win.date_time, 'function');
+  assert.equal(win.date_time(), '');
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 0);
+  assert.equal(offset.top, 0);
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
+});
+
+test('preserves valid offset values and fills only missing coordinates', () => {
+  const jq = jqueryWithOffset({ left: 12 });
+  const win = run({ jQuery: jq, $: jq });
+  win.flush();
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 12);
+  assert.equal(offset.top, 0);
+});
+
+test('patches a jQuery instance loaded after document start', () => {
+  const win = run();
+  const jq = jqueryWithOffset(undefined);
+  win.jQuery = jq;
+  win.$ = jq;
+  win.flush();
+  const offset = win.jQuery.fn.offset();
+  assert.equal(offset.left, 0);
+  assert.equal(offset.top, 0);
 });
 
 test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
@@ -124,6 +152,7 @@ test('does not install on non-NIMS origins', () => {
   });
   win.flush();
   assert.equal(win.ajaxCompleteTab, original);
+  assert.equal(win.date_time, undefined);
   win.ajaxCompleteTab();
   assert.equal(calls, 1);
 });
