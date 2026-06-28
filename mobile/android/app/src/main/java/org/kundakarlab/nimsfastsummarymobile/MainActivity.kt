@@ -427,7 +427,7 @@ class MainActivity : ComponentActivity() {
             val rows = DiagnosePageContract.viewReportRows(json)
             val blocked = DiagnosePageContract.blockedFrames(json)
             val reachable = DiagnosePageContract.reachableDocuments(json)
-            if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+            if (rows > 0 && appStateValue in PRE_REPORT_STATES) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             } else if (rows == 0 && blocked > 0) {
                 setState(AppState.ERROR, "Advanced top-frame diagnostics cannot inspect the owning report frame ($blocked blocked, $reachable reachable). Keep the result list visible and use Analyze Results.")
@@ -475,7 +475,7 @@ class MainActivity : ComponentActivity() {
                 val reportCount = json.optInt("reportCount")
                 when (pageKind) {
                     "login" -> setState(AppState.HELPER_READY, "Login to NIMS manually.")
-                    "portal" -> if (appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+                    "portal" -> if (appStateValue in PRE_REPORT_STATES) {
                         setState(
                             AppState.HELPER_READY,
                             "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
@@ -503,7 +503,7 @@ class MainActivity : ComponentActivity() {
         val hasTemplate = json.optJSONObject("template") != null
         log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
         if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
-            appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+            appStateValue in PRE_REPORT_STATES) {
             setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Results.")
         }
     }
@@ -1030,6 +1030,11 @@ class MainActivity : ComponentActivity() {
         private const val DESKTOP_CHROME_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
+        private val PRE_REPORT_STATES = setOf(
+            AppState.NEED_HELPER_SETTINGS,
+            AppState.HELPER_READY,
+            AppState.NIMS_LOGIN
+        )
     }
 }
 

@@ -81,9 +81,15 @@
       catch (error) { return []; }
     }
     if (!doc || !doc.querySelectorAll) return [];
-    return Array.prototype.slice.call(doc.querySelectorAll("tr")).filter(function (row) {
-      return isVisible(row) && /view\s*report/i.test(compactText(row.innerText || row.textContent));
-    }).map(function (_row, index) { return { row_index: index }; });
+    var rows = Array.prototype.slice.call(doc.querySelectorAll("tr"));
+    var matched = [];
+    for (var index = 0; index < rows.length; index += 1) {
+      var row = rows[index];
+      if (isVisible(row) && /view\s*report/i.test(compactText(row.innerText || row.textContent))) {
+        matched.push({ row_index: index });
+      }
+    }
+    return matched;
   }
 
   function pageKind(doc) {
