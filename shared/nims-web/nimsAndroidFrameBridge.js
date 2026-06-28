@@ -43,10 +43,27 @@
 
   function firstPrintReportButton(row) {
     if (!row || !row.querySelectorAll) return null;
+    // BUG FIX: this used to require the WHOLE onclick attribute to be exactly
+    // printReport('x') or printReport('x'); (anchored ^...$ regex). Real NIMS
+    // markup can wrap the call (e.g. "return printReport('x.pdf');" or with a
+    // trailing statement), which that anchored pattern rejects outright -- so
+    // every row in the visible 130+ row report list was silently dropped and
+    // the bridge reported rowCount=0 even though contentUtils.js's permissive,
+    // tokenizer-based matcher (used by Discover/Test One) found them all fine.
+    // Use the same tolerant tokenizer contentUtils.js/nimsReportCore.js already
+    // use elsewhere instead of a second, stricter, duplicate regex.
+    var u = utils();
     var nodes = Array.prototype.slice.call(row.querySelectorAll("[onclick]"));
     for (var i = 0; i < nodes.length; i += 1) {
       var onclick = nodes[i].getAttribute("onclick") || "";
-      if (/^\s*printReport\s*\(\s*(['"])[^,()]+\1\s*\)\s*;?\s*$/i.test(onclick)) return nodes[i];
+      if (u && typeof u.parseFunctionCall === "function") {
+        var parsed = u.parseFunctionCall(onclick);
+        if (parsed.functionName === "printReport" && parsed.argCount === 1) return nodes[i];
+      } else if (/printReport\s*\(\s*(['"])[^,()]+\1\s*\)/i.test(onclick)) {
+        // utils not yet available: same relaxed (non-anchored) match as a
+        // last-resort fallback, never the old whole-attribute anchor.
+        return nodes[i];
+      }
     }
     return null;
   }
@@ -103,7 +120,11 @@
       } catch (e) { /* use strict inline parser */ }
     }
     var onclick = button.getAttribute("onclick") || "";
-    var match = onclick.match(/^\s*printReport\s*\(\s*(['"])([^'"]+)\1\s*\)\s*;?\s*$/i);
+    // Same bug as firstPrintReportButton above: this was anchored to the
+    // WHOLE attribute and rejected any real-world wrapping. Use the relaxed,
+    // non-anchored match so a button found by the tolerant matcher above
+    // doesn't get re-rejected here by a stricter one.
+    var match = onclick.match(/printReport\s*\(\s*(['"])([^'"]+)\1\s*\)/i);
     return match && isSafeTransientToken(match[2]) ? match[2] : "";
   }
 
