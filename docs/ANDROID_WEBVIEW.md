@@ -5,18 +5,18 @@
 The Android app separates the NIMS portal from the native clinical-results UI:
 
 ```text
-NIMS website -> passive all-frame observer -> safe report references ->
+NIMS website -> lightweight passive frame observer -> safe report references ->
 on-device fetch/parse -> Reports / Trends / Cultures / Summary
 ```
 
 NIMS remains responsible for authentication, menu navigation, CR-number entry,
 form submission, and page rendering. The app does not replace jQuery, patch NIMS
-globals, call undocumented tab functions, or construct internal navigation URLs.
+globals, call undocumented tab functions, or construct internal network URLs.
 
-The document-start runtime contains only the canonical report core, safe report
-utilities, and `nimsPassiveObserver.js`. Document-start timing ensures the
-observer is present in every approved frame, but the observer does not modify the
-website.
+During login and portal navigation, the document-start runtime contains only
+`nimsPassiveObserver.js`. The larger canonical report core is loaded on demand
+after the genuine result list has been detected and the clinician starts
+analysis. This avoids executing report-discovery code in every login/menu frame.
 
 ## Normal workflow
 
@@ -39,7 +39,7 @@ Login, captcha, OTP, CR-number entry, and report-page navigation remain manual.
 may only:
 
 - classify the frame as login, portal, CR search, CR results, or loading;
-- observe AJAX/DOM changes;
+- observe AJAX/DOM changes using a debounced child-list observer;
 - detect the genuine CR form and visible report rows;
 - extract sanitized report metadata and an in-memory report reference;
 - post structured JSON to the Android message bridge.
@@ -52,6 +52,10 @@ It must never:
 - click menus, submit forms, enter a CR number, or automate login;
 - log or persist cookies, credentials, query values, raw onclick text, or report
   content.
+
+The legacy NIMS shell may use page-owned script pseudo-links for menu actions.
+The WebView allows those only while the current document is an approved NIMS
+HTTPS path. Standalone unsafe schemes and external navigation remain blocked.
 
 ## Report processing
 
@@ -99,9 +103,13 @@ It also runs the configured Android instrumented tests, verifies that
 
 ## Troubleshooting
 
-- **Blank or incomplete NIMS page:** reload the page. The app does not patch the
-  portal; capture sanitized WebView console/network diagnostics if NIMS itself
-  fails to render.
+- **Blank Investigation content after login:** use Android version 0.9.1 or later.
+  Reload once after installation. If an older session is still open, use
+  **Advanced tools -> Clear session**, log in again, and retry the normal NIMS
+  menu path.
+- **Slow portal navigation:** keep Advanced tools/log display closed during normal
+  use. Version 0.9.1 removes the heavy report core from login/menu frames and
+  limits observer polling.
 - **CR form not detected:** confirm the correct NIMS menu page is visibly open.
 - **No report rows:** submit the CR form and wait for visible **View Report** rows.
 - **Analyze Results unavailable or no usable rows:** keep the result table visible
