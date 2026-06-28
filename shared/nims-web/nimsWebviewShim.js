@@ -22,6 +22,30 @@
     w.date_time = function () { return ""; };
   }
 
+  // NEW (not previously present anywhere): mark that injection actually ran
+  // in THIS window, and capture the full uncaught-error message+stack before
+  // Android's onConsoleMessage truncates it to ~220 chars. Self-contained
+  // (does not depend on NimsReportCore having loaded) so it works even if the
+  // core/utils/bridge payload failed to concatenate or parse.
+  w.__nimsInjectedAt = Date.now();
+  if (!w.__nimsErrorCaptureInstalled) {
+    w.__nimsErrorCaptureInstalled = true;
+    var previousOnError = w.onerror;
+    w.onerror = function (message, source, lineno, colno, error) {
+      w.__nimsLastError = {
+        message: String(message || ""),
+        source: String(source || ""),
+        line: lineno || 0,
+        column: colno || 0,
+        stack: error && error.stack ? String(error.stack).slice(0, 2000) : ""
+      };
+      if (typeof previousOnError === "function") {
+        try { return previousOnError.call(w, message, source, lineno, colno, error); } catch (e) { /* ignore */ }
+      }
+      return false;
+    };
+  }
+
   function patchOffset(jq) {
     if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.__nimsSafeOffset) return false;
     var original = jq.fn.offset;

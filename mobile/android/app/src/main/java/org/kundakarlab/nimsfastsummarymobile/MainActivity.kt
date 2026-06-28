@@ -336,14 +336,19 @@ class MainActivity : ComponentActivity() {
             // core + bridge into every frame and let the frame that owns the rows
             // post them back via nimsAndroidBridge. Feature-gated; if unsupported,
             // the existing same-origin top-frame path still runs.
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-                runCatching {
+            val webMessageSupported = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+            log("DIAG: WEB_MESSAGE_LISTENER supported=$webMessageSupported")
+            if (webMessageSupported) {
+                val listenerResult = runCatching {
                     WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("*")) { _, message, _, _, _ ->
                         message.data?.let { data -> post { onFrameReport(data) } }
                     }
                 }
+                log("DIAG: addWebMessageListener installed=${listenerResult.isSuccess} error=${listenerResult.exceptionOrNull()?.message}")
             }
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            val documentStartSupported = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+            log("DIAG: DOCUMENT_START_SCRIPT supported=$documentStartSupported")
+            if (documentStartSupported) {
                 // The shim is the render fix and must run first, before NIMS's
                 // own scripts, and even if the reader assets failed to load.
                 val readerJs = if (coreJs != null && utilsJs != null && bridgeJs != null) {
@@ -351,13 +356,19 @@ class MainActivity : ComponentActivity() {
                 } else {
                     ""
                 }
+                log("DIAG: asset load coreJs=${coreJs != null} utilsJs=${utilsJs != null} bridgeJs=${bridgeJs != null} shimJs=${shimJs != null}")
                 val payload = (shimJs ?: "") + readerJs
                 if (payload.isNotBlank()) {
-                    runCatching {
-                        val injected = "try{\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
+                    val injectResult = runCatching {
+                        val injected = "try{\nwindow.__nimsInjectedAt=Date.now();\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
                         WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
                     }
+                    log("DIAG: addDocumentStartJavaScript installed=${injectResult.isSuccess} error=${injectResult.exceptionOrNull()?.message}")
+                } else {
+                    log("DIAG: injection payload was BLANK (no shim/core text available)")
                 }
+            } else {
+                log("DIAG: DOCUMENT_START_SCRIPT NOT supported on this WebView provider — shim/reader never run")
             }
         }
     }
@@ -536,6 +547,33 @@ class MainActivity : ComponentActivity() {
                 setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
             }
             log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
+        }
+        probeFrameRendering()
+    }
+
+    // Diagnostic-only: no clicks, no navigation, no form submission. Reports,
+    // per reachable frame, whether script injection actually ran in that
+    // window (window.__nimsInjectedAt), whether the body has any content,
+    // whether that content is visible, and the full uncaught-error text for
+    // that window (untruncated, unlike the 220-char console callback).
+    private fun probeFrameRendering() {
+        evaluateCore("JSON.stringify(NimsReportCore.frameRenderProbe(document))") { json ->
+            val frames = json.optJSONArray("frames") ?: JSONArray()
+            log("PROBE: ${frames.length()} frame(s) reachable from top")
+            for (i in 0 until frames.length()) {
+                val f = frames.optJSONObject(i) ?: continue
+                val err = f.optJSONObject("lastUncaughtError")
+                val errText = if (err != null) " ERROR=\"${err.optString("message")}\" @${err.optString("source").substringAfterLast('/')}:${err.optInt("line")}" else ""
+                log(
+                    "PROBE[${f.optInt("depth")}] id=${f.optString("frameId").ifBlank { "?" }} " +
+                        "url=${f.optString("url")} ready=${f.optString("readyState")} " +
+                        "visible=${f.optBoolean("visibleThroughAncestors")}/${f.optBoolean("elementVisible")} " +
+                        "children=${f.optInt("bodyChildCount")} textLen=${f.optInt("bodyTextLength")} " +
+                        "injected=${f.optBoolean("injectionRan")}$errText"
+                )
+                val sample = f.optString("bodyTextSample")
+                if (sample.isNotBlank()) log("PROBE[${f.optInt("depth")}] sample: ${sample.take(120)}")
+            }
         }
     }
 

@@ -38,6 +38,68 @@
       .sort((a, b) => b.rows.length - a.rows.length)[0] || { doc: doc || root.document, rows: [] };
   }
 
+  // NEW diagnostic (not previously present): walks every same-origin-reachable
+  // frame and reports, per frame, whether its <body> actually has content
+  // (childElementCount / text length), whether that body is visible (not
+  // display:none / zero-size), and whatever uncaught error window.onerror
+  // most recently captured for that specific window (see installErrorCapture
+  // below). diagnosePage() only ever surfaced 3 aggregate counters to the
+  // Android log; this exposes the per-frame detail needed to tell "frame
+  // never got content" apart from "frame has content but it is hidden" apart
+  // from "frame threw before it could render anything."
+  function frameRenderProbe(doc) {
+    const items = accessibleDocumentsRecursive(doc || root.document, 6);
+    const frames = items.map((item) => {
+      const d = item.doc;
+      const win = item.win;
+      const body = d && d.body ? d.body : null;
+      const text = body ? compactText(textOf(body)) : "";
+      const error = win && win.__nimsLastError ? win.__nimsLastError : null;
+      return {
+        depth: item.depth,
+        url: item.safeUrl || safeHostPath(safeDocumentHref(d)),
+        frameId: (item.frameElement && (item.frameElement.id || item.frameElement.name)) || (item.depth === 0 ? "(top)" : ""),
+        visibleThroughAncestors: Boolean(item.visibleThroughAncestors),
+        readyState: d ? d.readyState : "unreachable",
+        bodyChildCount: body ? body.childElementCount : -1,
+        bodyTextLength: text.length,
+        bodyTextSample: text.slice(0, 160),
+        elementVisible: body ? isElementVisible(body) : false,
+        injectionRan: Boolean(win && win.__nimsInjectedAt),
+        lastUncaughtError: error
+      };
+    });
+    return {
+      activeUrl: safeHostPath(root.location && root.location.href),
+      frameCount: frames.length,
+      frames
+    };
+  }
+
+  // NEW (not previously present): chains window.onerror in a given window so
+  // the FULL uncaught-error message + stack is captured, because Android's
+  // WebChromeClient.onConsoleMessage callback truncates console text to ~220
+  // chars before it ever reaches Kotlin (confirmed in MainActivity.onConsoleMessage).
+  // Never overwrites a page-defined onerror; always calls through to it.
+  function installErrorCapture(win) {
+    if (!win || win.__nimsErrorCaptureInstalled) return;
+    win.__nimsErrorCaptureInstalled = true;
+    const previous = win.onerror;
+    win.onerror = function (message, source, lineno, colno, error) {
+      win.__nimsLastError = {
+        message: String(message || ""),
+        source: String(source || ""),
+        line: lineno || 0,
+        column: colno || 0,
+        stack: error && error.stack ? String(error.stack).slice(0, 2000) : ""
+      };
+      if (typeof previous === "function") {
+        try { return previous.call(win, message, source, lineno, colno, error); } catch (e) { /* ignore */ }
+      }
+      return false;
+    };
+  }
+
   function collectFrames(doc) {
     return accessibleDocuments(doc || root.document).map((item) => frameDiagnostic(item.doc, item.safeUrl || item.url, item.depth, item.visibleThroughAncestors));
   }
@@ -876,7 +938,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect };
+  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);
