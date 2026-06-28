@@ -1,22 +1,70 @@
 # Android WebView App
 
-## Manual navigation and one-click analysis
+## Architecture
 
-Automatic NIMS menu navigation is intentionally disabled in the normal workflow.
+The Android app separates the NIMS portal from the native clinical-results UI:
 
-1. Log in to NIMS manually.
-2. Navigate manually to **Investigation → CR No Wise Result Report Printing New**.
-3. Enter the CR number and submit it manually.
-4. Keep the report-result table with visible **View Report** rows on screen.
-5. Click **Analyze Current Results**.
+```text
+NIMS website -> passive all-frame observer -> safe report references ->
+on-device fetch/parse -> Reports / Trends / Cultures / Summary
+```
 
-That single action selects only the frame containing genuine visible one-argument `printReport(...)` rows, learns the report request from one row, validates one fetched report, and then starts Fast analysis. It does not infer login state, click NIMS menus, or navigate to a canonical endpoint.
+NIMS remains responsible for authentication, menu navigation, CR-number entry,
+form submission, and page rendering. The app does not replace jQuery, patch NIMS
+globals, call undocumented tab functions, or construct internal navigation URLs.
 
-Advanced Diagnose/Discover/Test controls remain under **Advanced tools** for troubleshooting only.
+The document-start runtime contains only the canonical report core, safe report
+utilities, and `nimsPassiveObserver.js`. Document-start timing ensures the
+observer is present in every approved frame, but the observer does not modify the
+website.
 
-The Android app is a zero-cost, local-first NIMS report viewer. It loads NIMS in a WebView, requires the clinician to log in manually, uses the shared `shared/nims-web/nimsReportCore.js` scraper to discover report rows and report parameters, fetches reports with the active WebView cookie session, and processes supported reports on the device.
+## Normal workflow
 
-No Railway URL, helper API key, backend, cloud database, or external AI service is required for normal Android use.
+1. Install the debug-signed APK.
+2. Open the **NIMS** tab.
+3. Log in manually, including captcha/OTP where applicable.
+4. Navigate in the normal NIMS menu to:
+   **Investigation -> CR No Wise Result Report Printing New**.
+5. Enter the CR number and submit it in NIMS.
+6. Keep the result table with visible **View Report** rows on screen.
+7. Tap **Analyze Results**.
+8. Review the native **Reports**, **Trends**, **Cultures**, and **Summary** tabs.
+9. Verify generated values against the source NIMS reports before clinical use.
+
+Login, captcha, OTP, CR-number entry, and report-page navigation remain manual.
+
+## Passive observer contract
+
+`shared/nims-web/nimsPassiveObserver.js` runs inside every approved NIMS frame and
+may only:
+
+- classify the frame as login, portal, CR search, CR results, or loading;
+- observe AJAX/DOM changes;
+- detect the genuine CR form and visible report rows;
+- extract sanitized report metadata and an in-memory report reference;
+- post structured JSON to the Android message bridge.
+
+It must never:
+
+- assign or replace `window.jQuery` / `$`;
+- define `date_time` or other NIMS globals;
+- wrap `ajaxCompleteTab`, `addTab`, or portal functions;
+- click menus, submit forms, enter a CR number, or automate login;
+- log or persist cookies, credentials, query values, raw onclick text, or report
+  content.
+
+## Report processing
+
+- The result-list page is used to discover source-report references; it is not
+  assumed to contain every clinical value.
+- Source reports are fetched silently with the authenticated WebView cookie
+  session and the same user-agent.
+- Text/HTML reports and text-based PDFs are processed locally.
+- Image-only PDFs are unsupported because OCR is not enabled.
+- Responses are classified before parsing so login/session pages, viewer shells,
+  empty responses, wrong endpoints, and unsupported formats fail visibly.
+- Raw reports, raw HTML, PDF bytes, cookies, full URLs, query strings, hidden
+  values, and transient filenames are not persisted.
 
 ## Build
 
@@ -25,66 +73,46 @@ cd mobile/android
 ./gradlew clean test lintDebug assembleDebug
 ```
 
-The debug-signed APK is created under `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+The debug APK is generated at:
 
-## Install from GitHub Actions
+```text
+mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
 
-1. Open GitHub → **Actions**.
-2. Select the latest successful **CI** run.
-3. Open **Artifacts**.
-4. Download `nims-fast-summary-debug-apk`.
-5. Extract the ZIP.
-6. Install `app-debug.apk` on the Android device.
-7. If prompted, enable Android **Install unknown apps** for the browser or file manager used to open the APK.
+The Android build has no generated jQuery asset and no source-mutation step.
+`shared/nims-web` is the canonical source for the pure WebView scripts packaged
+as Android assets.
 
-## Use
+## CI validation
 
-1. Install the debug-signed APK.
-2. Confirm the app starts in **On-device only** mode and does not ask for a Railway URL or API key.
-3. Log in manually in the NIMS WebView.
-4. Tap `Open CR Reports`.
-5. Wait for `CR-wise report page ready. Enter the CR number.`
-6. Enter the CR number manually.
-7. Submit the NIMS search form manually and wait for report rows.
-8. Tap `Diagnose Page`.
-9. Tap `Discover Mapping`.
-10. Tap `Test One`.
-11. If one report parses successfully, run `Fast`, `Cultures`, or `Full`.
+CI runs:
 
-Bulk buttons are blocked until `Test One` validates the current in-memory mapping.
+```bash
+python -m pytest -q
+npm test
+python scripts/sync_navigation_core.py --check
+cd mobile/android && ./gradlew clean test lintDebug assembleDebug
+```
 
-## Local processing support
-
-- Text and HTML reports are parsed locally.
-- Text-based PDFs are extracted locally with PdfBox-Android and then parsed through the same conservative local parsers.
-- Image-only PDFs are unsupported because OCR is not included.
-- Encrypted, corrupt, oversized, and excessive-page PDFs are shown as visible unsupported or failed source-report rows with controlled reasons.
-- Generated summaries must be verified against source NIMS reports before clinical decisions.
-
-## Privacy and storage
-
-- NIMS credentials are not stored.
-- NIMS cookies are used only for approved NIMS HTTPS report requests.
-- Raw reports, raw HTML, raw PDF bytes, full report URLs, query strings, hidden form values, and transient report filenames are not persisted.
-- Summary JSON and physician notes are encrypted locally with Android Keystore AES/GCM.
-- Use **Clear NIMS Session** to clear cookies, WebStorage, cache, form data, history, mapping, and in-memory transient requests.
-
-## URL and popup policy
-
-Approved NIMS HTTPS URLs remain inside the WebView. Ordinary external HTTPS URLs may open in the system browser. `http`, `javascript`, `intent`, `file`, `content`, `data`, user-info URLs, alternate ports, suffix-host attacks, malformed paths, and unknown schemes are blocked without logging raw URLs.
-
-Popup/new-window navigation is forwarded to the main WebView only when the original target URL is an approved NIMS HTTPS URL. Query parameters remain in memory for navigation but are not persisted or logged.
-
-## Advanced legacy remote modes
-
-Railway settings are optional legacy/advanced functionality. **Automatic with Railway fallback** tries on-device processing first and uses Railway only when explicitly configured. **Railway only** sends report content to the configured helper and requires a helper URL and API key. These modes are not required for normal Android use.
+It also runs the configured Android instrumented tests, verifies that
+`nimsPassiveObserver.js` is packaged, and fails if bundled jQuery is present.
 
 ## Troubleshooting
 
-- No rows found: confirm the report list is visible inside NIMS.
-- Mapping not discovered: run `Discover Mapping` after the report list loads.
-- Session expired: log in again in the WebView.
-- Image-only PDF: open the source report in NIMS; OCR is not enabled.
-- Parse error: verify the source report; app logs must not include raw report content.
+- **Blank or incomplete NIMS page:** reload the page. The app does not patch the
+  portal; capture sanitized WebView console/network diagnostics if NIMS itself
+  fails to render.
+- **CR form not detected:** confirm the correct NIMS menu page is visibly open.
+- **No report rows:** submit the CR form and wait for visible **View Report** rows.
+- **Analyze Results unavailable or no usable rows:** keep the result table visible
+  and retry. Do not navigate directly to an internal endpoint.
+- **Session expired:** log in again manually.
+- **Image-only PDF:** open the source report in NIMS; OCR is intentionally absent.
 
+## Privacy and clinical safety
 
+NIMS credentials are not stored. Session cookies remain on-device and are never
+sent to Railway. Railway processing remains optional advanced fallback only.
+Every parsed report retains source provenance and explicit errors. The generated
+summary is supervised decision support and must be verified against source NIMS
+reports before clinical decisions.
