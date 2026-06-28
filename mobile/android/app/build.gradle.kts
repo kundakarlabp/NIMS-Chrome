@@ -4,18 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val jqueryWebJar by configurations.creating
-val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
-
-val prepareBundledJquery by tasks.registering(Copy::class) {
-    from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
-        include("META-INF/resources/webjars/jquery/3.7.1/jquery.min.js")
-        eachFile { path = "jquery-3.7.1.min.js" }
-        includeEmptyDirs = false
-    }
-    into(generatedWebAssets)
-}
-
 android {
     namespace = "org.kundakarlab.nimsfastsummarymobile"
     compileSdk = 35
@@ -24,16 +12,17 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.8.2"
+        versionCode = 23
+        versionName = "0.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // shared/nims-web is the canonical source for pure browser/WebView logic.
+    // No generated assets or source mutation occurs during the Android build.
     sourceSets {
         getByName("main").assets.srcDirs(
             "src/main/assets",
-            "../../../shared/nims-web",
-            generatedWebAssets
+            "../../../shared/nims-web"
         )
     }
 
@@ -53,19 +42,14 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 tasks.register("verifyNimsRuntimeAssets") {
-    dependsOn(prepareBundledJquery)
     doLast {
         val shared = rootProject.file("../../shared/nims-web")
         listOf(
             "nimsReportCore.js",
             "contentUtils.js",
-            "nimsAndroidFrameBridge.js",
-            "nimsWebviewShim.js"
+            "nimsPassiveObserver.js"
         ).forEach { name ->
             check(shared.resolve(name).isFile) { "Missing shared NIMS runtime asset: $name" }
-        }
-        check(generatedWebAssets.get().file("jquery-3.7.1.min.js").asFile.isFile) {
-            "Missing generated jQuery 3.7.1 runtime asset"
         }
     }
 }
@@ -75,8 +59,6 @@ tasks.named("preBuild") {
 }
 
 dependencies {
-    jqueryWebJar("org.webjars:jquery:3.7.1")
-
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
