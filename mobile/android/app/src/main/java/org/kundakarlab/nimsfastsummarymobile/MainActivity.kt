@@ -62,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -211,7 +212,14 @@ class MainActivity : ComponentActivity() {
                     onZoomOut = { webView.zoomOut() },
                     onOpenCrReports = {
                         val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
-                        if (visibleRows > 0) runMode("bulk_fast") else openCrWiseReports()
+                        if (visibleRows > 0) {
+                            runMode("bulk_fast")
+                        } else {
+                            setState(
+                                AppState.HELPER_READY,
+                                "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New, submit the CR number, then tap Analyze Results."
+                            )
+                        }
                     },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
@@ -535,6 +543,31 @@ class MainActivity : ComponentActivity() {
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
+            "nims_page_state" -> {
+                if (activeProcessingJob?.isActive == true) return
+                val pageKind = json.optString("pageKind")
+                val reportCount = json.optInt("reportCount")
+                when (pageKind) {
+                    "login" -> setState(AppState.HELPER_READY, "Login to NIMS manually.")
+                    "portal" -> if (appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+                        setState(
+                            AppState.HELPER_READY,
+                            "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
+                        )
+                    }
+                    "cr_search" -> {
+                        crossFrameReport = null
+                        mapping = null
+                        mappingValidated = false
+                        setState(AppState.REPORT_PAGE_READY, "CR search ready. Enter the CR number and submit it in NIMS.")
+                    }
+                    "cr_results" -> setState(
+                        AppState.REPORT_PAGE_READY,
+                        "Report list detected ($reportCount visible). Tap Analyze Results."
+                    )
+                }
+                return
+            }
             "nims_runtime_ready" -> {
                 val path = json.optString("path").take(180)
                 val jqueryVersion = json.optString("jqueryVersion").take(24)
@@ -542,7 +575,7 @@ class MainActivity : ComponentActivity() {
                     (!path.startsWith("/HISInvestigationG5/") || json.optBoolean("jqueryPresent"))
                 log("Runtime frame=$path ready=$ready jquery=${jqueryVersion.ifBlank { "none" }} fallback=${json.optBoolean("jqueryFallbackUsed")} offset=${json.optBoolean("offsetPatched")} tab=${json.optBoolean("ajaxCompleteTabPatched")}")
                 if (ready && path.startsWith("/HISInvestigationG5/") && appStateValue == AppState.HELPER_READY && activeProcessingJob?.isActive != true) {
-                    setState(AppState.HELPER_READY, "NIMS Investigation runtime ready. Continue to the CR-wise report page.")
+                    setState(AppState.HELPER_READY, "NIMS frame observed. Continue using the normal NIMS page.")
                 }
                 return
             }
@@ -1282,27 +1315,50 @@ private fun NimsWebViewScreen(
     onCancelProcessing: () -> Unit,
     logText: String
 ) {
+    var showAdvanced by remember { mutableStateOf(false) }
     Column(modifier) {
         StatusCard(state)
-        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             item { OutlinedButton(onClick = onBack) { Text("Back") } }
             item { OutlinedButton(onClick = onForward) { Text("Forward") } }
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
             item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
-            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
-            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
-            item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR / Analyze") } }
-            item { Button(onClick = onDiagnose) { Text("Diagnose") } }
-            item { Button(onClick = onDiscover) { Text("Discover") } }
-            item { Button(onClick = onTestOne) { Text("Test One") } }
-            item { Button(onClick = onFast) { Text("Fast") } }
-            item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
-            item { Button(onClick = onFull) { Text("Full") } }
-            if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
+            item {
+                Button(
+                    onClick = onOpenCrReports,
+                    enabled = !navigationInProgress && state != AppState.FETCHING
+                ) { Text("Analyze Results") }
+            }
+            item {
+                OutlinedButton(onClick = { showAdvanced = !showAdvanced }) {
+                    Text(if (showAdvanced) "Hide tools" else "Advanced tools")
+                }
+            }
+            if (state == AppState.FETCHING) {
+                item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
+            }
+        }
+        if (showAdvanced) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear session") } }
+                item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
+                item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+                item { OutlinedButton(onClick = onDiagnose) { Text("Diagnose") } }
+                item { OutlinedButton(onClick = onDiscover) { Text("Discover") } }
+                item { OutlinedButton(onClick = onTestOne) { Text("Test one") } }
+                item { OutlinedButton(onClick = onFast) { Text("Fast") } }
+                item { OutlinedButton(onClick = onCulturesOnly) { Text("Cultures") } }
+                item { OutlinedButton(onClick = onFull) { Text("Full") } }
+            }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
-        if (logText.isNotBlank()) {
+        if (showAdvanced && logText.isNotBlank()) {
             Text(
                 logText.takeLast(1200),
                 Modifier
@@ -1502,10 +1558,10 @@ private fun StatusCard(state: AppState) {
         Text(
             when (state) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
-                AppState.HELPER_READY -> "Login to NIMS manually."
-                AppState.NIMS_LOGIN -> "Open the report page after login."
-                AppState.REPORT_PAGE_READY -> "Enter the CR number if needed; after the report list appears, tap Open CR / Analyze."
-                AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
+                AppState.HELPER_READY -> "Login, then navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
+                AppState.NIMS_LOGIN -> "Use the normal NIMS menu to open the CR-wise report page."
+                AppState.REPORT_PAGE_READY -> "Enter and submit the CR number in NIMS. When View Report rows appear, tap Analyze Results."
+                AppState.MAPPING_DISCOVERED -> "Report request validated. Analysis can continue."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."
                 AppState.ERROR -> "Review error and retry the relevant step."
