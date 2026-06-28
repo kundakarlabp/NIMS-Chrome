@@ -1,6 +1,7 @@
 from pathlib import Path
 
 SOURCE = Path("mobile/android/app/src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt")
+SHIM = Path("shared/nims-web/nimsWebviewShim.js")
 
 
 def replace_once(text: str, before: str, after: str, label: str) -> str:
@@ -10,6 +11,17 @@ def replace_once(text: str, before: str, after: str, label: str) -> str:
     if count != 1:
         raise RuntimeError(f"Expected one {label} target, found {count}")
     return text.replace(before, after, 1)
+
+
+def patch_android_shim() -> None:
+    text = SHIM.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        'style.visibility !== "hidden" && Number(style.opacity) !== 0',
+        'style.visibility !== "hidden" && style.visibility !== "collapse" && Number(style.opacity) !== 0',
+        "collapsed-row visibility guard",
+    )
+    SHIM.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
@@ -97,6 +109,7 @@ def main() -> None:
     )
 
     SOURCE.write_text(text, encoding="utf-8")
+    patch_android_shim()
 
 
 if __name__ == "__main__":
