@@ -7,45 +7,58 @@ const source = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), '
 
 function fixture(extra = {}) {
   const queue = [];
-  const listeners = new Map();
+  const documentListeners = new Map();
+  const windowListeners = new Map();
+  const errors = [];
+  const warnings = [];
   const document = {
     readyState: 'complete',
     location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
     addEventListener(type, fn) {
-      const values = listeners.get(type) || [];
+      const values = documentListeners.get(type) || [];
       values.push(fn);
-      listeners.set(type, values);
+      documentListeners.set(type, values);
     },
     fire(type, target) {
-      for (const fn of listeners.get(type) || []) fn({ type, target, currentTarget: target, srcElement: target });
+      for (const fn of documentListeners.get(type) || []) fn({ type, target, currentTarget: target, srcElement: target });
     },
   };
   const win = {
-    console: { error() {} },
+    console: {
+      error(...args) { errors.push(args); },
+      warn(...args) { warnings.push(args); },
+    },
     document,
     location: {
       href: document.location.href,
       hostname: 'www.nimsts.edu.in',
+      pathname: '/AHIMSG5/hissso/loginLogin.action',
       protocol: 'https:',
     },
-    addEventListener() {},
+    addEventListener(type, fn) {
+      const values = windowListeners.get(type) || [];
+      values.push(fn);
+      windowListeners.set(type, values);
+    },
     setTimeout(fn) { queue.push(fn); return queue.length; },
     ...extra,
   };
   win.document = extra.document || document;
   win.top = win;
   win.document.defaultView = win;
-  const context = { window: win, URL, Date, Object };
+  const context = { window: win, URL, Date, Object, JSON };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
   win.flush = () => {
     let count = 0;
-    while (queue.length && count < 100) {
+    while (queue.length && count < 200) {
       queue.shift()();
       count += 1;
     }
   };
+  win.errors = errors;
+  win.warnings = warnings;
   return win;
 }
 
@@ -54,9 +67,20 @@ function assertZeroOffset(value) {
   assert.equal(value.left, 0);
 }
 
+function frame(document, id) {
+  return {
+    tagName: 'IFRAME',
+    id,
+    ownerDocument: document,
+    isConnected: true,
+    contentDocument: { readyState: 'complete' },
+    getAttribute: () => '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
+  };
+}
+
 test('installs date_time and safe offset without changing navigation', () => {
   const jq = () => {};
-  jq.fn = { offset: () => undefined };
+  jq.fn = { jquery: '3.7.1', offset: () => undefined };
   const core = { navigateToCrWiseReports: () => 'unchanged' };
   const original = core.navigateToCrWiseReports;
   const win = fixture({ jQuery: jq, $: jq, NimsReportCore: core });
@@ -74,29 +98,60 @@ test('patches a replacement page jQuery instance', () => {
   replacement.fn = { offset: () => undefined };
   win.$ = replacement;
   win.jQuery = replacement;
-  assertZeroOffset(win.$.fn.offset());
+  assertZeroOffset(win.jQuery.fn.offset());
 });
 
-test('supplies the iframe that emitted the load event', () => {
+test('supplies the unique iframe that emitted the load event', () => {
   let received = null;
-  const win = fixture({ ajaxCompleteTab(frame) { received = frame; return frame.contentDocument.readyState; } });
+  const win = fixture({ ajaxCompleteTab(value) { received = value; return value.contentDocument.readyState; } });
   win.flush();
-  const frame = {
-    tagName: 'IFRAME',
-    id: 'Cr No Wise Result Report Printing New_iframe',
-    ownerDocument: win.document,
-    isConnected: true,
-    contentDocument: { readyState: 'complete' },
-    getAttribute: () => '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
-  };
-  win.document.fire('load', frame);
+  const reportFrame = frame(win.document, 'Cr No Wise Result Report Printing New_iframe');
+  win.document.fire('load', reportFrame);
   assert.equal(win.ajaxCompleteTab(), 'complete');
-  assert.equal(received, frame);
+  assert.equal(received, reportFrame);
+});
+
+test('does not guess when multiple frames loaded in the same window', () => {
+  let calls = 0;
+  const win = fixture({ ajaxCompleteTab() { calls += 1; } });
+  win.flush();
+  win.document.fire('load', frame(win.document, 'frmMainMenu'));
+  win.document.fire('load', frame(win.document, 'Cr No Wise Result Report Printing New_iframe'));
+  assert.equal(win.ajaxCompleteTab(), undefined);
+  assert.equal(calls, 0);
+  assert.equal(win.warnings.length, 1);
+});
+
+test('reports and rethrows unexpected ajaxCompleteTab errors', () => {
+  const win = fixture({ ajaxCompleteTab() { throw new Error('unexpected tab failure'); } });
+  win.flush();
+  win.document.fire('load', frame(win.document, 'Cr No Wise Result Report Printing New_iframe'));
+  assert.throws(() => win.ajaxCompleteTab(), /unexpected tab failure/);
+  assert.equal(win.errors.length, 1);
+});
+
+test('posts safe per-frame readiness telemetry', () => {
+  const messages = [];
+  const jq = () => {};
+  jq.fn = { jquery: '3.7.1', offset: () => undefined };
+  const win = fixture({
+    jQuery: jq,
+    $: jq,
+    __nimsBundledJqueryVersion: '3.7.1',
+    nimsAndroidBridge: { postMessage(value) { messages.push(JSON.parse(value)); } },
+  });
+  win.flush();
+  const runtime = messages.find((value) => value.type === 'nims_runtime_status');
+  assert.ok(runtime);
+  assert.equal(runtime.jqueryReady, true);
+  assert.equal(runtime.offsetPatched, true);
+  assert.equal(runtime.dateTimeReady, true);
+  assert.equal(runtime.url.includes('?'), false);
 });
 
 test('does not install outside NIMS', () => {
   const win = fixture({
-    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', protocol: 'https:' },
+    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', pathname: '/app', protocol: 'https:' },
   });
   win.flush();
   assert.equal(win.date_time, undefined);
