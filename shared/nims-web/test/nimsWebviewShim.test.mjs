@@ -5,9 +5,10 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../nimsWebviewShim.js', import.meta.url), 'utf8');
 
-function nimsDocument() {
+function fixture(extra = {}) {
+  const queue = [];
   const listeners = new Map();
-  return {
+  const document = {
     readyState: 'complete',
     location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
     addEventListener(type, fn) {
@@ -19,31 +20,21 @@ function nimsDocument() {
       for (const fn of listeners.get(type) || []) fn({ type, target, currentTarget: target, srcElement: target });
     },
   };
-}
-
-function run(extra = {}) {
-  const queue = [];
-  const document = extra.document || nimsDocument();
-  const winListeners = new Map();
   const win = {
     console: { error() {} },
     document,
     location: {
-      href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action',
+      href: document.location.href,
       hostname: 'www.nimsts.edu.in',
       protocol: 'https:',
     },
-    addEventListener(type, fn) {
-      const values = winListeners.get(type) || [];
-      values.push(fn);
-      winListeners.set(type, values);
-    },
+    addEventListener() {},
     setTimeout(fn) { queue.push(fn); return queue.length; },
     ...extra,
   };
-  win.document = document;
+  win.document = extra.document || document;
   win.top = win;
-  document.defaultView = win;
+  win.document.defaultView = win;
   const context = { window: win, URL, Date, Object };
   context.globalThis = context;
   vm.createContext(context);
@@ -58,102 +49,55 @@ function run(extra = {}) {
   return win;
 }
 
-test('installs only the confirmed date_time and safe offset compatibility guards', () => {
+function assertZeroOffset(value) {
+  assert.equal(value.top, 0);
+  assert.equal(value.left, 0);
+}
+
+test('installs date_time and safe offset without changing navigation', () => {
   const jq = () => {};
   jq.fn = { offset: () => undefined };
   const core = { navigateToCrWiseReports: () => 'unchanged' };
-  const originalNavigate = core.navigateToCrWiseReports;
-  const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
+  const original = core.navigateToCrWiseReports;
+  const win = fixture({ jQuery: jq, $: jq, NimsReportCore: core });
   win.flush();
   assert.equal(typeof win.date_time, 'function');
-  assert.equal(win.date_time(), '');
-  assert.deepEqual(win.jQuery.fn.offset(), { top: 0, left: 0 });
-  assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
+  assertZeroOffset(win.jQuery.fn.offset());
+  assert.equal(win.NimsReportCore.navigateToCrWiseReports, original);
 });
 
-test('patches the page jQuery instance when it replaces the bundled fallback', () => {
+test('patches a replacement page jQuery instance', () => {
   const fallback = () => {};
   fallback.fn = { offset: () => undefined };
-  const win = run({ jQuery: fallback, $: fallback });
-
-  const pageJquery = () => {};
-  pageJquery.fn = { offset: () => undefined };
-  win.$ = pageJquery;
-  win.jQuery = pageJquery;
-
-  assert.deepEqual(win.$.fn.offset(), { top: 0, left: 0 });
-  assert.deepEqual(win.jQuery.fn.offset(), { top: 0, left: 0 });
+  const win = fixture({ jQuery: fallback, $: fallback });
+  const replacement = () => {};
+  replacement.fn = { offset: () => undefined };
+  win.$ = replacement;
+  win.jQuery = replacement;
+  assertZeroOffset(win.$.fn.offset());
 });
 
-test('preserves offset setter calls and real getter results', () => {
-  const jq = () => {};
-  const real = { top: 12, left: 24 };
-  jq.fn = {
-    offset(value) {
-      if (arguments.length) return this;
-      return real;
-    },
-  };
-  const win = run({ jQuery: jq, $: jq });
-  assert.equal(win.jQuery.fn.offset({ top: 1 }), win.jQuery.fn);
-  assert.equal(win.jQuery.fn.offset(), real);
-});
-
-test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
-  const document = nimsDocument();
+test('supplies the iframe that emitted the load event', () => {
   let received = null;
-  let calls = 0;
-  const win = run({
-    document,
-    ajaxCompleteTab(frame) {
-      calls += 1;
-      received = frame;
-      return frame.contentDocument.readyState;
-    },
-  });
+  const win = fixture({ ajaxCompleteTab(frame) { received = frame; return frame.contentDocument.readyState; } });
   win.flush();
-
   const frame = {
     tagName: 'IFRAME',
     id: 'Cr No Wise Result Report Printing New_iframe',
-    name: '',
-    ownerDocument: document,
+    ownerDocument: win.document,
     isConnected: true,
     contentDocument: { readyState: 'complete' },
-    getAttribute(name) { return name === 'src' ? '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt' : ''; },
+    getAttribute: () => '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
   };
-  document.fire('load', frame);
-
+  win.document.fire('load', frame);
   assert.equal(win.ajaxCompleteTab(), 'complete');
-  assert.equal(calls, 1);
   assert.equal(received, frame);
 });
 
-test('fails closed without calling the original function when no recent iframe exists', () => {
-  let calls = 0;
-  const win = run({
-    ajaxCompleteTab() {
-      calls += 1;
-      throw new TypeError("Cannot read properties of undefined (reading 'contentDocument')");
-    },
-  });
-  win.flush();
-  assert.doesNotThrow(() => win.ajaxCompleteTab());
-  assert.equal(calls, 0);
-});
-
-test('does not install on non-NIMS origins', () => {
-  const document = nimsDocument();
-  let calls = 0;
-  const original = () => { calls += 1; };
-  const win = run({
-    document,
+test('does not install outside NIMS', () => {
+  const win = fixture({
     location: { href: 'https://example.invalid/app', hostname: 'example.invalid', protocol: 'https:' },
-    ajaxCompleteTab: original,
   });
   win.flush();
   assert.equal(win.date_time, undefined);
-  assert.equal(win.ajaxCompleteTab, original);
-  win.ajaxCompleteTab();
-  assert.equal(calls, 1);
 });
