@@ -20,7 +20,7 @@ object FrameReportNormalizer {
     )
 
     fun normalize(input: JSONObject, currentWebViewUrl: String, onIgnored: (String) -> Unit = {}): JSONObject? {
-        val normalized = JSONObject(input.toString())
+        val normalized = input
         val rows = normalized.optJSONArray("rows") ?: JSONArray()
         if (rows.length() == 0) return normalized
 
