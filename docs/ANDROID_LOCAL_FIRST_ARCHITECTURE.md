@@ -1,90 +1,149 @@
 # Android local-first architecture
 
-## Current architecture
+## Design objective
 
-The Android app embeds the NIMS site in a WebView, requires manual NIMS login, discovers the report-list mapping with `nimsReportCore.js`, fetches selected reports with WebView cookies, and uses the configured Railway helper for parsing and summarization. Railway remains the reliable fallback path.
+The Android application is a supervised clinical report extractor and presenter,
+not an alternative implementation of the NIMS portal.
 
-## Target local-first architecture
+```text
+NIMS portal
+  -> passive frame observation
+  -> sanitized report references
+  -> authenticated on-device fetch
+  -> response classification
+  -> deterministic parsing
+  -> native Reports / Trends / Cultures / Summary UI
+```
 
-This PR introduces a small processing boundary:
+## Ownership boundaries
 
-- `ReportInput` carries safe metadata, content type, and transient in-memory bytes.
-- `ReportProcessor` defines parse and summarize operations.
-- `LocalTextReportProcessor` supports conservative on-device text/HTML parsing.
-- `ProcessingRouter` selects local or Railway processing by mode.
-- `RemoteReportProcessor` wraps the existing Railway helper protocol.
+### NIMS portal
+
+NIMS owns:
+
+- manual login, captcha, and OTP;
+- menu and frame navigation;
+- CR-number entry and form submission;
+- session state and page rendering;
+- source report generation.
+
+The app must not patch the portal runtime or bypass its normal navigation flow.
+
+### Passive WebView observer
+
+`shared/nims-web/nimsPassiveObserver.js` is injected at document start into every
+approved NIMS frame. It observes the existing DOM and posts structured events.
+It has no authority to click, submit, navigate, replace libraries, or define NIMS
+globals.
+
+### Android session and report retrieval
+
+The Android WebView owns the authenticated cookie session. Approved report
+requests use the same NIMS host and WebView user-agent. Full URLs, query values,
+cookies, hidden fields, and transient filenames remain in memory and are never
+persisted or logged.
+
+### Processing boundary
+
+- `ReportInput` carries safe source metadata, content type, and transient bytes.
+- `ProcessingRouter` selects local processing or explicit optional Railway mode.
+- `OnDeviceReportProcessor` handles text/HTML and text-based PDF reports.
+- `LocalTextReportProcessor` performs conservative deterministic extraction.
+- `PdfBoxAndroidTextExtractor` extracts text in memory with byte/page/text limits.
+- `RemoteReportProcessor` is optional advanced fallback and never receives NIMS
+  credentials or cookies.
+
+## Application workflow
+
+1. Clinician logs in to NIMS manually.
+2. Clinician navigates to the CR-wise report page using the normal NIMS menu.
+3. Clinician enters and submits the CR number manually.
+4. The owning frame announces visible report rows.
+5. **Analyze Results** validates one report request before bulk processing.
+6. Selected source reports are fetched silently and classified before parsing.
+7. Parsed results appear in native Reports, Trends, Cultures, and Summary screens.
+8. Clinician verifies generated values against source NIMS reports.
+
+## Page-state contract
+
+The observer reports only these coarse states:
+
+- `login`
+- `portal`
+- `cr_search`
+- `cr_results`
+- `loading`
+- `unknown`
+
+State detection is based on genuine rendered elements, not the presence of jQuery
+or compatibility flags. An Investigation URL alone is not proof that the CR form
+or result table rendered.
+
+## Local processing support
+
+- `text/plain`: supported locally.
+- report-like `text/html`: supported locally after response classification.
+- text-based PDF: extracted and parsed locally.
+- image-only PDF: explicitly unsupported; OCR is not enabled.
+- login/session HTML, viewer shells, wrong endpoints, empty responses, encrypted
+  PDFs, corrupt PDFs, and oversized inputs: visible controlled failures.
 
 ## Processing modes
 
-- **Automatic**: process supported text/HTML reports on-device and use Railway for unsupported formats.
-- **On-device only**: never use Railway; PDF reports are rejected with a clear unsupported-format message.
-- **Railway only**: preserve existing Railway parsing and summary behavior.
+- **On-device only**: default. No Railway URL or API key is required.
+- **Automatic with Railway fallback**: local first; remote fallback only when
+  explicitly configured and permitted by failure policy.
+- **Railway only**: advanced legacy mode.
 
-## Supported local formats
+Login/session/captcha/OTP content is never eligible for remote fallback.
 
-Local parsing is intentionally conservative. It supports text/plain and report-like text/html with embedded text. It recognizes high-confidence lab rows such as hemoglobin, platelets, creatinine, electrolytes, bilirubin, SGOT/SGPT, CRP, procalcitonin, and INR. It recognizes explicit culture terms such as specimen, organism, no growth, susceptible/sensitive/intermediate/resistant, ESBL, MRSA, VRE, CRE, CRAB, carbapenem resistant, and colistin resistant.
+## Privacy and clinical safety
 
-## Railway fallback
+- NIMS credentials are not stored.
+- Cookies remain on-device and are used only for approved NIMS requests.
+- Raw reports, HTML, PDFs, extracted text, hidden values, query strings, and
+  transient report references are not persisted.
+- Parsed summaries and physician notes remain encrypted locally.
+- Report provenance, parsing status, omissions, and errors remain visible.
+- Missing text is never interpreted as a negative or normal result.
+- The summary does not make autonomous diagnostic or treatment decisions.
+- Source reports must be checked before clinical decisions.
 
-PDF processing remains Railway-backed in AUTO mode. This PR does not claim full offline/local PDF support. Railway remains optional by mode but is not removed. Android rejects remote uploads larger than approximately 18 MB before Base64 encoding; 18 MB of binary report data expands to roughly 24 MB Base64 plus JSON overhead, keeping requests below the 25 MB Railway helper body limit.
+## Build and assets
 
-## Privacy behavior
+The Android build uses normal Kotlin/Gradle source as the source of truth. There
+is no Python source mutation, generated jQuery asset, or pre-build patching.
+`shared/nims-web` remains the canonical directory for pure browser/WebView code,
+and Gradle packages those files directly as assets.
 
-NIMS credentials are not stored. NIMS cookies remain on-device and are used only for direct NIMS report fetches. Cookies are not uploaded to Railway. Raw HTML, raw PDF bytes, and raw report text are not persisted. Railway receives report content only when remote processing is used. The helper source metadata is sanitized to an approved NIMS HTTPS host/path without query strings, fragments, transient filenames, cookies, or hidden session values.
+Required Android runtime assets:
 
-## Limitations
+- `nimsReportCore.js`
+- `contentUtils.js`
+- `nimsPassiveObserver.js`
 
-- Image-only PDF OCR is not implemented.
-- No OCR is included.
-- Local parsing is conservative and may mark unfamiliar formats unsupported.
-- Source NIMS reports must be verified before clinical decisions.
+The former jQuery bootstrap and NIMS compatibility shim are not part of the
+Android runtime.
 
-## Migration roadmap
-
-- validated local PDF extraction;
-- parser parity tests with de-identified NIMS PDFs;
-- optional encrypted structured database;
-- removal of Railway only after local parity is proven.
-
-## Test commands
+## Validation
 
 ```bash
+pip install -r helper/requirements-dev.txt
 python -m pytest -q
-docker build -f helper/Dockerfile .
+python -m py_compile helper/main.py helper/models.py helper/cache.py
+npm ci
+npm test
+python scripts/sync_navigation_core.py --check
 cd mobile/android
-./gradlew clean
-./gradlew test
-./gradlew assembleDebug
-./gradlew lintDebug
+./gradlew clean test lintDebug assembleDebug
 ```
 
-## Verification disclaimer
+Configured Android instrumented tests are also required. CI verifies that the
+passive observer is packaged and bundled jQuery is absent.
 
-Auto-parsed summary. Verify with source NIMS reports before clinical decisions.
+## Residual risk
 
-## PR #20 corrections
-
-The production Android processing path now routes fetched report bytes through `ProcessingRouter` instead of calling helper parse/summarize directly from `MainActivity`. `LOCAL_ONLY` does not require Railway helper settings and never calls Railway. `AUTO` uses local parsing for supported text/HTML/PDF reports first and only uses Railway as optional legacy fallback when configured; login/session/captcha/OTP pages are blocked from remote fallback. `REMOTE_ONLY` preserves Railway behavior and maps helper JSON back into domain summaries.
-
-Parser safety was tightened: culture results are parsed per block, resistance acronyms use explicit word boundaries, lab label extraction is case-insensitive and position-based, comparator values such as `<0.5` and `>100` are retained, and summaries sort normalized dates chronologically. Bulk processing is coroutine-based with structured child tasks, concurrency capped at two, and an active job can be cancelled. Popup WebView navigation is restricted to approved NIMS HTTPS hosts and paths; rejected popup URLs are not forwarded to the main WebView.
-
-Remaining roadmap:
-
-- validated local PDF extraction;
-- parser parity tests with de-identified NIMS PDFs;
-- optional encrypted structured database;
-- removal of Railway only after parity.
-
-## Fully local-first default
-
-Android now defaults to `LOCAL_ONLY` / **On-device only**. Startup does not require a helper URL or API key, and the WebView workflow remains available for manual login, report-page diagnosis, mapping discovery, Test One Report, Bulk Fast Summary, Cultures Only, Full Summary, and the Reports/Trends/Cultures/Summary tabs.
-
-`LOCAL_ONLY` must not instantiate helper requests for report parsing or summaries. It parses supported text/HTML reports and text-based PDFs locally, and returns controlled unsupported messages for image-only PDFs without upload. Cookies remain only on-device for NIMS fetches, raw report content is processed transiently, full URLs/query strings are not logged, and source reports must be verified manually.
-
-TODO: add a future PdfBox-Android text-extraction component behind the local processor for PDFs after parser parity tests with de-identified PDFs. OCR is intentionally out of scope.
-
-## On-device PDF architecture
-
-`ProcessingRouter` sends `LOCAL_ONLY` work to the on-device processor and does not call the remote helper. `OnDeviceReportProcessor` delegates HTML/text directly to `LocalTextReportProcessor`; for PDFs it uses `PdfBoxAndroidTextExtractor`, normalizes extracted text, then passes UTF-8 text back through the existing conservative local parsers. PDF bytes are loaded through the in-memory PdfBox-Android API and are never written to filesDir, cacheDir, external storage, SharedPreferences, Room, or logs; raw PDF bytes, raw HTML, extracted raw text, full URLs, query strings, cookies, and transient filenames are not persisted.
-
-PdfBox-Android is pinned as `com.tom-roush:pdfbox-android:2.0.27.0` (Apache-2.0). PDF extraction is limited to one document at a time and enforces byte, page, and extracted-text safety limits. Image-only PDFs remain unsupported because OCR was not added.
+The NIMS portal is a legacy framed application and may change its markup or
+report request contract. The observer therefore fails closed when a genuine CR
+form, report row, or safe report reference is not found. Navigation remains
+manual, and the source NIMS report remains authoritative.
