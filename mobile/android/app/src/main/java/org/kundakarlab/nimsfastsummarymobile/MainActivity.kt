@@ -199,6 +199,7 @@ class MainActivity : ComponentActivity() {
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
                     onOpenCrReports = { runMode("bulk_fast") },
+                    onOpenCrSearchDirect = { openCrSearchDirect() },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
@@ -426,6 +427,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
+    // Reach the CR-wise result page WITHOUT the EasyUI tab that blanks in the
+    // WebView. Prefer the page-faithful ticketed top-level nav; if the menu
+    // anchor is not present, load the leaf endpoint directly. Either way the
+    // page renders top-level and the existing reader picks up the rows.
+    private fun openCrSearchDirect() {
+        cancelNavigation()
+        mapping = null
+        mappingValidated = false
+        crossFrameReport = null
+        setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
+        evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
+            when {
+                result.optBoolean("ok") -> {
+                    val action = result.optString("action")
+                    setState(AppState.HELPER_READY, "CR-wise page opening ($action). Enter the CR number, then tap Go.")
+                }
+                else -> {
+                    log("Direct CR menu not found (${result.optString("errorCode")}); loading leaf endpoint")
+                    webView.loadUrl(CR_SEARCH_URL)
+                    setState(AppState.HELPER_READY, "Loading CR-wise result page… If a login screen appears, sign in and retry.")
+                }
+            }
+        }
+    }
 
     private fun openCrWiseReports() {
         cancelNavigation()
@@ -1085,6 +1111,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
+        // Leaf endpoint for the CR-wise result page (rendered top-level, no EasyUI tab).
+        private const val CR_SEARCH_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
         // Match a current desktop Chrome so NIMS serves the same desktop assets
         // and code paths the working browser extension relies on.
         private const val DESKTOP_CHROME_UA =
@@ -1135,6 +1163,7 @@ private fun NimsFastSummaryApp(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrReports: () -> Unit,
+    onOpenCrSearchDirect: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
@@ -1185,6 +1214,7 @@ private fun NimsFastSummaryApp(
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
                 onOpenCrReports = onOpenCrReports,
+                onOpenCrSearchDirect = onOpenCrSearchDirect,
                 navigationInProgress = navigationInProgress,
                 onDiagnose = onDiagnose,
                 onDiscover = onDiscover,
@@ -1260,6 +1290,7 @@ private fun NimsWebViewScreen(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrReports: () -> Unit,
+    onOpenCrSearchDirect: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
@@ -1280,6 +1311,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+            item { Button(onClick = onOpenCrSearchDirect, enabled = !navigationInProgress) { Text("Open CR Results") } }
             item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Analyze Current Results") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }

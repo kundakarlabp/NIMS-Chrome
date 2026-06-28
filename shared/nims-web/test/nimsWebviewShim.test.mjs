@@ -58,15 +58,18 @@ function run(extra = {}) {
   return win;
 }
 
-test('does not inject jQuery, date_time, offset patches, or navigation behavior', () => {
+test('installs date_time and safe offset without changing navigation', () => {
   const jq = () => {};
   jq.fn = { offset: () => undefined };
   const core = { navigateToCrWiseReports: () => 'unchanged' };
   const originalNavigate = core.navigateToCrWiseReports;
   const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
   win.flush();
-  assert.equal(win.date_time, undefined);
-  assert.equal(win.jQuery.fn.offset(), undefined);
+  assert.equal(typeof win.date_time, 'function');
+  assert.equal(win.date_time(), '');
+  const off = win.jQuery.fn.offset();
+  assert.equal(off.top, 0);
+  assert.equal(off.left, 0);
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
 });
 

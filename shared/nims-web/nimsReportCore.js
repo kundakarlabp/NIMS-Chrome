@@ -330,6 +330,70 @@
     return navigateNimsContract(doc || root.document);
   }
 
+  // Open the CR-wise result page as a TOP-LEVEL document instead of an EasyUI
+  // tab. The tab path (callMenu -> addTab -> iframe + tabmenu.js positioning +
+  // ajaxCompleteTab) is the only place the live page crashes in the WebView
+  // (#menuStrip offset().left throw, date_time undefined, 0-arg ajaxCompleteTab)
+  // and leaves the content frame blank. The leaf page itself renders its own
+  // <body> fine. We still reuse the page's exact SSO-ticket handling by calling
+  // its real callMenu, but we transiently intercept addTab so the ticketed URL
+  // it produces drives a top-level navigation rather than a tab. The ticket
+  // never leaves the page (it is not returned to the host).
+  function openCrWiseResultsDirect(doc) {
+    const startDoc = doc || root.document;
+    const target = findCrWiseReportMenuTarget(startDoc);
+    if (!target.ok) return { ok: false, action: "none", errorCode: target.reason || "cr_wise_menu_not_found" };
+
+    const anchorOnclick = (target.element && target.element.getAttribute && target.element.getAttribute("onclick")) || "";
+    const parsedAnchor = parseFunctionArgs(anchorOnclick);
+    const menuUrl = parsedAnchor.args[0] || CR_WISE_ENDPOINT;
+    const menuName = parsedAnchor.args[1] || CR_WISE_MENU_ID;
+
+    const anchorWin = target.win || (target.doc && target.doc.defaultView) || null;
+    const topDoc = resolveTopDocument(startDoc);
+    const topWin = (topDoc && topDoc.defaultView) || (anchorWin && anchorWin.top) || root.window || root;
+
+    // callMenu lives on the menu frame (delegates to parent.callMenu) and/or the
+    // top window; addTab lives on the top window. Intercept top.addTab so the
+    // ticketed targetURL becomes a top-level navigation.
+    const callMenuWin =
+      (anchorWin && typeof anchorWin.callMenu === "function" && anchorWin) ||
+      (topWin && typeof topWin.callMenu === "function" && topWin) ||
+      null;
+    if (!callMenuWin || typeof topWin.addTab !== "function") {
+      // No usable page contract: fall back to clicking the anchor (normal path,
+      // now protected by the hardened shim), so behavior degrades gracefully.
+      try { target.element.click(); return { ok: true, action: "clicked_cr_wise_menu" }; }
+      catch (e) { return { ok: false, action: "callmenu_unavailable", errorCode: "cr_wise_callmenu_unavailable" }; }
+    }
+
+    const originalAddTab = topWin.addTab;
+    let navigatedUrlPresent = false;
+    try {
+      topWin.addTab = function (menu, targetURL) {
+        if (targetURL) {
+          navigatedUrlPresent = true;
+          try { topWin.location.href = targetURL; }
+          catch (e) { try { topWin.location.assign(targetURL); } catch (_) { /* keep silent: ticket must not be logged */ } }
+        }
+        // Intentionally do NOT call originalAddTab: we are bypassing EasyUI.
+      };
+      callMenuWin.callMenu(menuUrl, menuName);
+    } catch (e) {
+      // Restore immediately on synchronous failure and report.
+      topWin.addTab = originalAddTab;
+      return { ok: false, action: "callmenu_threw", errorCode: "cr_wise_callmenu_threw" };
+    } finally {
+      // Restore after the synchronous callMenu path completes.
+      try { topWin.setTimeout(function () { topWin.addTab = originalAddTab; }, 0); }
+      catch (e) { topWin.addTab = originalAddTab; }
+    }
+
+    return navigatedUrlPresent
+      ? { ok: true, action: "navigated_direct_leaf" }
+      : { ok: false, action: "addtab_not_invoked", errorCode: "cr_wise_addtab_not_invoked" };
+  }
+
   // Drive navigation through the real e-Sushrut contract:
   //   top menuSelected("Investigation", true)  -> refreshes #frmMainMenu
   //   #frmMainMenu anchor #Cr_No_Wise_Result_Report_Printing_New (callMenu)
@@ -812,7 +876,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
+  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);
