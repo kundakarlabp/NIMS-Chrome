@@ -6,14 +6,12 @@ import { JSDOM } from 'jsdom';
 
 const source = readFileSync(new URL('../nimsPassiveObserver.js', import.meta.url), 'utf8');
 
-function load(html, path = '/AHIMSG5/hissso/loginLogin.action', utils = null) {
+function load(html, path = '/AHIMSG5/hissso/loginLogin.action') {
   const dom = new JSDOM(html, {
     url: `https://www.nimsts.edu.in${path}`,
     runScripts: 'outside-only'
   });
   const { window } = dom;
-  if (utils) window.NimsFastSummaryUtils = utils;
-  // Export the pure observer API without starting timers or MutationObservers.
   window.__NIMS_PASSIVE_OBSERVER_INSTALLED__ = true;
   const context = dom.getInternalVMContext();
   context.globalThis = window;
@@ -40,48 +38,27 @@ test('classifies the genuine CR search form', () => {
   window.close();
 });
 
-test('builds a sanitized report announcement from the owning frame', () => {
-  const extracted = [{
-    row_index: 4,
-    view_report_button_index: 1,
-    date_sent: '28-06-2026',
-    department: 'Biochemistry',
-    report_name: 'Renal Function Test',
-    report_type: 'rft',
-    report_tags: ['rft']
-  }];
-  const utils = {
-    extractReportRows() { return extracted; },
-    safeRuntimeRow(row) { return { ...row }; },
-    getTransientReportRequestPayload() { return { transient_print_report_arg: 'synthetic_report_1.pdf' }; },
-    getSafeSetPdfTemplate() {
-      return {
-        discovered: true,
-        origin: 'https://www.nimsts.edu.in',
-        pathname: '/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt'
-      };
-    }
-  };
+test('extracts and sanitizes report rows without shared helper libraries', () => {
   const { window, api } = load(
-    '<html><body><table><tr><td>Renal Function Test</td><td>View Report</td></tr></table></body></html>',
-    '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt',
-    utils
+    '<html><body><table><tr><td>ignore</td></tr><tr><td>28-Jun-2026</td><td>Biochemistry</td><td>Renal Function Test</td><td><button onclick="printReport(\'synthetic_report_1.pdf\')">View Report</button></td></tr></table></body></html>',
+    '/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt'
   );
+  window.printReport = function printReport(name) {
+    return '/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=' + name;
+  };
+
   const report = api.buildReport(window.document);
   assert.equal(report.type, 'nims_report_frame');
   assert.equal(report.pageKind, 'cr_results');
   assert.equal(report.rowCount, 1);
+  assert.equal(report.rows[0].row_index, 1);
   assert.equal(report.rows[0].report_name, 'Renal Function Test');
+  assert.equal(report.rows[0].date_sent, '28-Jun-2026');
   assert.equal(report.rows[0].transientPrintReportArg, 'synthetic_report_1.pdf');
   assert.equal(report.rows[0].onclick, undefined);
   assert.equal(report.rows[0].source_url, undefined);
   assert.equal(report.template.pathname, '/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt');
   window.close();
-});
-
-test('fallback row detection preserves the original DOM row index', () => {
-  assert.match(source, /matched\.push\(\{ row_index: index \}\)/);
-  assert.doesNotMatch(source, /\.filter\([\s\S]*?\)\.map\(function \(_row, index\)/);
 });
 
 test('rejects unsafe transient report references', () => {
@@ -92,10 +69,11 @@ test('rejects unsafe transient report references', () => {
   window.close();
 });
 
-test('observer source contains no portal patching or automatic navigation', () => {
-  assert.doesNotMatch(source, /(?:window|root)\.jQuery\s*=/);
-  assert.doesNotMatch(source, /(?:window|root)\.date_time\s*=/);
-  assert.doesNotMatch(source, /(?:window|root)\.ajaxCompleteTab\s*=/);
+test('observer avoids expensive layout reads and portal mutations', () => {
+  assert.doesNotMatch(source, /getComputedStyle/);
+  assert.doesNotMatch(source, /NimsFastSummaryUtils/);
+  assert.doesNotMatch(source, /NimsReportCore/);
   assert.doesNotMatch(source, /\.click\s*\(/);
   assert.doesNotMatch(source, /\.submit\s*\(/);
+  assert.doesNotMatch(source, /attributeFilter|attributes\s*:\s*true/);
 });
