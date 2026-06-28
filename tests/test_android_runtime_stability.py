@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ANDROID_APP = ROOT / "mobile" / "android" / "app"
 JAVA_ROOT = ANDROID_APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile"
 CHROME_ACTIVITY = JAVA_ROOT / "ChromeModeActivity.kt"
+CHROME_UI = JAVA_ROOT / "ChromeModeUi.kt"
 EXTRACTOR_ASSET = ANDROID_APP / "src/main/assets/nimsOnDemandExtractor.js"
 
 
@@ -48,6 +49,7 @@ def test_android_bulk_workers_do_not_evaluate_webview_javascript() -> None:
     assert "evaluateJavascript" not in fetch_body
     assert "extractor.extract" not in fetch_body
     assert "OnDemandReportRequest" in source
+    assert "catch (cancelled: CancellationException)" in source
 
 
 def test_android_rendering_uses_optional_json_objects() -> None:
@@ -58,6 +60,7 @@ def test_android_rendering_uses_optional_json_objects() -> None:
 
 def test_android_webview_login_surface_is_optimized() -> None:
     source = CHROME_ACTIVITY.read_text(encoding="utf-8")
+    ui = CHROME_UI.read_text(encoding="utf-8")
     manifest = (ANDROID_APP / "src/main/AndroidManifest.xml").read_text(encoding="utf-8")
     assert 'android:windowSoftInputMode="adjustResize"' in manifest
     assert "settings.useWideViewPort = true" in source
@@ -67,7 +70,7 @@ def test_android_webview_login_surface_is_optimized() -> None:
     assert "setAcceptThirdPartyCookies(this, true)" in source
     assert "webView.requestFocus()" in source
     assert "ChromeModeApp(" in source
-    assert "AndroidView(factory = { webView }" in source
+    assert "AndroidView(factory = { webView }" in ui
 
 
 def test_android_app_does_not_store_nims_credentials_or_automate_login() -> None:
