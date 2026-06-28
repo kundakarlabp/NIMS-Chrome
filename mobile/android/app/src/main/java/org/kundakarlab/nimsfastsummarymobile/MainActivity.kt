@@ -19,8 +19,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import androidx.webkit.ScriptHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -85,9 +83,6 @@ import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import org.kundakarlab.nimsfastsummarymobile.security.UrlClassification
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationCoordinator
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationOutcome
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationStep
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
@@ -99,7 +94,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -116,7 +110,6 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
-import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -144,7 +137,6 @@ class MainActivity : ComponentActivity() {
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private var navigationJob: Job? = null
-    private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
@@ -424,73 +416,7 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun openCrWiseReports() {
-        cancelNavigation()
-        mapping = null
-        mappingValidated = false
-        val generation = ++navigationGeneration
-        val coordinator = NimsNavigationCoordinator()
-        navigationJob = lifecycleScope.launch {
-            navigationInProgress = true
-            var lastStep: NimsNavigationStep? = null
-            setState(AppState.HELPER_READY, "Checking current NIMS page…")
-            val outcome = coordinator.execute(
-                stepProvider = {
-                    evaluateNavigationStep()
-                },
-                onStep = { step ->
-                    lastStep = step
-                    if (generation == navigationGeneration) {
-                        setState(
-                            AppState.HELPER_READY,
-                            navigationMessage(step)
-                        )
-                    }
-                }
-            )
-            if (generation == navigationGeneration) {
-                val where = lastStep?.let { " (last: ${it.stage}/${it.action}${if (it.errorCode.isBlank()) "" else "/" + it.errorCode})" } ?: ""
-                when (outcome) {
-                    NimsNavigationOutcome.CrSearchReady -> setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
-                    NimsNavigationOutcome.ReportListReady -> setState(AppState.REPORT_PAGE_READY, "Report list detected.")
-                    NimsNavigationOutcome.ManualLoginRequired -> setState(AppState.ERROR, "Manual NIMS login required.")
-                    NimsNavigationOutcome.SessionExpired -> setState(AppState.ERROR, "NIMS session expired. Login again.")
-                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out$where. Run Diagnose and retry.")
-                    NimsNavigationOutcome.Cancelled -> Unit
-                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports$where. Use Diagnose and retry.")
-                }
-                navigationInProgress = false
-                navigationJob = null
-            }
-        }
-    }
-
-    private suspend fun evaluateNavigationStep(): NimsNavigationStep = suspendCancellableCoroutine { continuation ->
-        evaluateJson("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { rawJson ->
-            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromRawJson(rawJson))
-        }
-    }
-
-    private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
-        "selected_investigation" -> "Opening Investigation…"
-        "clicked_investigation_module" -> "Opening Investigation…"
-        "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
-        "called_child_menu_function", "called_top_menu_function" -> "Opening CR-wise reports…"
-        "waiting_for_report_frame" -> "Loading CR-wise report page…"
-        "waiting_for_shell" -> "Waiting for NIMS menu to load…"
-        "cooldown" -> "Waiting for NIMS navigation…"
-        else -> when (result.errorCode) {
-            "navigation_step_timeout" -> "Checking current NIMS page…"
-            "manual_login_required" -> "Login to NIMS manually, then tap Open CR Reports."
-            "navigation_contract_not_found" -> "Waiting for the NIMS page to load…"
-            "investigation_module_not_found" -> "Unable to locate the Investigation menu."
-            "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
-            else -> "Checking current NIMS page…"
-        }
-    }
-
     private fun cancelNavigation() {
-        navigationGeneration += 1
         navigationJob?.cancel()
         navigationJob = null
         navigationInProgress = false
@@ -504,7 +430,7 @@ class MainActivity : ComponentActivity() {
             if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             } else if (rows == 0 && blocked > 0) {
-                setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
+                setState(AppState.ERROR, "Advanced top-frame diagnostics cannot inspect the owning report frame ($blocked blocked, $reachable reachable). Keep the result list visible and use Analyze Results.")
             }
             log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
         }
@@ -538,8 +464,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Receives the report-frame announcement posted by nimsAndroidFrameBridge.js
-    // from whichever frame (even cross-origin) actually contains the result rows.
+    // Receives passive page-state and report-row announcements from the frame
+    // that actually owns the rendered NIMS content, including cross-origin frames.
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
@@ -568,37 +494,6 @@ class MainActivity : ComponentActivity() {
                 }
                 return
             }
-            "nims_runtime_ready" -> {
-                val path = json.optString("path").take(180)
-                val jqueryVersion = json.optString("jqueryVersion").take(24)
-                val ready = json.optBoolean("dateTimeReady") &&
-                    (!path.startsWith("/HISInvestigationG5/") || json.optBoolean("jqueryPresent"))
-                log("Runtime frame=$path ready=$ready jquery=${jqueryVersion.ifBlank { "none" }} fallback=${json.optBoolean("jqueryFallbackUsed")} offset=${json.optBoolean("offsetPatched")} tab=${json.optBoolean("ajaxCompleteTabPatched")}")
-                if (ready && path.startsWith("/HISInvestigationG5/") && appStateValue == AppState.HELPER_READY && activeProcessingJob?.isActive != true) {
-                    setState(AppState.HELPER_READY, "NIMS frame observed. Continue using the normal NIMS page.")
-                }
-                return
-            }
-            "nims_runtime_error" -> {
-                val path = json.optString("path").take(180)
-                val detail = json.optString("detail", "WebView runtime error").take(160)
-                log("Runtime error frame=$path detail=$detail")
-                if (!detail.contains("without a matching iframe", ignoreCase = true)) {
-                    setState(AppState.ERROR, "NIMS WebView runtime error. Reload the page and retry.")
-                }
-                return
-            }
-            "nims_frame_debug" -> {
-                val errs = json.optJSONArray("errors")
-                val errStr = if (errs != null && errs.length() > 0) {
-                    " err=" + (0 until errs.length()).joinToString("; ") { errs.optString(it) }
-                } else ""
-                log(
-                    "FRAME ${json.optString("url")}: children=${json.optInt("children")} " +
-                        "text=${json.optInt("textLen")} h=${json.optInt("height")}$errStr"
-                )
-                return
-            }
             "nims_report_frame" -> { /* fall through to handling below */ }
             else -> return
         }
@@ -609,7 +504,7 @@ class MainActivity : ComponentActivity() {
         log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
         if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
             appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Current Results.")
+            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Results.")
         }
     }
 
