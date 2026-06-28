@@ -19,8 +19,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import androidx.webkit.ScriptHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -62,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,9 +83,6 @@ import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import org.kundakarlab.nimsfastsummarymobile.security.UrlClassification
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationCoordinator
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationOutcome
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationStep
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
@@ -98,7 +94,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -115,7 +110,6 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
-import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -143,7 +137,6 @@ class MainActivity : ComponentActivity() {
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private var navigationJob: Job? = null
-    private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
@@ -211,7 +204,14 @@ class MainActivity : ComponentActivity() {
                     onZoomOut = { webView.zoomOut() },
                     onOpenCrReports = {
                         val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
-                        if (visibleRows > 0) runMode("bulk_fast") else openCrWiseReports()
+                        if (visibleRows > 0) {
+                            runMode("bulk_fast")
+                        } else {
+                            setState(
+                                AppState.HELPER_READY,
+                                "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New, submit the CR number, then tap Analyze Results."
+                            )
+                        }
                     },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
@@ -416,73 +416,7 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun openCrWiseReports() {
-        cancelNavigation()
-        mapping = null
-        mappingValidated = false
-        val generation = ++navigationGeneration
-        val coordinator = NimsNavigationCoordinator()
-        navigationJob = lifecycleScope.launch {
-            navigationInProgress = true
-            var lastStep: NimsNavigationStep? = null
-            setState(AppState.HELPER_READY, "Checking current NIMS page…")
-            val outcome = coordinator.execute(
-                stepProvider = {
-                    evaluateNavigationStep()
-                },
-                onStep = { step ->
-                    lastStep = step
-                    if (generation == navigationGeneration) {
-                        setState(
-                            AppState.HELPER_READY,
-                            navigationMessage(step)
-                        )
-                    }
-                }
-            )
-            if (generation == navigationGeneration) {
-                val where = lastStep?.let { " (last: ${it.stage}/${it.action}${if (it.errorCode.isBlank()) "" else "/" + it.errorCode})" } ?: ""
-                when (outcome) {
-                    NimsNavigationOutcome.CrSearchReady -> setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
-                    NimsNavigationOutcome.ReportListReady -> setState(AppState.REPORT_PAGE_READY, "Report list detected.")
-                    NimsNavigationOutcome.ManualLoginRequired -> setState(AppState.ERROR, "Manual NIMS login required.")
-                    NimsNavigationOutcome.SessionExpired -> setState(AppState.ERROR, "NIMS session expired. Login again.")
-                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out$where. Run Diagnose and retry.")
-                    NimsNavigationOutcome.Cancelled -> Unit
-                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports$where. Use Diagnose and retry.")
-                }
-                navigationInProgress = false
-                navigationJob = null
-            }
-        }
-    }
-
-    private suspend fun evaluateNavigationStep(): NimsNavigationStep = suspendCancellableCoroutine { continuation ->
-        evaluateJson("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { rawJson ->
-            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromRawJson(rawJson))
-        }
-    }
-
-    private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
-        "selected_investigation" -> "Opening Investigation…"
-        "clicked_investigation_module" -> "Opening Investigation…"
-        "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
-        "called_child_menu_function", "called_top_menu_function" -> "Opening CR-wise reports…"
-        "waiting_for_report_frame" -> "Loading CR-wise report page…"
-        "waiting_for_shell" -> "Waiting for NIMS menu to load…"
-        "cooldown" -> "Waiting for NIMS navigation…"
-        else -> when (result.errorCode) {
-            "navigation_step_timeout" -> "Checking current NIMS page…"
-            "manual_login_required" -> "Login to NIMS manually, then tap Open CR Reports."
-            "navigation_contract_not_found" -> "Waiting for the NIMS page to load…"
-            "investigation_module_not_found" -> "Unable to locate the Investigation menu."
-            "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
-            else -> "Checking current NIMS page…"
-        }
-    }
-
     private fun cancelNavigation() {
-        navigationGeneration += 1
         navigationJob?.cancel()
         navigationJob = null
         navigationInProgress = false
@@ -493,10 +427,10 @@ class MainActivity : ComponentActivity() {
             val rows = DiagnosePageContract.viewReportRows(json)
             val blocked = DiagnosePageContract.blockedFrames(json)
             val reachable = DiagnosePageContract.reachableDocuments(json)
-            if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+            if (rows > 0 && appStateValue in PRE_REPORT_STATES) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             } else if (rows == 0 && blocked > 0) {
-                setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
+                setState(AppState.ERROR, "Advanced top-frame diagnostics cannot inspect the owning report frame ($blocked blocked, $reachable reachable). Keep the result list visible and use Analyze Results.")
             }
             log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
         }
@@ -530,40 +464,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Receives the report-frame announcement posted by nimsAndroidFrameBridge.js
-    // from whichever frame (even cross-origin) actually contains the result rows.
+    // Receives passive page-state and report-row announcements from the frame
+    // that actually owns the rendered NIMS content, including cross-origin frames.
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
-            "nims_runtime_ready" -> {
-                val path = json.optString("path").take(180)
-                val jqueryVersion = json.optString("jqueryVersion").take(24)
-                val ready = json.optBoolean("dateTimeReady") &&
-                    (!path.startsWith("/HISInvestigationG5/") || json.optBoolean("jqueryPresent"))
-                log("Runtime frame=$path ready=$ready jquery=${jqueryVersion.ifBlank { "none" }} fallback=${json.optBoolean("jqueryFallbackUsed")} offset=${json.optBoolean("offsetPatched")} tab=${json.optBoolean("ajaxCompleteTabPatched")}")
-                if (ready && path.startsWith("/HISInvestigationG5/") && appStateValue == AppState.HELPER_READY && activeProcessingJob?.isActive != true) {
-                    setState(AppState.HELPER_READY, "NIMS Investigation runtime ready. Continue to the CR-wise report page.")
+            "nims_page_state" -> {
+                if (activeProcessingJob?.isActive == true) return
+                val pageKind = json.optString("pageKind")
+                val reportCount = json.optInt("reportCount")
+                when (pageKind) {
+                    "login" -> setState(AppState.HELPER_READY, "Login to NIMS manually.")
+                    "portal" -> if (appStateValue in PRE_REPORT_STATES) {
+                        setState(
+                            AppState.HELPER_READY,
+                            "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
+                        )
+                    }
+                    "cr_search" -> {
+                        crossFrameReport = null
+                        mapping = null
+                        mappingValidated = false
+                        setState(AppState.REPORT_PAGE_READY, "CR search ready. Enter the CR number and submit it in NIMS.")
+                    }
+                    "cr_results" -> setState(
+                        AppState.REPORT_PAGE_READY,
+                        "Report list detected ($reportCount visible). Tap Analyze Results."
+                    )
                 }
-                return
-            }
-            "nims_runtime_error" -> {
-                val path = json.optString("path").take(180)
-                val detail = json.optString("detail", "WebView runtime error").take(160)
-                log("Runtime error frame=$path detail=$detail")
-                if (!detail.contains("without a matching iframe", ignoreCase = true)) {
-                    setState(AppState.ERROR, "NIMS WebView runtime error. Reload the page and retry.")
-                }
-                return
-            }
-            "nims_frame_debug" -> {
-                val errs = json.optJSONArray("errors")
-                val errStr = if (errs != null && errs.length() > 0) {
-                    " err=" + (0 until errs.length()).joinToString("; ") { errs.optString(it) }
-                } else ""
-                log(
-                    "FRAME ${json.optString("url")}: children=${json.optInt("children")} " +
-                        "text=${json.optInt("textLen")} h=${json.optInt("height")}$errStr"
-                )
                 return
             }
             "nims_report_frame" -> { /* fall through to handling below */ }
@@ -575,8 +503,8 @@ class MainActivity : ComponentActivity() {
         val hasTemplate = json.optJSONObject("template") != null
         log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
         if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
-            appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Current Results.")
+            appStateValue in PRE_REPORT_STATES) {
+            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Results.")
         }
     }
 
@@ -1102,6 +1030,11 @@ class MainActivity : ComponentActivity() {
         private const val DESKTOP_CHROME_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
+        private val PRE_REPORT_STATES = setOf(
+            AppState.NEED_HELPER_SETTINGS,
+            AppState.HELPER_READY,
+            AppState.NIMS_LOGIN
+        )
     }
 }
 
@@ -1282,27 +1215,50 @@ private fun NimsWebViewScreen(
     onCancelProcessing: () -> Unit,
     logText: String
 ) {
+    var showAdvanced by remember { mutableStateOf(false) }
     Column(modifier) {
         StatusCard(state)
-        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             item { OutlinedButton(onClick = onBack) { Text("Back") } }
             item { OutlinedButton(onClick = onForward) { Text("Forward") } }
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
             item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
-            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
-            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
-            item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR / Analyze") } }
-            item { Button(onClick = onDiagnose) { Text("Diagnose") } }
-            item { Button(onClick = onDiscover) { Text("Discover") } }
-            item { Button(onClick = onTestOne) { Text("Test One") } }
-            item { Button(onClick = onFast) { Text("Fast") } }
-            item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
-            item { Button(onClick = onFull) { Text("Full") } }
-            if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
+            item {
+                Button(
+                    onClick = onOpenCrReports,
+                    enabled = !navigationInProgress && state != AppState.FETCHING
+                ) { Text("Analyze Results") }
+            }
+            item {
+                OutlinedButton(onClick = { showAdvanced = !showAdvanced }) {
+                    Text(if (showAdvanced) "Hide tools" else "Advanced tools")
+                }
+            }
+            if (state == AppState.FETCHING) {
+                item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
+            }
+        }
+        if (showAdvanced) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear session") } }
+                item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
+                item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+                item { OutlinedButton(onClick = onDiagnose) { Text("Diagnose") } }
+                item { OutlinedButton(onClick = onDiscover) { Text("Discover") } }
+                item { OutlinedButton(onClick = onTestOne) { Text("Test one") } }
+                item { OutlinedButton(onClick = onFast) { Text("Fast") } }
+                item { OutlinedButton(onClick = onCulturesOnly) { Text("Cultures") } }
+                item { OutlinedButton(onClick = onFull) { Text("Full") } }
+            }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
-        if (logText.isNotBlank()) {
+        if (showAdvanced && logText.isNotBlank()) {
             Text(
                 logText.takeLast(1200),
                 Modifier
@@ -1502,10 +1458,10 @@ private fun StatusCard(state: AppState) {
         Text(
             when (state) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
-                AppState.HELPER_READY -> "Login to NIMS manually."
-                AppState.NIMS_LOGIN -> "Open the report page after login."
-                AppState.REPORT_PAGE_READY -> "Enter the CR number if needed; after the report list appears, tap Open CR / Analyze."
-                AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
+                AppState.HELPER_READY -> "Login, then navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
+                AppState.NIMS_LOGIN -> "Use the normal NIMS menu to open the CR-wise report page."
+                AppState.REPORT_PAGE_READY -> "Enter and submit the CR number in NIMS. When View Report rows appear, tap Analyze Results."
+                AppState.MAPPING_DISCOVERED -> "Report request validated. Analysis can continue."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."
                 AppState.ERROR -> "Review error and retry the relevant step."

@@ -98,20 +98,27 @@ The extension still performs direct NIMS report fetching in the browser session.
 
 ### Android WebView Mobile Mode
 
-The Android app lives under `mobile/android/`. It is a single-activity Kotlin WebView app that loads NIMS, requires manual login, injects controlled shared JavaScript from `shared/nims-web/nimsReportCore.js`, fetches reports with the active WebView cookie session, and processes supported reports locally on the device.
+The Android app under `mobile/android/` separates the NIMS portal from the native
+results UI. NIMS remains responsible for manual login, menu navigation, CR-number
+entry, form submission, and rendering. A passive all-frame observer detects the
+genuine CR search/result frame and sends sanitized report references to Android.
+The app then fetches supported reports with the authenticated WebView session,
+processes them on-device, and presents Reports, Trends, Cultures, and Summary.
 
-Default workflow:
+Normal workflow:
 
-1. Install the debug-signed APK on the phone.
-2. Open NIMS in the in-app WebView.
-3. Login manually.
-4. Tap `Open CR Reports`.
-5. Wait for `CR-wise report page ready. Enter the CR number.`
-6. Enter the CR number manually in NIMS.
-7. Submit the NIMS search form manually and wait for the report list.
-8. Run `Diagnose Page` → `Discover Mapping` → `Test One` → `Fast`, `Cultures`, or `Full`.
+1. Install the debug-signed APK.
+2. Log in to NIMS manually.
+3. Navigate in NIMS to **Investigation → CR No Wise Result Report Printing New**.
+4. Enter and submit the CR number manually.
+5. Keep the result table with visible **View Report** rows on screen.
+6. Tap **Analyze Results**.
+7. Review the native result tabs and verify values against source reports.
 
-Android defaults to **On-device only**. No Railway URL or API key is required. Text/HTML reports and text-based PDFs are processed locally; image-only PDFs are unsupported because OCR is not included. Raw reports, raw HTML, raw PDF bytes, cookies, full report URLs, query strings, hidden form values, and transient report filenames are not persisted or uploaded. Summary JSON and physician notes are encrypted locally with Android Keystore AES/GCM. Railway modes remain optional legacy/advanced functionality only.
+The Android runtime does not bundle jQuery, patch `date_time`, wrap
+`ajaxCompleteTab`, click menus, automate login, or navigate directly to internal
+NIMS endpoints. Railway remains optional advanced fallback; on-device processing
+is the default. Image-only PDFs remain unsupported because OCR is not enabled.
 
 Android build steps:
 
