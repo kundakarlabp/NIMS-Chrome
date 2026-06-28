@@ -1,9 +1,14 @@
-// Android-only compatibility adapter for the live NIMS tab contract.
+// Android-only compatibility adapter for the live NIMS WebView contract.
 //
-// NIMS creates report iframes with onLoad="ajaxCompleteTab();" but the page
-// function expects ajaxCompleteTab(iframe). This adapter supplies only the
-// iframe that has just emitted its load event. It does not inject jQuery,
-// alter EasyUI, click menus, call callMenu, or patch the report core.
+// The live Android screenshots confirm three independent legacy-page defects:
+//   1. loginLogin.action calls date_time() although the global is absent.
+//   2. tabmenu.js dereferences $(...).offset().left when offset() is undefined.
+//   3. addTab emits onLoad="ajaxCompleteTab();" although ajaxCompleteTab expects
+//      the loaded iframe argument.
+//
+// This adapter repairs only those contracts. It never clicks a menu, calls
+// callMenu, changes EasyUI state, replaces an existing jQuery instance, or
+// modifies the report extraction core.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
@@ -14,6 +19,39 @@
   } catch (e) {
     return;
   }
+
+  function ensureDateTime() {
+    try {
+      if (typeof w.date_time !== "function") {
+        w.date_time = function () { return ""; };
+        w.date_time.__nimsCompatibilityFallback = true;
+      }
+    } catch (e) { /* page may be replacing globals while loading */ }
+  }
+
+  function patchJqueryOffset() {
+    try {
+      var jq = w.jQuery;
+      if (typeof jq !== "function" || !jq.fn || typeof jq.fn.offset !== "function") return;
+      if (jq.fn.offset.__nimsSafeOffset) return;
+      var original = jq.fn.offset;
+      var wrapped = function () {
+        var value = original.apply(this, arguments);
+        if (value && typeof value === "object") {
+          if (typeof value.left !== "number") value.left = 0;
+          if (typeof value.top !== "number") value.top = 0;
+          return value;
+        }
+        return { left: 0, top: 0 };
+      };
+      wrapped.__nimsSafeOffset = true;
+      wrapped.__nimsOriginal = original;
+      jq.fn.offset = wrapped;
+    } catch (e) { /* no compatible jQuery in this frame yet */ }
+  }
+
+  ensureDateTime();
+  patchJqueryOffset();
 
   var lastLoadedFrame = null;
   var lastLoadedAt = 0;
@@ -43,8 +81,7 @@
     lastLoadedAt = Date.now();
   }
 
-  // load does not bubble, but capture observes iframe loads before the inline
-  // onLoad handler executes in Chromium/WebView.
+  // load does not bubble; capture sees the iframe before its inline onLoad runs.
   w.document.addEventListener("load", rememberLoadedFrame, true);
 
   function recentLoadedFrame() {
@@ -73,11 +110,7 @@
     var wrapped = function (obj) {
       var receiver = this;
       var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
-      if (!frame) {
-        // The original call is known to be non-fatal and would throw here.
-        // Skip it rather than retrying forever or choosing a stale iframe.
-        return undefined;
-      }
+      if (!frame) return undefined;
       var attempts = 0;
       function invoke() {
         attempts += 1;
@@ -96,7 +129,9 @@
     return wrapped;
   }
 
-  function patchAvailableFunction() {
+  function patchAvailableFunctions() {
+    ensureDateTime();
+    patchJqueryOffset();
     try {
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
         w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
@@ -104,9 +139,9 @@
     } catch (e) { /* page may be replacing globals while loading */ }
   }
 
-  [0, 50, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
-    w.setTimeout(patchAvailableFunction, delay);
+  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(function (delay) {
+    w.setTimeout(patchAvailableFunctions, delay);
   });
-  w.addEventListener("DOMContentLoaded", patchAvailableFunction, { once: true });
-  w.addEventListener("load", patchAvailableFunction, { once: true });
+  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
+  w.addEventListener("load", patchAvailableFunctions, { once: true });
 })(typeof window !== "undefined" ? window : null);
