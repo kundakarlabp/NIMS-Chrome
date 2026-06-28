@@ -6,6 +6,7 @@ plugins {
 
 val jqueryWebJar by configurations.creating
 val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
+val materializedSourceAssets = layout.buildDirectory.dir("generated/materializedSourceAssets")
 
 val prepareBundledJquery by tasks.registering(Copy::class) {
     from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
@@ -16,6 +17,12 @@ val prepareBundledJquery by tasks.registering(Copy::class) {
     into(generatedWebAssets)
 }
 
+val captureMaterializedSource by tasks.registering(Copy::class) {
+    dependsOn(rootProject.tasks.named("prepareAndroidSource"))
+    from("src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt")
+    into(materializedSourceAssets.map { it.dir("materialized") })
+}
+
 android {
     namespace = "org.kundakarlab.nimsfastsummarymobile"
     compileSdk = 35
@@ -24,8 +31,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.8.1"
+        versionCode = 22
+        versionName = "0.8.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -33,7 +40,8 @@ android {
         getByName("main").assets.srcDirs(
             "src/main/assets",
             "../../../shared/nims-web",
-            generatedWebAssets
+            generatedWebAssets,
+            materializedSourceAssets
         )
     }
 
@@ -64,6 +72,7 @@ tasks.register("verifyNimsCoreAsset") {
 tasks.named("preBuild") {
     dependsOn("verifyNimsCoreAsset")
     dependsOn(prepareBundledJquery)
+    dependsOn(captureMaterializedSource)
 }
 
 dependencies {
