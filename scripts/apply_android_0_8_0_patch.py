@@ -82,6 +82,37 @@ def main() -> None:
 
     text = replace_once(
         text,
+        'WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("*"))',
+        'WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))',
+        "bridge origin restriction",
+    )
+
+    text = replace_once(
+        text,
+        '                        val injected = "try{\\n$payload\\n}catch(e){if(window.console&&console.error)console.error(\'NIMS inject failed\',e);}"',
+        '''                        val injected = """
+                            (function(w){
+                              var path = String(w.location && w.location.pathname || "");
+                              if (!/^\\/HISInvestigationG5\\//i.test(path)) return;
+                              try {
+                            $payload
+                              } catch (error) {
+                                if (w.console && w.console.error) w.console.error("NIMS report-frame inject failed", error);
+                              }
+                            })(window);
+                        """.trimIndent()''',
+        "report-only document-start guard",
+    )
+
+    text = replace_once(
+        text,
+        'WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))',
+        'WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))',
+        "document-start origin restriction",
+    )
+
+    text = replace_once(
+        text,
         '        evaluateJson("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { rawJson ->',
         '        evaluateJson("JSON.stringify((window.NimsAndroidNavigation || NimsReportCore).navigateToCrWiseReports(document))") { rawJson ->',
         "safe navigation adapter",
