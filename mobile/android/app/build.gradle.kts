@@ -6,7 +6,6 @@ plugins {
 
 val jqueryWebJar by configurations.creating
 val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
-val materializedSourceAssets = layout.buildDirectory.dir("generated/materializedSourceAssets")
 
 val prepareBundledJquery by tasks.registering(Copy::class) {
     from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
@@ -15,12 +14,6 @@ val prepareBundledJquery by tasks.registering(Copy::class) {
         includeEmptyDirs = false
     }
     into(generatedWebAssets)
-}
-
-val captureMaterializedSource by tasks.registering(Copy::class) {
-    dependsOn(rootProject.tasks.named("prepareAndroidSource"))
-    from("src/main/java/org/kundakarlab/nimsfastsummarymobile/MainActivity.kt")
-    into(materializedSourceAssets.map { it.dir("materialized") })
 }
 
 android {
@@ -40,8 +33,7 @@ android {
         getByName("main").assets.srcDirs(
             "src/main/assets",
             "../../../shared/nims-web",
-            generatedWebAssets,
-            materializedSourceAssets
+            generatedWebAssets
         )
     }
 
@@ -60,19 +52,26 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     kotlinOptions.jvmTarget = "17"
 }
 
-tasks.register("verifyNimsCoreAsset") {
+tasks.register("verifyNimsRuntimeAssets") {
+    dependsOn(prepareBundledJquery)
     doLast {
-        val core = rootProject.file("../../shared/nims-web/nimsReportCore.js")
-        check(core.exists()) {
-            "Missing shared/nims-web/nimsReportCore.js"
+        val shared = rootProject.file("../../shared/nims-web")
+        listOf(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        ).forEach { name ->
+            check(shared.resolve(name).isFile) { "Missing shared NIMS runtime asset: $name" }
+        }
+        check(generatedWebAssets.get().file("jquery-3.7.1.min.js").asFile.isFile) {
+            "Missing generated jQuery 3.7.1 runtime asset"
         }
     }
 }
 
 tasks.named("preBuild") {
-    dependsOn("verifyNimsCoreAsset")
-    dependsOn(prepareBundledJquery)
-    dependsOn(captureMaterializedSource)
+    dependsOn("verifyNimsRuntimeAssets")
 }
 
 dependencies {
