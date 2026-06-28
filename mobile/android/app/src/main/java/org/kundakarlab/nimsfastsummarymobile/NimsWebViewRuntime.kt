@@ -11,6 +11,13 @@ internal data class NimsRuntimeInstallResult(
     val error: String = ""
 )
 
+/**
+ * Installs the passive, all-frame NIMS observer at document start.
+ *
+ * The runtime deliberately does not inject jQuery, define NIMS globals, wrap
+ * portal functions, click menus, submit forms, or navigate. NIMS owns login,
+ * navigation, and rendering; Android only observes page state and report rows.
+ */
 internal object NimsWebViewRuntime {
     internal val allowedOrigins = setOf(
         "https://www.nimsts.edu.in",
@@ -30,16 +37,12 @@ internal object NimsWebViewRuntime {
         }
 
         val assets = webView.context.assets
-        val jquery = readAsset(assets, "jquery-3.7.1.min.js")
-            ?: return NimsRuntimeInstallResult(false, error = "Missing jQuery runtime asset.")
-        val shim = readAsset(assets, "nimsWebviewShim.js")
-            ?: return NimsRuntimeInstallResult(false, error = "Missing WebView compatibility asset.")
         val core = readAsset(assets, "nimsReportCore.js")
             ?: return NimsRuntimeInstallResult(false, error = "Missing report core asset.")
         val utils = readAsset(assets, "contentUtils.js")
             ?: return NimsRuntimeInstallResult(false, error = "Missing report utility asset.")
-        val bridge = readAsset(assets, "nimsAndroidFrameBridge.js")
-            ?: return NimsRuntimeInstallResult(false, error = "Missing frame bridge asset.")
+        val observer = readAsset(assets, "nimsPassiveObserver.js")
+            ?: return NimsRuntimeInstallResult(false, error = "Missing passive observer asset.")
 
         return runCatching {
             WebViewCompat.addWebMessageListener(webView, "nimsAndroidBridge", allowedOrigins) { _, message, _, _, _ ->
@@ -47,10 +50,10 @@ internal object NimsWebViewRuntime {
             }
             val handler = WebViewCompat.addDocumentStartJavaScript(
                 webView,
-                buildPayload(jquery, shim, core, utils, bridge),
+                buildPayload(core, utils, observer),
                 allowedOrigins
             )
-            onLog("NIMS document-start runtime registered")
+            onLog("NIMS passive all-frame observer registered")
             NimsRuntimeInstallResult(true, handler)
         }.getOrElse { error ->
             NimsRuntimeInstallResult(false, error = "Runtime registration failed: ${error.message ?: error.javaClass.simpleName}")
@@ -58,31 +61,21 @@ internal object NimsWebViewRuntime {
     }
 
     internal fun buildPayload(
-        jquery: String,
-        shim: String,
         core: String,
         utils: String,
-        bridge: String
+        observer: String
     ): String = buildString {
         appendLine("(function(w){")
         appendLine("try{")
         appendLine("var h=String(w.location&&w.location.hostname||'');")
-        appendLine("var p=String(w.location&&w.location.pathname||'');")
         appendLine("if(!/^(www\\.)?nimsts\\.edu\\.in$/i.test(h))return;")
-        appendLine("if(/^\\/HISInvestigationG5\\//i.test(p)&&typeof w.jQuery==='undefined'){")
-        appendLine(jquery)
-        appendLine("w.__nimsBundledJqueryVersion=w.jQuery&&w.jQuery.fn?String(w.jQuery.fn.jquery||'unknown'):'missing';")
-        appendLine("}")
-        appendLine("}catch(e){if(w.console&&w.console.error)w.console.error('NIMS jQuery bootstrap failed',e);}")
-        appendLine("})(window);")
-        appendLine("try{")
-        appendLine(shim)
-        appendLine("}catch(e){if(window.console&&console.error)console.error('NIMS compatibility shim failed',e);}")
+        appendLine("}catch(e){return;}")
         appendLine("try{")
         appendLine(core)
         appendLine(utils)
-        appendLine(bridge)
-        appendLine("}catch(e){if(window.console&&console.error)console.error('NIMS report reader injection failed',e);}")
+        appendLine(observer)
+        appendLine("}catch(e){if(w.console&&w.console.error)w.console.error('NIMS passive observer injection failed',e);}")
+        appendLine("})(window);")
     }
 
     private fun readAsset(assetManager: android.content.res.AssetManager, name: String): String? =
