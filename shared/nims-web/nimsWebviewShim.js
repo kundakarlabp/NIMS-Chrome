@@ -1,9 +1,12 @@
-// Android-only compatibility adapter for the live NIMS tab contract.
+// Android-only compatibility adapter for the live NIMS WebView runtime.
 //
-// NIMS creates report iframes with onLoad="ajaxCompleteTab();" but the page
-// function expects ajaxCompleteTab(iframe). This adapter supplies only the
-// iframe that has just emitted its load event. It does not inject jQuery,
-// alter EasyUI, click menus, call callMenu, or patch the report core.
+// The NIMS pages currently expose three WebView-only failures seen on-device:
+// 1. date_time is referenced before its defining asset is available;
+// 2. tabmenu.js reads .offset().left even when the selected element is absent;
+// 3. dynamically-created iframes call ajaxCompleteTab() without the iframe arg.
+//
+// This adapter fixes only those runtime contracts. It does not click menus,
+// submit forms, read credentials, or alter the report-extraction workflow.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
@@ -14,6 +17,56 @@
   } catch (e) {
     return;
   }
+
+  if (typeof w.date_time !== "function") {
+    w.date_time = function () { return ""; };
+  }
+
+  function patchOffset(jq) {
+    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.__nimsSafeOffset) return false;
+    var original = jq.fn.offset;
+    jq.fn.offset = function () {
+      var value;
+      try {
+        value = original.apply(this, arguments);
+      } catch (error) {
+        if (arguments.length) throw error;
+        value = null;
+      }
+      return value == null && arguments.length === 0 ? { top: 0, left: 0 } : value;
+    };
+    jq.fn.__nimsSafeOffset = true;
+    return true;
+  }
+
+  // Patch the bundled fallback immediately. Then patch one subsequent jQuery
+  // assignment, which covers the page replacing the fallback with its own copy.
+  patchOffset(w.jQuery || w.$);
+  (function armNextJqueryAssignment() {
+    var descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); } catch (e) { descriptor = null; }
+    if (descriptor && descriptor.configurable === false) return;
+    var current = w.jQuery;
+    try {
+      Object.defineProperty(w, "jQuery", {
+        configurable: true,
+        enumerable: descriptor ? descriptor.enumerable !== false : true,
+        get: function () { return current; },
+        set: function (value) {
+          current = value;
+          patchOffset(value);
+          try {
+            Object.defineProperty(w, "jQuery", {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: value
+            });
+          } catch (e) { /* keep the accessor if the page prevents replacement */ }
+        }
+      });
+    } catch (e) { /* bounded polling below still patches later copies */ }
+  })();
 
   var lastLoadedFrame = null;
   var lastLoadedAt = 0;
@@ -43,8 +96,6 @@
     lastLoadedAt = Date.now();
   }
 
-  // load does not bubble, but capture observes iframe loads before the inline
-  // onLoad handler executes in Chromium/WebView.
   w.document.addEventListener("load", rememberLoadedFrame, true);
 
   function recentLoadedFrame() {
@@ -73,11 +124,7 @@
     var wrapped = function (obj) {
       var receiver = this;
       var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
-      if (!frame) {
-        // The original call is known to be non-fatal and would throw here.
-        // Skip it rather than retrying forever or choosing a stale iframe.
-        return undefined;
-      }
+      if (!frame) return undefined;
       var attempts = 0;
       function invoke() {
         attempts += 1;
@@ -96,7 +143,8 @@
     return wrapped;
   }
 
-  function patchAvailableFunction() {
+  function patchAvailableFunctions() {
+    try { patchOffset(w.jQuery || w.$); } catch (e) { /* page still loading */ }
     try {
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
         w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
@@ -104,9 +152,9 @@
     } catch (e) { /* page may be replacing globals while loading */ }
   }
 
-  [0, 50, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
-    w.setTimeout(patchAvailableFunction, delay);
+  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
+    w.setTimeout(patchAvailableFunctions, delay);
   });
-  w.addEventListener("DOMContentLoaded", patchAvailableFunction, { once: true });
-  w.addEventListener("load", patchAvailableFunction, { once: true });
+  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
+  w.addEventListener("load", patchAvailableFunctions, { once: true });
 })(typeof window !== "undefined" ? window : null);
