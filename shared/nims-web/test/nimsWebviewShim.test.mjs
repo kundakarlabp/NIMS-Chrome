@@ -31,6 +31,7 @@ function run(extra = {}) {
     location: {
       href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action',
       hostname: 'www.nimsts.edu.in',
+      pathname: '/AHIMSG5/hissso/loginLogin.action',
       protocol: 'https:',
     },
     addEventListener(type, fn) {
@@ -44,7 +45,7 @@ function run(extra = {}) {
   win.document = document;
   win.top = win;
   document.defaultView = win;
-  const context = { window: win, URL, Date };
+  const context = { window: win, URL, Date, JSON, Object };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -78,13 +79,13 @@ test('installs only the confirmed date_time and offset compatibility guards', ()
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
 });
 
-test('preserves valid offset values and fills only missing coordinates', () => {
+test('preserves valid offset objects', () => {
   const jq = jqueryWithOffset({ left: 12 });
   const win = run({ jQuery: jq, $: jq });
   win.flush();
   const offset = win.jQuery.fn.offset();
   assert.equal(offset.left, 12);
-  assert.equal(offset.top, 0);
+  assert.equal(offset.top, undefined);
 });
 
 test('patches a jQuery instance loaded after document start', () => {
@@ -147,7 +148,7 @@ test('does not install on non-NIMS origins', () => {
   const original = () => { calls += 1; };
   const win = run({
     document,
-    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', protocol: 'https:' },
+    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', pathname: '/app', protocol: 'https:' },
     ajaxCompleteTab: original,
   });
   win.flush();
