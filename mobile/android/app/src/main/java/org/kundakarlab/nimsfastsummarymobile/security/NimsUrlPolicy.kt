@@ -41,8 +41,9 @@ object NimsUrlPolicy {
      */
     fun isTrustedLegacyPageScript(currentPageUrl: String, requestedUrl: String): Boolean {
         if (classifyUrl(currentPageUrl) != UrlClassification.ALLOWED_NIMS) return false
-        if (requestedUrl.length !in 12..4096 || requestedUrl.any { it.code < 0x20 }) return false
-        return requestedUrl.trimStart().startsWith("javascript:", ignoreCase = true)
+        val trimmed = requestedUrl.trimStart()
+        if (trimmed.length !in 11..4096 || trimmed.any { it.code < 0x20 }) return false
+        return trimmed.startsWith("javascript:", ignoreCase = true)
     }
 
     fun isTrustedNimsHost(uri: Uri): Boolean = uri.scheme.equals("https", ignoreCase = true) &&

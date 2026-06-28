@@ -58,7 +58,8 @@
   }
 
   function hasPasswordInput(doc) {
-    return Boolean(doc && doc.querySelector && doc.querySelector("input[type='password']"));
+    if (!doc || !doc.querySelectorAll) return false;
+    return Array.prototype.slice.call(doc.querySelectorAll("input[type='password']")).some(isVisible);
   }
 
   function crInput(doc) {
@@ -162,6 +163,10 @@
   function extractReportRows(doc) {
     if (!doc || !doc.querySelectorAll || !isLikelyReportDocument(doc)) return [];
     var allRows = Array.prototype.slice.call(doc.querySelectorAll("tr"));
+    var rowIndexByElement = new Map();
+    for (var rowIndex = 0; rowIndex < allRows.length; rowIndex += 1) {
+      rowIndexByElement.set(allRows[rowIndex], rowIndex);
+    }
     var clickNodes = Array.prototype.slice.call(doc.querySelectorAll("[onclick]"));
     var reportButtons = [];
     for (var buttonIndex = 0; buttonIndex < clickNodes.length; buttonIndex += 1) {
@@ -176,14 +181,14 @@
       var row = closestRow(button);
       if (!token || !row || !isVisible(row) || seen[token]) continue;
       seen[token] = true;
-      var rowIndex = allRows.indexOf(row);
-      if (rowIndex < 0) continue;
+      var currentRowIndex = rowIndexByElement.get(row);
+      if (typeof currentRowIndex !== "number") continue;
       var cells = Array.prototype.slice.call(row.cells || []).map(nodeText);
       var rowText = nodeText(row);
       var reportName = guessReportName(cells, rowText);
       var tags = inferReportTags(reportName + " " + rowText);
       results.push({
-        row_index: rowIndex,
+        row_index: currentRowIndex,
         view_report_button_index: index,
         date_sent: guessDate(cells, rowText),
         department: guessDepartment(cells),
