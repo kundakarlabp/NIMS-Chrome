@@ -6,7 +6,11 @@ plugins {
 
 val prepareAndroidSource by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir.parentFile.parentFile)
-    commandLine("python3", "scripts/apply_android_0_8_1_patch.py")
+    commandLine(
+        "bash",
+        "-lc",
+        "python3 scripts/fix_materializer_raw_string.py && python3 scripts/apply_android_0_8_1_patch.py"
+    )
 }
 
 subprojects {
