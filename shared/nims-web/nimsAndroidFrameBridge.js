@@ -222,12 +222,17 @@
     }
   }
 
+  var clearPosted = false;
   function postClear(reason) {
-    return post({
-      type: "nims_report_clear",
+    if (clearPosted) return true;
+    clearPosted = post({
+      type: "nims_report_frame",
       href: safePath(root.location && root.location.href),
-      reason: String(reason || "navigation").slice(0, 60)
+      rowCount: 0,
+      rows: [],
+      clearReason: String(reason || "navigation").slice(0, 60)
     });
+    return clearPosted;
   }
 
   function isCrSearchForm(form) {
@@ -261,6 +266,7 @@
       return;
     }
     hadReport = true;
+    clearPosted = false;
     var key = frameReportKey(report);
     if (key === lastKey) return;
     lastKey = key;
