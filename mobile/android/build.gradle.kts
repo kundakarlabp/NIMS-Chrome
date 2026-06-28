@@ -6,7 +6,7 @@ plugins {
 
 val prepareAndroidRecoverySource by tasks.registering(Exec::class) {
     workingDir(rootProject.projectDir.parentFile.parentFile)
-    commandLine("python3", "scripts/apply_android_0_7_8_patch.py")
+    commandLine("python3", "scripts/apply_android_0_8_1_patch.py")
 }
 
 subprojects {
