@@ -24,8 +24,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.8.1"
+        versionCode = 22
+        versionName = "0.8.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -54,16 +54,31 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 tasks.register("verifyNimsCoreAsset") {
     doLast {
-        val core = rootProject.file("../../shared/nims-web/nimsReportCore.js")
-        check(core.exists()) {
-            "Missing shared/nims-web/nimsReportCore.js"
+        val shared = rootProject.file("../../shared/nims-web")
+        listOf(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        ).forEach { name ->
+            check(shared.resolve(name).isFile) { "Missing shared/nims-web/$name" }
+        }
+    }
+}
+
+tasks.register("verifyBundledWebAssets") {
+    dependsOn(prepareBundledJquery)
+    doLast {
+        val jquery = generatedWebAssets.get().file("jquery-3.7.1.min.js").asFile
+        check(jquery.isFile && jquery.length() > 80_000L) {
+            "Missing or incomplete bundled jquery-3.7.1.min.js"
         }
     }
 }
 
 tasks.named("preBuild") {
     dependsOn("verifyNimsCoreAsset")
-    dependsOn(prepareBundledJquery)
+    dependsOn("verifyBundledWebAssets")
 }
 
 dependencies {
