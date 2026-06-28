@@ -1,0 +1,33 @@
+name: Apply PR 60 review fixes
+
+on:
+  push:
+    branches:
+      - refactor/android-passive-portal
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[review-fixes-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/android-passive-portal
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/apply_pr60_review_fixes.py
+      - name: Commit final review fixes and remove migration files
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/apply_pr60_review_fixes.py .github/workflows/apply-pr60-review-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(android): preserve row indices and explicit states [review-fixes-applied]"
+          git push origin HEAD:refactor/android-passive-portal
