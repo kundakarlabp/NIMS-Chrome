@@ -8,16 +8,32 @@ import java.io.File
 
 class NimsReportTemplateTest {
     @Test
-    fun directReportUrlUsesHmodeAndFileName() {
+    fun directReportUrlUsesVerifiedGetContract() {
         val template = ReportTemplate(
             origin = "https://www.nimsts.edu.in",
-            pathname = "/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt"
+            pathname = NimsReportTemplate.VERIFIED_REPORT_PATH
         )
-        val url = NimsReportTemplate.directReportUrl(template, "ABC 123")
-        assertTrue(url.contains("hmode=PRINTREPORT"))
-        assertTrue(url.contains("fileName=ABC+123"))
-        assertFalse(url.contains("?mode=PRINTREPORT"))
-        assertFalse(url.contains("&mode=PRINTREPORT"))
+        val token = "123456_789012_20260628153000.pdf"
+        val url = NimsReportTemplate.directReportUrl(template, token)
+        assertEquals(
+            "https://www.nimsts.edu.in${NimsReportTemplate.VERIFIED_REPORT_PATH}?hmode=PRINTREPORT&fileName=$token",
+            url
+        )
+        assertFalse(url.contains("/HISClinical/"))
+    }
+
+    @Test
+    fun directReportUrlRejectsUnverifiedEndpointAndUnsafeTokens() {
+        val valid = ReportTemplate(
+            origin = "https://www.nimsts.edu.in",
+            pathname = NimsReportTemplate.VERIFIED_REPORT_PATH
+        )
+        assertTrue(runCatching { NimsReportTemplate.directReportUrl(valid, "../secret.pdf") }.isFailure)
+        assertTrue(runCatching { NimsReportTemplate.directReportUrl(valid, "https://example.com/x.pdf") }.isFailure)
+        assertTrue(runCatching { NimsReportTemplate.directReportUrl(valid, "not-a-pdf.txt") }.isFailure)
+
+        val wrongPath = valid.copy(pathname = "/HISClinical/investigationDesk/viewInvestigation.cnt")
+        assertTrue(runCatching { NimsReportTemplate.directReportUrl(wrongPath, "123_456.pdf") }.isFailure)
     }
 
     @Test
