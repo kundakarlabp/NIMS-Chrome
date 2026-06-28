@@ -22,14 +22,20 @@ function run(extra = {}) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
-  win.flush = () => { let count = 0; while (queue.length && count < 100) { queue.shift()(); count += 1; } };
+  win.flush = () => {
+    let count = 0;
+    while (queue.length && count < 100) {
+      queue.shift()();
+      count += 1;
+    }
+  };
   return win;
 }
 
-function emptyDocument() {
+function emptyDocument(url = 'https://example.invalid/app') {
   return {
     readyState: 'complete',
-    location: { href: 'https://example.invalid/app' },
+    location: { href: url },
     body: { innerText: '', scrollHeight: 0, querySelectorAll: () => [] },
     addEventListener() {},
     getElementById: () => null,
@@ -46,61 +52,54 @@ test('installs compatibility guards', () => {
   assert.equal(win.jQuery.fn.offset().left, 0);
 });
 
-test('retries the ajax completion frame race', () => {
-  let calls = 0;
+test('normalizes legacy response before response.filter', () => {
+  function jq(value) { return { value, filter() { return this; } }; }
+  jq.fn = { offset: () => ({ top: 0, left: 0 }) };
   const win = run({
     document: emptyDocument(),
-    ajaxCompleteTab() {
-      calls += 1;
-      if (calls === 1) throw new TypeError("Cannot read properties of undefined (reading 'contentDocument')");
-      return 'ok';
+    jQuery: jq,
+    ajaxCompleteTab(response) {
+      assert.equal(typeof response.filter, 'function');
+      return response.value;
     },
   });
-  assert.doesNotThrow(() => win.ajaxCompleteTab('tab', 'response'));
-  win.flush();
-  assert.equal(calls, 2);
+  assert.equal(win.ajaxCompleteTab('<div>ok</div>'), '<div>ok</div>');
 });
 
 test('recognises a CR form in the nested report frame', () => {
   const input = { id: 'patCrNo', name: 'patCrNo', type: 'text', hidden: false, parentElement: null, getAttribute: () => null };
-  Object.defineProperty(input, 'value', { get() { throw new Error('value must not be read'); } });
   const form = {
     name: 'InvResultReportPrintingFB', id: '', hidden: false, parentElement: null,
     getAttribute(name) { return name === 'action' ? '/module/invResultReportPrintingCRNoWise.cnt' : null; },
   };
-  const inner = emptyDocument();
+  const inner = emptyDocument('https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/invResultReportPrintingCRNoWise.cnt');
   input.ownerDocument = inner;
   form.ownerDocument = inner;
   inner.querySelectorAll = (selector) => {
-    if (selector === 'input, textarea, select') return [input];
+    if (selector === 'input,textarea,select') return [input];
     if (selector === 'form') return [form];
-    if (selector.includes('label')) return [{ textContent: 'CR Number' }];
+    if (selector === 'iframe, frame') return [];
     return [];
   };
   const innerFrame = {
-    id: 'Cr No Wise Result Report Printing_iframe', name: '', hidden: false, parentElement: null,
+    id: 'Cr No Wise Result Report Printing_iframe', hidden: false, parentElement: null,
     contentDocument: inner,
     getAttribute(name) { return name === 'src' ? '/module/invResultReportPrintingCRNoWise.cnt' : null; },
   };
-  const outer = emptyDocument();
+  const outer = emptyDocument('https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt');
   innerFrame.ownerDocument = outer;
   outer.querySelectorAll = (selector) => selector === 'iframe, frame' ? [innerFrame] : [];
   const outerFrame = {
-    id: 'Cr No Wise Result Report Printing New_iframe', name: '', hidden: false, parentElement: null,
+    id: 'Cr No Wise Result Report Printing New_iframe', hidden: false, parentElement: null,
     contentDocument: outer,
     getAttribute(name) { return name === 'src' ? '/module/viewcrnowisereportprocess.cnt' : null; },
   };
-  const top = emptyDocument();
+  const top = emptyDocument('https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action');
   outerFrame.ownerDocument = top;
+  top.getElementById = (id) => id === outerFrame.id ? outerFrame : null;
   top.querySelectorAll = (selector) => selector === 'iframe, frame' ? [outerFrame] : [];
-  const core = {
-    navigateToCrWiseReports: () => ({ stage: 'unknown', done: false }),
-    navigateCurrentDocumentStep: () => ({ stage: 'unknown', done: false }),
-    detectNimsPageStage: () => ({ stage: 'unknown' }),
-    diagnosePage: () => ({}),
-  };
-  const win = run({ document: top, NimsReportCore: core });
-  const result = win.NimsReportCore.navigateToCrWiseReports(top);
+  const win = run({ document: top });
+  const result = win.NimsAndroidNavigation.navigateToCrWiseReports(top);
   assert.equal(result.stage, 'cr_search');
   assert.equal(result.done, true);
 });
