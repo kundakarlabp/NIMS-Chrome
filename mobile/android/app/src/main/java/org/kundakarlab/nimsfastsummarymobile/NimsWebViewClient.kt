@@ -16,11 +16,20 @@ class NimsWebViewClient(
     private val onResourceError: (String) -> Unit = {}
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+        val requestedUrl = request.url.toString()
+
+        // NIMS is a legacy framed application and some menu anchors use
+        // javascript: pseudo-links. They execute in the already trusted NIMS
+        // document and must not be mistaken for an external navigation.
+        if (NimsUrlPolicy.isTrustedLegacyPageScript(view.url.orEmpty(), requestedUrl)) {
+            return false
+        }
+
         when (NimsUrlPolicy.classify(request.url)) {
             UrlClassification.ALLOWED_NIMS -> return false
             UrlClassification.BLOCKED_NIMS -> {
                 val frame = if (request.isForMainFrame) "main" else "frame"
-                onResourceError("NIMS URL POLICY($frame): ${SafeUrl.stripQuery(request.url.toString())}")
+                onResourceError("NIMS URL POLICY($frame): ${SafeUrl.stripQuery(requestedUrl)}")
                 onBlockedInternalNavigation("blocked_internal_nims_path")
                 return true
             }
