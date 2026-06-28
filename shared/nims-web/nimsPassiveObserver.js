@@ -1,9 +1,9 @@
-// Passive Android WebView observer for NIMS.
+// Lightweight passive Android WebView observer for NIMS.
 //
-// This script runs in every approved NIMS frame. It observes the existing page,
-// classifies the current portal state, and announces sanitized report-row
-// metadata to Android. It never patches jQuery, defines NIMS globals, clicks
-// menus, submits forms, or changes navigation.
+// This script runs in every approved NIMS frame. It observes the page that NIMS
+// has already rendered and posts sanitized state/report metadata to Android. It
+// does not load helper libraries, patch portal functions, click, submit, or
+// navigate.
 (function (root) {
   "use strict";
 
@@ -13,6 +13,7 @@
     "invresultreportprintingcrnowise.cnt"
   ];
   var REPORT_PDF_PATH = "/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt";
+  var MAX_ROWS = 250;
 
   function safePath(value) {
     try {
@@ -37,17 +38,28 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
+  function nodeText(node) {
+    return compactText(node && (node.innerText || node.textContent || node.value || ""));
+  }
+
+  // Avoid getComputedStyle/layout reads: the legacy portal mutates large tables
+  // frequently and synchronous layout queries make WebView navigation sluggish.
   function isVisible(node) {
-    if (!node || node.hidden || node.isConnected === false) return false;
-    try {
-      var style = root.getComputedStyle ? root.getComputedStyle(node) : null;
-      if (style && (style.display === "none" || style.visibility === "hidden")) return false;
-    } catch (error) { /* visibility remains best effort */ }
+    var current = node;
+    var depth = 0;
+    while (current && depth < 8) {
+      if (current.hidden || String(current.getAttribute && current.getAttribute("aria-hidden") || "").toLowerCase() === "true") return false;
+      var style = String(current.getAttribute && current.getAttribute("style") || "").toLowerCase();
+      if (/display\s*:\s*none|visibility\s*:\s*hidden/.test(style)) return false;
+      current = current.parentElement;
+      depth += 1;
+    }
     return true;
   }
 
   function hasPasswordInput(doc) {
-    return Boolean(doc && doc.querySelector && doc.querySelector("input[type='password']"));
+    if (!doc || !doc.querySelectorAll) return false;
+    return Array.prototype.slice.call(doc.querySelectorAll("input[type='password']")).some(isVisible);
   }
 
   function crInput(doc) {
@@ -66,42 +78,10 @@
 
   function hasCrSearchForm(doc) {
     if (!doc || !doc.forms) return false;
+    var input = crInput(doc);
+    if (!input || !isVisible(input)) return false;
     var forms = Array.prototype.slice.call(doc.forms || []);
-    return Boolean(crInput(doc)) && forms.some(isCrForm);
-  }
-
-  function utils() {
-    return root.NimsFastSummaryUtils || null;
-  }
-
-  function visibleReportRows(doc) {
-    var u = utils();
-    if (u && typeof u.extractReportRows === "function") {
-      try { return u.extractReportRows(doc, doc.location.href) || []; }
-      catch (error) { return []; }
-    }
-    if (!doc || !doc.querySelectorAll) return [];
-    var rows = Array.prototype.slice.call(doc.querySelectorAll("tr"));
-    var matched = [];
-    for (var index = 0; index < rows.length; index += 1) {
-      var row = rows[index];
-      if (isVisible(row) && /view\s*report/i.test(compactText(row.innerText || row.textContent))) {
-        matched.push({ row_index: index });
-      }
-    }
-    return matched;
-  }
-
-  function pageKind(doc) {
-    if (!doc || !isAllowedDocument(doc)) return "unknown";
-    if (hasPasswordInput(doc)) return "login";
-    var rows = visibleReportRows(doc);
-    if (rows.length) return "cr_results";
-    if (hasCrSearchForm(doc)) return "cr_search";
-    var path = safePath(doc.location && doc.location.href).toLowerCase();
-    if (/loginlogin\.action|login\.action|hissso/.test(path) && hasPasswordInput(doc)) return "login";
-    if (doc.body && compactText(doc.body.textContent).length > 0) return "portal";
-    return "loading";
+    return forms.some(isCrForm);
   }
 
   function safeTransientToken(value) {
@@ -111,46 +91,140 @@
     return /^[A-Za-z0-9_-]+\.pdf$/i.test(token) ? token : "";
   }
 
-  function safeRuntimeRow(u, rowInfo) {
-    if (u && typeof u.safeRuntimeRow === "function") {
-      try { return u.safeRuntimeRow(rowInfo); } catch (error) { /* fall through */ }
-    }
-    return {
-      row_index: Number(rowInfo && rowInfo.row_index),
-      view_report_button_index: Number(rowInfo && rowInfo.view_report_button_index),
-      date_sent: String(rowInfo && rowInfo.date_sent || ""),
-      department: String(rowInfo && rowInfo.department || ""),
-      report_name: String(rowInfo && rowInfo.report_name || ""),
-      report_type: String(rowInfo && rowInfo.report_type || "other"),
-      report_tags: Array.isArray(rowInfo && rowInfo.report_tags) ? rowInfo.report_tags : []
-    };
+  function parsePrintReportToken(onclick) {
+    var source = String(onclick || "");
+    var match = source.match(/(?:^|[;\s])(?:return\s+)?printReport\s*\(\s*(['"])(.*?)\1\s*\)/i);
+    if (!match) return "";
+    return safeTransientToken(
+      String(match[2] || "")
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\")
+    );
   }
 
-  function transientToken(u, doc, rowInfo) {
-    if (!u || typeof u.getTransientReportRequestPayload !== "function") return "";
+  function inferReportTags(value) {
+    var lower = String(value || "").toLowerCase();
+    var tags = [];
+    if (/culture|sensitivity|microbiology|organism|no growth/.test(lower)) tags.push("culture");
+    if (/cbc|hemogram|blood count|ha?emoglobin|platelet|tlc|wbc/.test(lower)) tags.push("cbc");
+    if (/rft|renal|urea|creatinine/.test(lower)) tags.push("rft");
+    if (/electrolyte|sodium|potassium|chloride/.test(lower)) tags.push("electrolytes");
+    if (/lft|liver|bilirubin|sgot|sgpt|ast|alt|albumin/.test(lower)) tags.push("lft");
+    if (/crp|c reactive protein|procalcitonin/.test(lower)) tags.push("inflammatory");
+    return tags.length ? tags.filter(function (tag, index) { return tags.indexOf(tag) === index; }) : ["other"];
+  }
+
+  function guessDate(cells, rowText) {
+    var source = cells.join(" ") + " " + rowText;
+    var match = source.match(/\b\d{1,2}[-\/]([A-Za-z]{3}|\d{1,2})[-\/]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b/);
+    return match ? match[0] : "";
+  }
+
+  function guessDepartment(cells) {
+    for (var index = 0; index < cells.length; index += 1) {
+      if (/pathology|microbiology|biochemistry|ha?ematology|radiology|immunology|serology/i.test(cells[index])) return cells[index].slice(0, 100);
+    }
+    return "";
+  }
+
+  function guessReportName(cells, rowText) {
+    var meaningful = cells.filter(function (cell) {
+      return cell.length > 1 && cell.length <= 140 &&
+        !/^view\s*report$/i.test(cell) &&
+        !/^\d+$/.test(cell) &&
+        !/pathology|microbiology|biochemistry|ha?ematology|radiology|immunology|serology/i.test(cell) &&
+        !/^\d{1,2}[-\/]/.test(cell);
+    });
+    for (var index = 0; index < meaningful.length; index += 1) {
+      if (/cbc|hemogram|blood|renal|rft|liver|lft|culture|electrolyte|crp|procalcitonin|coagulation|urine|fluid/i.test(meaningful[index])) {
+        return meaningful[index];
+      }
+    }
+    return meaningful.length ? meaningful[0] : rowText.replace(/view\s*report/ig, "").trim().slice(0, 100);
+  }
+
+  function closestRow(node) {
+    var current = node;
+    while (current && current.nodeType === 1) {
+      if (String(current.tagName || "").toUpperCase() === "TR") return current;
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function isLikelyReportDocument(doc) {
+    if (!doc || !doc.querySelector) return false;
+    var path = safePath(doc.location && doc.location.href).toLowerCase();
+    if (REPORT_LIST_PATHS.some(function (part) { return path.indexOf(part) >= 0; })) return true;
+    return Boolean(doc.querySelector("[onclick*='printReport'], [onclick*='printreport'], iframe#setPdf"));
+  }
+
+  function extractReportRows(doc) {
+    if (!doc || !doc.querySelectorAll || !isLikelyReportDocument(doc)) return [];
+    var allRows = Array.prototype.slice.call(doc.querySelectorAll("tr"));
+    var rowIndexByElement = new Map();
+    for (var rowIndex = 0; rowIndex < allRows.length; rowIndex += 1) {
+      rowIndexByElement.set(allRows[rowIndex], rowIndex);
+    }
+    var clickNodes = Array.prototype.slice.call(doc.querySelectorAll("[onclick]"));
+    var reportButtons = [];
+    for (var buttonIndex = 0; buttonIndex < clickNodes.length; buttonIndex += 1) {
+      if (parsePrintReportToken(clickNodes[buttonIndex].getAttribute("onclick"))) reportButtons.push(clickNodes[buttonIndex]);
+    }
+
+    var results = [];
+    var seen = {};
+    for (var index = 0; index < reportButtons.length && results.length < MAX_ROWS; index += 1) {
+      var button = reportButtons[index];
+      var token = parsePrintReportToken(button.getAttribute("onclick"));
+      var row = closestRow(button);
+      if (!token || !row || !isVisible(row) || seen[token]) continue;
+      seen[token] = true;
+      var currentRowIndex = rowIndexByElement.get(row);
+      if (typeof currentRowIndex !== "number") continue;
+      var cells = Array.prototype.slice.call(row.cells || []).map(nodeText);
+      var rowText = nodeText(row);
+      var reportName = guessReportName(cells, rowText);
+      var tags = inferReportTags(reportName + " " + rowText);
+      results.push({
+        row_index: currentRowIndex,
+        view_report_button_index: index,
+        date_sent: guessDate(cells, rowText),
+        department: guessDepartment(cells),
+        report_name: reportName,
+        report_type: tags[0] || "other",
+        report_tags: tags,
+        transientPrintReportArg: token
+      });
+    }
+    return results;
+  }
+
+  function safeTemplateFromFrame(doc) {
     try {
-      var payload = u.getTransientReportRequestPayload(rowInfo, doc);
-      return safeTransientToken(payload && (payload.transientPrintReportArg || payload.transient_print_report_arg));
+      var frame = doc.querySelector("iframe#setPdf");
+      var src = frame && frame.getAttribute("src");
+      if (!src) return null;
+      var parsed = new URL(src, doc.location.href);
+      if (!ALLOWED_HOSTS[parsed.hostname] || parsed.pathname !== REPORT_PDF_PATH) return null;
+      if (String(parsed.searchParams.get("hmode") || "").toUpperCase() !== "PRINTREPORT") return null;
+      if (!parsed.searchParams.has("fileName")) return null;
+      return {
+        origin: parsed.origin,
+        pathname: REPORT_PDF_PATH,
+        modeParamName: "hmode",
+        modeParamValue: "PRINTREPORT",
+        argumentParameterName: "fileName"
+      };
     } catch (error) {
-      return "";
+      return null;
     }
   }
 
-  function template(u, doc) {
-    if (u && typeof u.getSafeSetPdfTemplate === "function") {
-      try {
-        var discovered = u.getSafeSetPdfTemplate(doc);
-        if (discovered && discovered.discovered && discovered.pathname === REPORT_PDF_PATH) {
-          return {
-            origin: discovered.origin,
-            pathname: REPORT_PDF_PATH,
-            modeParamName: "hmode",
-            modeParamValue: "PRINTREPORT",
-            argumentParameterName: "fileName"
-          };
-        }
-      } catch (error) { /* use verified live-function fallback */ }
-    }
+  function template(doc) {
+    var fromFrame = safeTemplateFromFrame(doc);
+    if (fromFrame) return fromFrame;
     try {
       var fn = doc.defaultView && doc.defaultView.printReport;
       if (typeof fn !== "function") return null;
@@ -168,36 +242,38 @@
     }
   }
 
-  function buildReport(doc) {
-    if (!doc || !isAllowedDocument(doc)) return null;
-    var u = utils();
-    var extracted = visibleReportRows(doc);
-    if (!extracted.length) return null;
-    var rows = [];
-    for (var index = 0; index < extracted.length; index += 1) {
-      var token = transientToken(u, doc, extracted[index]);
-      if (!token) continue;
-      var row = safeRuntimeRow(u, extracted[index]);
-      row.transientPrintReportArg = token;
-      rows.push(row);
-    }
-    if (!rows.length) return null;
+  function scan(doc) {
+    if (!doc || !isAllowedDocument(doc)) return { pageKind: "unknown", rows: [] };
+    if (hasPasswordInput(doc)) return { pageKind: "login", rows: [] };
+    var rows = extractReportRows(doc);
+    if (rows.length) return { pageKind: "cr_results", rows: rows };
+    if (hasCrSearchForm(doc)) return { pageKind: "cr_search", rows: [] };
+    if (doc.body && doc.body.children && doc.body.children.length > 0) return { pageKind: "portal", rows: [] };
+    return { pageKind: "loading", rows: [] };
+  }
+
+  function pageKind(doc) {
+    return scan(doc).pageKind;
+  }
+
+  function buildReport(doc, existingScan) {
+    var result = existingScan || scan(doc);
+    if (!result.rows || !result.rows.length) return null;
     return {
       type: "nims_report_frame",
       pageKind: "cr_results",
       href: safePath(doc.location && doc.location.href),
-      rowCount: rows.length,
-      rows: rows,
-      template: template(u, doc)
+      rowCount: result.rows.length,
+      rows: result.rows,
+      template: template(doc)
     };
   }
 
   function reportKey(report) {
     if (!report) return "";
     var rows = report.rows || [];
-    var first = rows.length ? String(rows[0].transientPrintReportArg || rows[0].report_name || "") : "";
-    var last = rows.length ? String(rows[rows.length - 1].transientPrintReportArg || rows[rows.length - 1].report_name || "") : "";
-    return String(report.rowCount || 0) + "|" + first + "|" + last;
+    var tokens = rows.map(function (row) { return String(row.transientPrintReportArg || ""); });
+    return String(report.rowCount || 0) + "|" + tokens.join("|");
   }
 
   var api = {
@@ -205,7 +281,10 @@
     isAllowedDocument: isAllowedDocument,
     hasCrSearchForm: hasCrSearchForm,
     pageKind: pageKind,
+    scan: scan,
     safeTransientToken: safeTransientToken,
+    parsePrintReportToken: parsePrintReportToken,
+    extractReportRows: extractReportRows,
     buildReport: buildReport,
     reportKey: reportKey
   };
@@ -230,37 +309,33 @@
 
   var lastPageKey = "";
   var lastReportKey = "";
-  var hadReport = false;
 
   function tick() {
-    var kind = pageKind(root.document);
-    var visibleRows = visibleReportRows(root.document).length;
-    var stateKey = kind + "|" + safePath(root.location && root.location.href) + "|" + String(visibleRows);
+    var result = scan(root.document);
+    var stateKey = result.pageKind + "|" + safePath(root.location && root.location.href) + "|" + String(result.rows.length);
     if (stateKey !== lastPageKey) {
       lastPageKey = stateKey;
       post({
         type: "nims_page_state",
-        pageKind: kind,
+        pageKind: result.pageKind,
         path: safePath(root.location && root.location.href),
-        reportCount: visibleRows,
+        reportCount: result.rows.length,
         hasCrInput: Boolean(crInput(root.document))
       });
     }
 
-    var report = buildReport(root.document);
+    var report = buildReport(root.document, result);
     if (report) {
-      hadReport = true;
       var key = reportKey(report);
       if (key !== lastReportKey) {
         lastReportKey = key;
         post(report);
       }
-    } else if (hadReport && kind !== "cr_results") {
-      hadReport = false;
+    } else if (lastReportKey) {
       lastReportKey = "";
       post({
         type: "nims_report_frame",
-        pageKind: kind,
+        pageKind: result.pageKind,
         href: safePath(root.location && root.location.href),
         rowCount: 0,
         rows: [],
@@ -271,31 +346,31 @@
 
   function start() {
     tick();
-    var scheduled = false;
+    var timer = 0;
     function scheduleTick() {
-      if (scheduled) return;
-      scheduled = true;
-      root.setTimeout(function () {
-        scheduled = false;
+      if (timer) root.clearTimeout(timer);
+      timer = root.setTimeout(function () {
+        timer = 0;
         tick();
-      }, 120);
+      }, 450);
     }
+
     try {
-      if (typeof MutationObserver !== "undefined" && root.document.documentElement) {
-        new MutationObserver(scheduleTick).observe(root.document.documentElement, {
+      if (root.MutationObserver && root.document.documentElement) {
+        new root.MutationObserver(scheduleTick).observe(root.document.documentElement, {
           childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["style", "class", "hidden", "src"]
+          subtree: true
         });
       }
-    } catch (error) { /* bounded polling remains */ }
+    } catch (error) { /* initial bounded polling remains */ }
+
     var count = 0;
     var interval = root.setInterval(function () {
       count += 1;
       tick();
-      if (count >= 120) root.clearInterval(interval);
-    }, 1000);
+      if (count >= 20) root.clearInterval(interval);
+    }, 1500);
+    root.addEventListener("pageshow", scheduleTick, false);
   }
 
   if (root.document.readyState === "loading") {
