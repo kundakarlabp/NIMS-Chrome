@@ -79,6 +79,11 @@ test('builds a sanitized report announcement from the owning frame', () => {
   window.close();
 });
 
+test('fallback row detection preserves the original DOM row index', () => {
+  assert.match(source, /matched\.push\(\{ row_index: index \}\)/);
+  assert.doesNotMatch(source, /\.filter\([\s\S]*?\)\.map\(function \(_row, index\)/);
+});
+
 test('rejects unsafe transient report references', () => {
   const { window, api } = load('<html><body></body></html>');
   assert.equal(api.safeTransientToken('../secret.pdf'), '');
