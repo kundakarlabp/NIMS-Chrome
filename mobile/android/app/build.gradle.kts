@@ -4,6 +4,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val jqueryWebJar by configurations.creating
+val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
+
+val prepareBundledJquery by tasks.registering(Copy::class) {
+    from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
+        include("META-INF/resources/webjars/jquery/1.12.4/jquery.min.js")
+        eachFile { path = "jquery-1.12.4.min.js" }
+        includeEmptyDirs = false
+    }
+    into(generatedWebAssets)
+}
+
 android {
     namespace = "org.kundakarlab.nimsfastsummarymobile"
     compileSdk = 35
@@ -12,13 +24,17 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.7.8"
+        versionCode = 21
+        versionName = "0.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     sourceSets {
-        getByName("main").assets.srcDirs("src/main/assets", "../../../shared/nims-web")
+        getByName("main").assets.srcDirs(
+            "src/main/assets",
+            "../../../shared/nims-web",
+            generatedWebAssets
+        )
     }
 
     buildFeatures {
@@ -47,9 +63,12 @@ tasks.register("verifyNimsCoreAsset") {
 
 tasks.named("preBuild") {
     dependsOn("verifyNimsCoreAsset")
+    dependsOn(prepareBundledJquery)
 }
 
 dependencies {
+    jqueryWebJar("org.webjars:jquery:1.12.4")
+
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
