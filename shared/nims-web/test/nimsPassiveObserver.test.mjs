@@ -13,6 +13,8 @@ function load(html, path = '/AHIMSG5/hissso/loginLogin.action', utils = null) {
   });
   const { window } = dom;
   if (utils) window.NimsFastSummaryUtils = utils;
+  // Export the pure observer API without starting timers or MutationObservers.
+  window.__NIMS_PASSIVE_OBSERVER_INSTALLED__ = true;
   const context = dom.getInternalVMContext();
   context.globalThis = window;
   vm.runInContext(source, context);
