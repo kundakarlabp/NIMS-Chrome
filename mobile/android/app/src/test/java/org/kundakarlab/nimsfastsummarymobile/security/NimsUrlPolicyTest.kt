@@ -40,6 +40,24 @@ class NimsUrlPolicyTest {
         assertEquals(UrlClassification.BLOCKED_SCHEME, NimsUrlPolicy.classifyUrl("intent://example"))
     }
 
+    @Test fun allowsPageOwnedLegacyActionOnlyFromApprovedNimsContext() {
+        val action = "java" + "script:" + "menuSelected('Investigation',true)"
+        assertTrue(
+            NimsUrlPolicy.isTrustedLegacyPageScript(
+                "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action",
+                action
+            )
+        )
+        assertFalse(NimsUrlPolicy.isTrustedLegacyPageScript("https://example.org/page", action))
+        assertFalse(NimsUrlPolicy.isTrustedLegacyPageScript("https://www.nimsts.edu.in/UNKNOWN/page", action))
+        assertFalse(
+            NimsUrlPolicy.isTrustedLegacyPageScript(
+                "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action",
+                "https://example.org"
+            )
+        )
+    }
+
     @Test fun safeSourceStripsQueryAndKeepsHostPathOnly() {
         assertTrue(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/AHIMSG5/report?hmode=x&fileName=secret"))
         assertFalse(NimsUrlPolicy.isAllowedUrl("https://nimsts.edu.in/UNKNOWN/"))
