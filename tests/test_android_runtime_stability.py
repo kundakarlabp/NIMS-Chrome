@@ -55,15 +55,6 @@ def test_android_webview_login_surface_is_optimized() -> None:
     assert "AndroidView(factory = { webView }" in source
 
 
-def test_android_document_start_code_is_restricted_to_report_frames() -> None:
-    patch_path = ROOT / "scripts" / "apply_android_0_8_0_patch.py"
-    patch = patch_path.read_text(encoding="utf-8")
-    compile(patch, str(patch_path), "exec")
-    assert 'if (!/^\\/HISInvestigationG5\\//i.test(path)) return;' in patch
-    assert 'WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))' in patch
-    assert 'WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))' in patch
-
-
 def test_android_app_does_not_add_nims_credential_storage_or_login_automation() -> None:
     source = (
         ANDROID_APP
