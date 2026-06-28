@@ -1,12 +1,4 @@
 // Android-only compatibility adapter for the live NIMS WebView runtime.
-//
-// The NIMS pages currently expose three WebView-only failures seen on-device:
-// 1. date_time is referenced before its defining asset is available;
-// 2. tabmenu.js reads .offset().left even when the selected element is absent;
-// 3. dynamically-created iframes call ajaxCompleteTab() without the iframe arg.
-//
-// This adapter fixes only those runtime contracts. It does not click menus,
-// submit forms, read credentials, or alter the report-extraction workflow.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
@@ -18,14 +10,17 @@
     return;
   }
 
-  if (typeof w.date_time !== "function") {
-    w.date_time = function () { return ""; };
+  function ensureDateTime() {
+    if (typeof w.date_time !== "function") {
+      w.date_time = function () { return ""; };
+      w.date_time.__nimsCompatibilityFallback = true;
+    }
   }
 
   function patchOffset(jq) {
-    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.__nimsSafeOffset) return false;
+    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.offset.__nimsSafeOffset) return false;
     var original = jq.fn.offset;
-    jq.fn.offset = function () {
+    var wrapped = function () {
       var value;
       try {
         value = original.apply(this, arguments);
@@ -33,16 +28,20 @@
         if (arguments.length) throw error;
         value = null;
       }
-      return value == null && arguments.length === 0 ? { top: 0, left: 0 } : value;
+      if (value == null && arguments.length === 0) return { top: 0, left: 0 };
+      if (value && typeof value === "object") {
+        if (typeof value.top !== "number") value.top = 0;
+        if (typeof value.left !== "number") value.left = 0;
+      }
+      return value;
     };
-    jq.fn.__nimsSafeOffset = true;
+    wrapped.__nimsSafeOffset = true;
+    wrapped.__nimsOriginal = original;
+    jq.fn.offset = wrapped;
     return true;
   }
 
-  // Patch the bundled fallback immediately. Then patch one subsequent jQuery
-  // assignment, which covers the page replacing the fallback with its own copy.
-  patchOffset(w.jQuery || w.$);
-  (function armNextJqueryAssignment() {
+  function armNextJqueryAssignment() {
     var descriptor;
     try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); } catch (e) { descriptor = null; }
     if (descriptor && descriptor.configurable === false) return;
@@ -62,15 +61,18 @@
               writable: true,
               value: value
             });
-          } catch (e) { /* keep the accessor if the page prevents replacement */ }
+          } catch (e) { }
         }
       });
-    } catch (e) { /* bounded polling below still patches later copies */ }
-  })();
+    } catch (e) { }
+  }
 
-  var lastLoadedFrame = null;
-  var lastLoadedAt = 0;
-  var FRAME_MAX_AGE_MS = 2500;
+  ensureDateTime();
+  patchOffset(w.jQuery || w.$);
+  armNextJqueryAssignment();
+
+  var recentFrames = [];
+  var FRAME_MAX_AGE_MS = 1200;
 
   function isFrame(value) {
     return Boolean(value && /^(IFRAME|FRAME)$/i.test(value.tagName || "") && value.ownerDocument === w.document);
@@ -79,8 +81,7 @@
   function isNimsTabFrame(frame) {
     if (!isFrame(frame)) return false;
     var id = String(frame.id || frame.name || "");
-    if (id === "frmMainMenu") return true;
-    if (/_iframe$/i.test(id)) return true;
+    if (id === "frmMainMenu" || /_iframe$/i.test(id)) return true;
     try {
       var src = String(frame.getAttribute("src") || frame.src || "");
       return /\/AHIMSG5\/|\/HISInvestigationG5\/|\/HISClinical\//i.test(src);
@@ -92,16 +93,21 @@
   function rememberLoadedFrame(event) {
     var frame = event && (event.target || event.srcElement);
     if (!isNimsTabFrame(frame)) return;
-    lastLoadedFrame = frame;
-    lastLoadedAt = Date.now();
+    var now = Date.now();
+    recentFrames = recentFrames.filter(function (entry) {
+      return entry.frame && entry.frame.isConnected && now - entry.at <= FRAME_MAX_AGE_MS && entry.frame !== frame;
+    });
+    recentFrames.push({ frame: frame, at: now });
   }
 
   w.document.addEventListener("load", rememberLoadedFrame, true);
 
-  function recentLoadedFrame() {
-    if (!lastLoadedFrame || !lastLoadedFrame.isConnected) return null;
-    if (Date.now() - lastLoadedAt > FRAME_MAX_AGE_MS) return null;
-    return lastLoadedFrame;
+  function uniqueRecentFrame() {
+    var now = Date.now();
+    recentFrames = recentFrames.filter(function (entry) {
+      return entry.frame && entry.frame.isConnected && now - entry.at <= FRAME_MAX_AGE_MS;
+    });
+    return recentFrames.length === 1 ? recentFrames[0].frame : null;
   }
 
   function eventFrame() {
@@ -123,17 +129,27 @@
     if (typeof fn !== "function" || fn.__nimsFrameArgumentAdapter) return fn;
     var wrapped = function (obj) {
       var receiver = this;
-      var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
-      if (!frame) return undefined;
+      var frame = isNimsTabFrame(obj) ? obj : eventFrame() || uniqueRecentFrame();
+      if (!frame) {
+        if (w.console && w.console.warn) w.console.warn("NIMS ajaxCompleteTab skipped: no unique iframe");
+        return undefined;
+      }
       var attempts = 0;
       function invoke() {
         attempts += 1;
         try {
           return fn.call(receiver, frame);
         } catch (error) {
-          if (!isContentDocumentRace(error) || attempts >= 3) return undefined;
-          w.setTimeout(invoke, attempts * 100);
-          return undefined;
+          if (isContentDocumentRace(error)) {
+            if (attempts < 3) {
+              w.setTimeout(invoke, attempts * 100);
+              return undefined;
+            }
+            if (w.console && w.console.warn) w.console.warn("NIMS iframe document unavailable");
+            return undefined;
+          }
+          if (w.console && w.console.error) w.console.error("NIMS ajaxCompleteTab unexpected error", error);
+          throw error;
         }
       }
       return invoke();
@@ -144,17 +160,48 @@
   }
 
   function patchAvailableFunctions() {
-    try { patchOffset(w.jQuery || w.$); } catch (e) { /* page still loading */ }
+    ensureDateTime();
+    try { patchOffset(w.jQuery || w.$); } catch (e) { }
     try {
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
         w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
       }
-    } catch (e) { /* page may be replacing globals while loading */ }
+    } catch (e) { }
   }
 
-  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
-    w.setTimeout(patchAvailableFunctions, delay);
+  function postStatus(phase) {
+    var jq = null;
+    try { jq = w.jQuery || w.$ || null; } catch (e) { }
+    var payload = {
+      type: "nims_runtime_status",
+      url: String(w.location.hostname || "") + String(w.location.pathname || ""),
+      phase: String(phase || "runtime"),
+      dateTimeReady: typeof w.date_time === "function",
+      jqueryReady: typeof jq === "function",
+      jqueryVersion: jq && jq.fn ? String(jq.fn.jquery || "") : "",
+      offsetPatched: Boolean(jq && jq.fn && jq.fn.offset && jq.fn.offset.__nimsSafeOffset),
+      ajaxCompleteTabPatched: Boolean(w.ajaxCompleteTab && w.ajaxCompleteTab.__nimsFrameArgumentAdapter),
+      bundledJqueryVersion: String(w.__nimsBundledJqueryVersion || "")
+    };
+    try {
+      if (w.nimsAndroidBridge && typeof w.nimsAndroidBridge.postMessage === "function") {
+        w.nimsAndroidBridge.postMessage(JSON.stringify(payload));
+      }
+    } catch (e) { }
+  }
+
+  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(function (delay) {
+    w.setTimeout(function () {
+      patchAvailableFunctions();
+      if (delay === 1000 || delay === 5000 || delay === 10000) postStatus("t" + delay);
+    }, delay);
   });
-  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
-  w.addEventListener("load", patchAvailableFunctions, { once: true });
+  w.addEventListener("DOMContentLoaded", function () {
+    patchAvailableFunctions();
+    postStatus("domcontentloaded");
+  }, { once: true });
+  w.addEventListener("load", function () {
+    patchAvailableFunctions();
+    postStatus("load");
+  }, { once: true });
 })(typeof window !== "undefined" ? window : null);
