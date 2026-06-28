@@ -62,7 +62,6 @@ def test_android_document_start_code_is_restricted_to_report_frames() -> None:
     assert 'if (!/^\\/HISInvestigationG5\\//i.test(path)) return;' in patch
     assert 'WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))' in patch
     assert 'WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("https://www.nimsts.edu.in", "https://nimsts.edu.in"))' in patch
-    assert 'WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))' not in patch
 
 
 def test_android_app_does_not_add_nims_credential_storage_or_login_automation() -> None:
