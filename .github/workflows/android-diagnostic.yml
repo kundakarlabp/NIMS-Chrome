@@ -15,6 +15,14 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: Compile
+      - name: Capture compiler output
         working-directory: mobile/android
-        run: ./gradlew compileDebugKotlin testDebugUnitTest --console=plain -q
+        continue-on-error: true
+        run: ./gradlew compileDebugKotlin testDebugUnitTest --console=plain > android-compile.log 2>&1
+      - name: Upload compiler output
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-compile-diagnostic
+          path: mobile/android/android-compile.log
+          if-no-files-found: error
+          retention-days: 3
