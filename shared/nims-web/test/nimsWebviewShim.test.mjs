@@ -44,7 +44,7 @@ function run(extra = {}) {
   win.document = document;
   win.top = win;
   document.defaultView = win;
-  const context = { window: win, URL, Date };
+  const context = { window: win, URL, Date, Object };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -58,16 +58,45 @@ function run(extra = {}) {
   return win;
 }
 
-test('does not inject jQuery, date_time, offset patches, or navigation behavior', () => {
+test('installs only the confirmed date_time and safe offset compatibility guards', () => {
   const jq = () => {};
   jq.fn = { offset: () => undefined };
   const core = { navigateToCrWiseReports: () => 'unchanged' };
   const originalNavigate = core.navigateToCrWiseReports;
   const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
   win.flush();
-  assert.equal(win.date_time, undefined);
-  assert.equal(win.jQuery.fn.offset(), undefined);
+  assert.equal(typeof win.date_time, 'function');
+  assert.equal(win.date_time(), '');
+  assert.deepEqual(win.jQuery.fn.offset(), { top: 0, left: 0 });
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
+});
+
+test('patches the page jQuery instance when it replaces the bundled fallback', () => {
+  const fallback = () => {};
+  fallback.fn = { offset: () => undefined };
+  const win = run({ jQuery: fallback, $: fallback });
+
+  const pageJquery = () => {};
+  pageJquery.fn = { offset: () => undefined };
+  win.$ = pageJquery;
+  win.jQuery = pageJquery;
+
+  assert.deepEqual(win.$.fn.offset(), { top: 0, left: 0 });
+  assert.deepEqual(win.jQuery.fn.offset(), { top: 0, left: 0 });
+});
+
+test('preserves offset setter calls and real getter results', () => {
+  const jq = () => {};
+  const real = { top: 12, left: 24 };
+  jq.fn = {
+    offset(value) {
+      if (arguments.length) return this;
+      return real;
+    },
+  };
+  const win = run({ jQuery: jq, $: jq });
+  assert.equal(win.jQuery.fn.offset({ top: 1 }), win.jQuery.fn);
+  assert.equal(win.jQuery.fn.offset(), real);
 });
 
 test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
@@ -123,6 +152,7 @@ test('does not install on non-NIMS origins', () => {
     ajaxCompleteTab: original,
   });
   win.flush();
+  assert.equal(win.date_time, undefined);
   assert.equal(win.ajaxCompleteTab, original);
   win.ajaxCompleteTab();
   assert.equal(calls, 1);
