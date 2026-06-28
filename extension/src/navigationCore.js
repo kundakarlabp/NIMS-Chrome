@@ -310,7 +310,8 @@
 
   function findCrWiseReportMenuTargetInDocument(doc) {
     const exact = doc.getElementById(CR_WISE_MENU_ID);
-    if (exact && isUsableClickable(exact) && crWiseElementLooksValid(exact)) return { ok: true, method: "exact_id", element: exact };
+    const isExactConnected = exact && exact.isConnected && !exact.disabled && exact.getAttribute("aria-disabled") !== "true";
+    if (exact && isExactConnected && crWiseElementLooksValid(exact)) return { ok: true, method: "exact_id", element: exact };
     const candidates = Array.from(doc.querySelectorAll("[onclick], a, button, [role='button']")).filter((el) => isUsableClickable(el));
     const endpoint = candidates.find((el) => (el.getAttribute("onclick") || "").includes(CR_WISE_ENDPOINT));
     if (endpoint) return { ok: true, method: "exact_endpoint", element: endpoint };
@@ -347,7 +348,7 @@
     //    VISIBLE genuine printReport row (report_list) or a VISIBLE patCrNo input
     //    (cr_search). Otherwise it is still loading: wait, do not click.
     const reportDoc = frameDocById(topDoc, REPORT_FRAME_ID);
-    if (reportDoc) {
+    if (reportDoc && isDocumentVisible(reportDoc)) {
       if (hasVisibleGenuineReportRows(reportDoc)) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.REPORT_LIST, "none", true); }
       if (hasVisibleCrNumberForm(reportDoc)) { clearProvisionalNavigation(); return navigationResult(true, NIMS_PAGE_STAGE.CR_SEARCH, "none", true); }
       return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "waiting_for_report_frame", false);
