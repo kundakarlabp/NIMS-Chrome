@@ -1,0 +1,31 @@
+name: Apply Compose import fix
+
+on:
+  push:
+    branches:
+      - refactor/android-on-demand-webview
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[compose-import-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/android-on-demand-webview
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/fix_compose_weight_import.py
+      - name: Commit fix
+        run: |
+          rm -f tools/fix_compose_weight_import.py .github/workflows/apply-compose-import-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(android): remove invalid Compose weight import [compose-import-fixed]"
+          git push origin HEAD:refactor/android-on-demand-webview
