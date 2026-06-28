@@ -1,0 +1,21 @@
+name: Android compile diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Compile Android source
+        working-directory: mobile/android
+        run: ./gradlew compileDebugKotlin --console=plain --stacktrace
