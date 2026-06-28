@@ -12,11 +12,11 @@ internal data class NimsRuntimeInstallResult(
 )
 
 /**
- * Installs the passive, all-frame NIMS observer at document start.
+ * Installs a small passive all-frame observer at document start.
  *
- * The runtime deliberately does not inject jQuery, define NIMS globals, wrap
- * portal functions, click menus, submit forms, or navigate. NIMS owns login,
- * navigation, and rendering; Android only observes page state and report rows.
+ * Heavy report utilities are deliberately not injected while the clinician is
+ * logging in or navigating the legacy portal. MainActivity loads the canonical
+ * report core on demand only after the genuine result list has been detected.
  */
 internal object NimsWebViewRuntime {
     internal val allowedOrigins = setOf(
@@ -36,12 +36,7 @@ internal object NimsWebViewRuntime {
             return NimsRuntimeInstallResult(false, error = "Update Chrome and Android System WebView: document-start scripts unavailable.")
         }
 
-        val assets = webView.context.assets
-        val core = readAsset(assets, "nimsReportCore.js")
-            ?: return NimsRuntimeInstallResult(false, error = "Missing report core asset.")
-        val utils = readAsset(assets, "contentUtils.js")
-            ?: return NimsRuntimeInstallResult(false, error = "Missing report utility asset.")
-        val observer = readAsset(assets, "nimsPassiveObserver.js")
+        val observer = readAsset(webView.context.assets, "nimsPassiveObserver.js")
             ?: return NimsRuntimeInstallResult(false, error = "Missing passive observer asset.")
 
         return runCatching {
@@ -50,31 +45,25 @@ internal object NimsWebViewRuntime {
             }
             val handler = WebViewCompat.addDocumentStartJavaScript(
                 webView,
-                buildPayload(core, utils, observer),
+                buildPayload(observer),
                 allowedOrigins
             )
-            onLog("NIMS passive all-frame observer registered")
+            onLog("Lightweight NIMS frame observer registered")
             NimsRuntimeInstallResult(true, handler)
         }.getOrElse { error ->
             NimsRuntimeInstallResult(false, error = "Runtime registration failed: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
-    internal fun buildPayload(
-        core: String,
-        utils: String,
-        observer: String
-    ): String = buildString {
+    internal fun buildPayload(observer: String): String = buildString {
         appendLine("(function(w){")
         appendLine("try{")
         appendLine("var h=String(w.location&&w.location.hostname||'');")
         appendLine("if(!/^(www\\.)?nimsts\\.edu\\.in$/i.test(h))return;")
         appendLine("}catch(e){return;}")
         appendLine("try{")
-        appendLine(core)
-        appendLine(utils)
         appendLine(observer)
-        appendLine("}catch(e){if(w.console&&w.console.error)w.console.error('NIMS passive observer injection failed',e);}")
+        appendLine("}catch(e){if(w.console&&w.console.error)w.console.error('NIMS passive observer failed',e);}")
         appendLine("})(window);")
     }
 
