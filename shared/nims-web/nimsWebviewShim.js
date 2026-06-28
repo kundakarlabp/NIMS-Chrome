@@ -1,14 +1,12 @@
-// Android-only compatibility adapter for the live NIMS WebView contract.
+// Android-only compatibility adapter for the live NIMS WebView runtime.
 //
-// The live Android screenshots confirm three independent legacy-page defects:
-//   1. loginLogin.action calls date_time() although the global is absent.
-//   2. tabmenu.js dereferences $(...).offset().left when offset() is undefined.
-//   3. addTab emits onLoad="ajaxCompleteTab();" although ajaxCompleteTab expects
-//      the loaded iframe argument.
+// Repairs only the three failures confirmed on-device:
+// 1. date_time is referenced before its defining asset is available;
+// 2. tabmenu.js reads .offset().left when the selected element is absent;
+// 3. dynamically-created iframes call ajaxCompleteTab() without the iframe arg.
 //
-// This adapter repairs only those contracts. It never clicks a menu, calls
-// callMenu, changes EasyUI state, replaces an existing jQuery instance, or
-// modifies the report extraction core.
+// This adapter never clicks menus, submits forms, reads credentials, or changes
+// the report extraction workflow.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
@@ -20,38 +18,104 @@
     return;
   }
 
-  function ensureDateTime() {
-    try {
-      if (typeof w.date_time !== "function") {
-        w.date_time = function () { return ""; };
-        w.date_time.__nimsCompatibilityFallback = true;
-      }
-    } catch (e) { /* page may be replacing globals while loading */ }
+  var lastRuntimeKey = "";
+
+  function safePath() {
+    try { return String(w.location.pathname || "").slice(0, 180); }
+    catch (e) { return ""; }
   }
 
-  function patchJqueryOffset() {
+  function postRuntime(type, detail) {
+    var bridge = w.nimsAndroidBridge;
+    if (!bridge || typeof bridge.postMessage !== "function") return;
     try {
-      var jq = w.jQuery;
-      if (typeof jq !== "function" || !jq.fn || typeof jq.fn.offset !== "function") return;
-      if (jq.fn.offset.__nimsSafeOffset) return;
-      var original = jq.fn.offset;
-      var wrapped = function () {
-        var value = original.apply(this, arguments);
-        if (value && typeof value === "object") {
-          if (typeof value.left !== "number") value.left = 0;
-          if (typeof value.top !== "number") value.top = 0;
-          return value;
+      bridge.postMessage(JSON.stringify({
+        type: type,
+        path: safePath(),
+        detail: String(detail || "").slice(0, 160),
+        jqueryPresent: typeof w.jQuery === "function",
+        jqueryVersion: w.jQuery && w.jQuery.fn ? String(w.jQuery.fn.jquery || "") : "",
+        jqueryFallbackUsed: Boolean(w.__nimsBundledJqueryVersion),
+        dateTimeReady: typeof w.date_time === "function",
+        offsetPatched: Boolean(w.jQuery && w.jQuery.fn && w.jQuery.fn.offset && w.jQuery.fn.offset.__nimsSafeOffset),
+        ajaxCompleteTabPatched: Boolean(w.ajaxCompleteTab && w.ajaxCompleteTab.__nimsFrameArgumentAdapter)
+      }));
+    } catch (e) { /* telemetry is best effort and contains no page values */ }
+  }
+
+  function reportReady(phase) {
+    var key = [
+      safePath(),
+      phase,
+      typeof w.jQuery === "function",
+      w.jQuery && w.jQuery.fn ? String(w.jQuery.fn.jquery || "") : "",
+      typeof w.date_time === "function",
+      Boolean(w.jQuery && w.jQuery.fn && w.jQuery.fn.offset && w.jQuery.fn.offset.__nimsSafeOffset),
+      Boolean(w.ajaxCompleteTab && w.ajaxCompleteTab.__nimsFrameArgumentAdapter)
+    ].join("|");
+    if (key === lastRuntimeKey) return;
+    lastRuntimeKey = key;
+    postRuntime("nims_runtime_ready", phase);
+  }
+
+  function ensureDateTime() {
+    if (typeof w.date_time !== "function") {
+      w.date_time = function () { return ""; };
+      w.date_time.__nimsCompatibilityFallback = true;
+    }
+  }
+
+  function patchOffset(jq) {
+    if (!jq || !jq.fn || typeof jq.fn.offset !== "function") return false;
+    if (jq.fn.offset.__nimsSafeOffset) return true;
+    var original = jq.fn.offset;
+    var wrapped = function () {
+      var value;
+      try {
+        value = original.apply(this, arguments);
+      } catch (error) {
+        if (arguments.length) throw error;
+        value = null;
+      }
+      return value == null && arguments.length === 0 ? { top: 0, left: 0 } : value;
+    };
+    wrapped.__nimsSafeOffset = true;
+    wrapped.__nimsOriginal = original;
+    jq.fn.offset = wrapped;
+    return true;
+  }
+
+  function armNextJqueryAssignment() {
+    var descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); }
+    catch (e) { descriptor = null; }
+    if (descriptor && descriptor.configurable === false) return;
+    var current = w.jQuery;
+    try {
+      Object.defineProperty(w, "jQuery", {
+        configurable: true,
+        enumerable: descriptor ? descriptor.enumerable !== false : true,
+        get: function () { return current; },
+        set: function (value) {
+          current = value;
+          patchOffset(value);
+          try {
+            Object.defineProperty(w, "jQuery", {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: value
+            });
+          } catch (e) { /* polling below still verifies the active copy */ }
+          reportReady("jquery_assigned");
         }
-        return { left: 0, top: 0 };
-      };
-      wrapped.__nimsSafeOffset = true;
-      wrapped.__nimsOriginal = original;
-      jq.fn.offset = wrapped;
-    } catch (e) { /* no compatible jQuery in this frame yet */ }
+      });
+    } catch (e) { /* polling below remains available */ }
   }
 
   ensureDateTime();
-  patchJqueryOffset();
+  patchOffset(w.jQuery || w.$);
+  armNextJqueryAssignment();
 
   var lastLoadedFrame = null;
   var lastLoadedAt = 0;
@@ -81,7 +145,6 @@
     lastLoadedAt = Date.now();
   }
 
-  // load does not bubble; capture sees the iframe before its inline onLoad runs.
   w.document.addEventListener("load", rememberLoadedFrame, true);
 
   function recentLoadedFrame() {
@@ -110,16 +173,23 @@
     var wrapped = function (obj) {
       var receiver = this;
       var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
-      if (!frame) return undefined;
+      if (!frame) {
+        postRuntime("nims_runtime_error", "ajaxCompleteTab called without a matching iframe");
+        return undefined;
+      }
       var attempts = 0;
       function invoke() {
         attempts += 1;
         try {
           return fn.call(receiver, frame);
         } catch (error) {
-          if (!isContentDocumentRace(error) || attempts >= 3) return undefined;
-          w.setTimeout(invoke, attempts * 100);
-          return undefined;
+          if (isContentDocumentRace(error) && attempts < 3) {
+            w.setTimeout(invoke, attempts * 100);
+            return undefined;
+          }
+          postRuntime("nims_runtime_error", "ajaxCompleteTab: " + String(error && error.message || error));
+          if (w.console && w.console.error) w.console.error("NIMS ajaxCompleteTab compatibility failure", error);
+          throw error;
         }
       }
       return invoke();
@@ -129,19 +199,22 @@
     return wrapped;
   }
 
-  function patchAvailableFunctions() {
+  function patchAvailableFunctions(phase) {
     ensureDateTime();
-    patchJqueryOffset();
+    try { patchOffset(w.jQuery || w.$); } catch (e) { /* page still loading */ }
     try {
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
         w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
       }
-    } catch (e) { /* page may be replacing globals while loading */ }
+    } catch (error) {
+      postRuntime("nims_runtime_error", "ajaxCompleteTab patch: " + String(error && error.message || error));
+    }
+    reportReady(phase || "check");
   }
 
   [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(function (delay) {
-    w.setTimeout(patchAvailableFunctions, delay);
+    w.setTimeout(function () { patchAvailableFunctions("timer_" + delay); }, delay);
   });
-  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
-  w.addEventListener("load", patchAvailableFunctions, { once: true });
+  w.addEventListener("DOMContentLoaded", function () { patchAvailableFunctions("dom_content_loaded"); }, { once: true });
+  w.addEventListener("load", function () { patchAvailableFunctions("window_load"); }, { once: true });
 })(typeof window !== "undefined" ? window : null);
