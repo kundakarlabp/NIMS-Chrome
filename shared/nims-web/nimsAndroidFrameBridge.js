@@ -1,32 +1,18 @@
 // NIMS Android all-frames bridge.
+//
+// Runs inside every WebView frame. The frame that owns the visible CR-wise
+// report list announces safe row metadata, an in-memory printReport token per
+// row, and the verified read-only PDF request template to native Android.
 (function (root) {
-  function buildFrameReport(utils, doc, hrefSafe) {
-    if (!utils || !doc) return null;
-    try {
-      if (typeof utils.hasReportRows === "function" && !utils.hasReportRows(doc)) return null;
-    } catch (e) { return null; }
-    var rows = [];
-    try { rows = utils.extractReportRows(doc, hrefSafe) || []; } catch (e) { rows = []; }
-    if (!rows.length) return null;
-    return { type: "nims_report_frame", href: hrefSafe || "", rowCount: rows.length, rows: rows };
-  }
+  "use strict";
 
-  function frameReportKey(report) {
-    if (!report) return "";
-    var rows = report.rows || [];
-    function sig(row) { return row ? String(row.source_url || row.report_id || row.report_name || row.row_index || "") : ""; }
-    var first = rows.length ? sig(rows[0]) : "";
-    var last = rows.length ? sig(rows[rows.length - 1]) : "";
-    return String(report.rowCount || 0) + "|" + first + "|" + last;
-  }
-
-  var api = { buildFrameReport: buildFrameReport, frameReportKey: frameReportKey };
-  root.NimsAndroidFrameBridgeUtil = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-
-  if (!root.document || typeof root.setInterval !== "function") return;
-  if (root.__NIMS_ANDROID_FRAME_BRIDGE__) return;
-  root.__NIMS_ANDROID_FRAME_BRIDGE__ = true;
+  var ALLOWED_HOSTS = { "nimsts.edu.in": true, "www.nimsts.edu.in": true };
+  var REPORT_LIST_PATH = "/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt";
+  var REPORT_PDF_PATH = "/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt";
+  var REPORT_MODE = "PRINTREPORT";
+  var REPORT_MODE_PARAM = "hmode";
+  var REPORT_ARG_PARAM = "fileName";
+  var CR_FORM_NAME = "viewExternalInvFB";
 
   function safePath(value) {
     if (!value) return "";
@@ -34,160 +20,276 @@
       var base = root.location && root.location.href ? root.location.href : "https://www.nimsts.edu.in/";
       var url = new URL(value, base);
       return url.protocol === "about:" ? url.href : url.hostname + url.pathname;
-    } catch (e) { return String(value).split("?")[0].split("#")[0].slice(0, 160); }
+    } catch (e) {
+      return String(value).split("?")[0].split("#")[0].slice(0, 180);
+    }
   }
 
-  function bodyStats(doc) {
-    var body = doc && doc.body;
+  function isAllowedDocument(doc) {
+    try {
+      var url = new URL(doc.location.href);
+      return url.protocol === "https:" && Boolean(ALLOWED_HOSTS[url.hostname]);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isSafeTransientToken(value) {
+    var token = String(value || "").trim();
+    if (token.length < 5 || token.length > 256) return false;
+    if (token.indexOf("..") >= 0 || /[\\/\u0000-\u001f\u007f]/.test(token)) return false;
+    return /^[A-Za-z0-9_-]+\.pdf$/i.test(token);
+  }
+
+  function firstPrintReportButton(row) {
+    if (!row || !row.querySelectorAll) return null;
+    var nodes = Array.prototype.slice.call(row.querySelectorAll("[onclick]"));
+    for (var i = 0; i < nodes.length; i += 1) {
+      var onclick = nodes[i].getAttribute("onclick") || "";
+      if (/^\s*printReport\s*\(\s*(['"])[^,()]+\1\s*\)\s*;?\s*$/i.test(onclick)) return nodes[i];
+    }
+    return null;
+  }
+
+  function rowElementForInfo(doc, rowInfo) {
+    if (!doc || !doc.querySelectorAll) return null;
+    var rows = Array.prototype.slice.call(doc.querySelectorAll("tr"));
+    var index = Number(rowInfo && rowInfo.row_index);
+    if (isFinite(index) && rows[index] && firstPrintReportButton(rows[index])) return rows[index];
+
+    var buttonIndex = Number(rowInfo && rowInfo.view_report_button_index);
+    var buttons = [];
+    for (var i = 0; i < rows.length; i += 1) {
+      var button = firstPrintReportButton(rows[i]);
+      if (button) buttons.push(button);
+    }
+    var selected = isFinite(buttonIndex) ? buttons[buttonIndex] : null;
+    return selected && selected.closest ? selected.closest("tr") : null;
+  }
+
+  function safeRow(utils, rowInfo) {
+    if (utils && typeof utils.safeRuntimeRow === "function") {
+      try { return utils.safeRuntimeRow(rowInfo); } catch (e) { /* fall through */ }
+    }
     return {
-      children: body && body.querySelectorAll ? body.querySelectorAll("*").length : 0,
-      textLen: body && body.innerText ? String(body.innerText).trim().length : 0,
-      height: body ? body.scrollHeight || 0 : 0
+      row_index: Number(rowInfo && rowInfo.row_index),
+      view_report_button_index: Number(rowInfo && rowInfo.view_report_button_index),
+      date_sent: String(rowInfo && rowInfo.date_sent || ""),
+      department: String(rowInfo && rowInfo.department || ""),
+      report_name: String(rowInfo && rowInfo.report_name || ""),
+      report_type: String(rowInfo && rowInfo.report_type || "other"),
+      report_tags: Array.isArray(rowInfo && rowInfo.report_tags) ? rowInfo.report_tags : [],
+      onclick_function_name: String(rowInfo && rowInfo.onclick_function_name || ""),
+      onclick_arg_count: Number(rowInfo && rowInfo.onclick_arg_count || 0)
     };
   }
 
-  function utils() { return root.NimsFastSummaryUtils || null; }
-  function bridge() { return root.nimsAndroidBridge || null; }
+  function transientTokenForRow(utils, doc, rowInfo) {
+    if (utils && typeof utils.getTransientReportRequestPayload === "function") {
+      try {
+        var payload = utils.getTransientReportRequestPayload(rowInfo, doc);
+        var value = payload && (payload.transientPrintReportArg || payload.transient_print_report_arg);
+        if (isSafeTransientToken(value)) return String(value);
+      } catch (e) { /* use DOM fallback */ }
+    }
 
-  function postDebug(note, doc) {
+    var row = rowElementForInfo(doc, rowInfo);
+    var button = firstPrintReportButton(row);
+    if (!button) return "";
+    if (utils && typeof utils.getTransientPrintReportArg === "function") {
+      try {
+        var parsed = utils.getTransientPrintReportArg(button);
+        if (isSafeTransientToken(parsed)) return String(parsed);
+      } catch (e) { /* use strict inline parser */ }
+    }
+    var onclick = button.getAttribute("onclick") || "";
+    var match = onclick.match(/^\s*printReport\s*\(\s*(['"])([^'"]+)\1\s*\)\s*;?\s*$/i);
+    return match && isSafeTransientToken(match[2]) ? match[2] : "";
+  }
+
+  function runtimeRows(utils, doc, hrefSafe) {
+    var extracted = [];
+    try { extracted = utils.extractReportRows(doc, hrefSafe) || []; } catch (e) { extracted = []; }
+    var result = [];
+    for (var i = 0; i < extracted.length; i += 1) {
+      var token = transientTokenForRow(utils, doc, extracted[i]);
+      if (!token) continue;
+      var row = safeRow(utils, extracted[i]);
+      row.transientPrintReportArg = token;
+      result.push(row);
+    }
+    return result;
+  }
+
+  function templateFromSetPdf(utils, doc) {
+    if (!utils || typeof utils.getSafeSetPdfTemplate !== "function") return null;
+    try {
+      var template = utils.getSafeSetPdfTemplate(doc);
+      if (!template || !template.discovered || template.pathname !== REPORT_PDF_PATH) return null;
+      return {
+        origin: template.origin,
+        pathname: REPORT_PDF_PATH,
+        modeParamName: REPORT_MODE_PARAM,
+        modeParamValue: REPORT_MODE,
+        argumentParameterName: REPORT_ARG_PARAM
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function templateFromLivePrintReport(doc) {
+    if (!doc || !isAllowedDocument(doc)) return null;
+    var win = doc.defaultView;
+    var fn = win && win.printReport;
+    if (typeof fn !== "function") return null;
+    var source = "";
+    try { source = Function.prototype.toString.call(fn); } catch (e) { return null; }
+    if (source.indexOf("invDuplicateResultReportPrinting.cnt") < 0) return null;
+    if (source.indexOf("PRINTREPORT") < 0 || source.indexOf("fileName") < 0) return null;
+    if (source.indexOf("AddRowToTableAddMoreValues") < 0) return null;
+    try {
+      var origin = new URL(doc.location.href).origin;
+      return {
+        origin: origin,
+        pathname: REPORT_PDF_PATH,
+        modeParamName: REPORT_MODE_PARAM,
+        modeParamValue: REPORT_MODE,
+        argumentParameterName: REPORT_ARG_PARAM
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function verifiedTemplate(utils, doc) {
+    return templateFromSetPdf(utils, doc) || templateFromLivePrintReport(doc);
+  }
+
+  function buildFrameReport(utils, doc, hrefSafe) {
+    if (!utils || !doc || !isAllowedDocument(doc)) return null;
+    try {
+      if (typeof utils.hasReportRows === "function" && !utils.hasReportRows(doc)) return null;
+    } catch (e) {
+      return null;
+    }
+    var rows = runtimeRows(utils, doc, hrefSafe);
+    if (!rows.length) return null;
+    var template = verifiedTemplate(utils, doc);
+    if (!template) return null;
+    return {
+      type: "nims_report_frame",
+      href: hrefSafe || safePath(doc.location && doc.location.href),
+      rowCount: rows.length,
+      rows: rows,
+      template: template
+    };
+  }
+
+  function frameReportKey(report) {
+    if (!report) return "";
+    var rows = report.rows || [];
+    function sig(row) {
+      return row ? String(row.transientPrintReportArg || row.report_name || row.row_index || "") : "";
+    }
+    return String(report.rowCount || 0) + "|" + (rows.length ? sig(rows[0]) : "") + "|" + (rows.length ? sig(rows[rows.length - 1]) : "");
+  }
+
+  var api = {
+    buildFrameReport: buildFrameReport,
+    frameReportKey: frameReportKey,
+    isSafeTransientToken: isSafeTransientToken,
+    verifiedTemplate: verifiedTemplate
+  };
+  root.NimsAndroidFrameBridgeUtil = api;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+
+  if (!root.document || !isAllowedDocument(root.document)) return;
+  if (root.__NIMS_ANDROID_FRAME_BRIDGE__) return;
+  root.__NIMS_ANDROID_FRAME_BRIDGE__ = true;
+
+  function bridge() { return root.nimsAndroidBridge || null; }
+  function utils() { return root.NimsFastSummaryUtils || null; }
+
+  function post(payload) {
     var target = bridge();
     if (!target || typeof target.postMessage !== "function") return false;
-    doc = doc || root.document;
-    var size = bodyStats(doc);
     try {
-      target.postMessage(JSON.stringify({
-        type: "nims_frame_debug",
-        url: safePath(doc && doc.location ? doc.location.href : root.location && root.location.href),
-        children: size.children,
-        textLen: size.textLen,
-        height: size.height,
-        errors: note ? [note] : []
-      }));
+      target.postMessage(JSON.stringify(payload));
       return true;
-    } catch (e) { return false; }
+    } catch (e) {
+      return false;
+    }
   }
 
-  function mainMenuFrame() {
-    var doc = root.document;
-    try {
-      return (doc.getElementById && doc.getElementById("frmMainMenu")) ||
-        (doc.querySelector && doc.querySelector('iframe[name="frmMainMenu"],frame[name="frmMainMenu"]')) || null;
-    } catch (e) { return null; }
-  }
-
-  function frameSnapshot(reason) {
-    var frame = mainMenuFrame();
-    if (!frame) return postDebug("NAV frame reason=" + reason + " present=false");
-    var attr = "", live = "", child = "", ready = "", readable = false;
-    var size = { children: 0, textLen: 0, height: 0 };
-    try { attr = frame.getAttribute ? frame.getAttribute("src") || "" : ""; } catch (e) {}
-    try { live = frame.src || ""; } catch (e) {}
-    try {
-      var childDoc = frame.contentDocument;
-      if (childDoc) {
-        readable = true;
-        child = safePath(childDoc.location && childDoc.location.href);
-        ready = childDoc.readyState || "";
-        size = bodyStats(childDoc);
-      }
-    } catch (e) {}
-    return postDebug([
-      "NAV frame", "reason=" + reason, "present=true",
-      "attr=" + safePath(attr), "live=" + safePath(live), "child=" + child,
-      "readable=" + readable, "ready=" + ready,
-      "children=" + size.children, "text=" + size.textLen, "h=" + size.height
-    ].join(" "));
-  }
-
-  function scheduleSnapshots(prefix) {
-    if (typeof root.setTimeout !== "function") return;
-    [0, 100, 500, 1500, 3000].forEach(function (ms) {
-      root.setTimeout(function () { frameSnapshot(prefix + "_" + ms + "ms"); }, ms);
+  function postClear(reason) {
+    return post({
+      type: "nims_report_clear",
+      href: safePath(root.location && root.location.href),
+      reason: String(reason || "navigation").slice(0, 60)
     });
   }
 
-  function watchFrame() {
-    var frame = mainMenuFrame();
-    if (!frame || frame.__nimsNavigationWatchInstalled) return false;
-    frame.__nimsNavigationWatchInstalled = true;
-    try {
-      frame.addEventListener("load", function () { frameSnapshot("frmMainMenu_load"); });
-      frame.addEventListener("error", function () { frameSnapshot("frmMainMenu_error"); });
-    } catch (e) {}
-    try {
-      if (typeof MutationObserver !== "undefined") {
-        new MutationObserver(function (records) {
-          if (records.some(function (item) { return item.attributeName === "src"; })) {
-            frameSnapshot("frmMainMenu_src_changed");
-            scheduleSnapshots("after_src_change");
-          }
-        }).observe(frame, { attributes: true, attributeFilter: ["src"] });
-      }
-    } catch (e) {}
-    frameSnapshot("frmMainMenu_watch_ready");
-    return true;
+  function isCrSearchForm(form) {
+    if (!form) return false;
+    var name = String(form.name || form.id || "");
+    var action = safePath(form.getAttribute && form.getAttribute("action") || "");
+    return name === CR_FORM_NAME || action.indexOf(REPORT_LIST_PATH) >= 0;
   }
 
-  function isInvestigationTarget(node) {
-    for (var current = node, depth = 0; current && depth < 7; current = current.parentElement, depth += 1) {
-      try {
-        var onclick = current.getAttribute ? current.getAttribute("onclick") || "" : "";
-        var label = String(current.innerText || current.textContent || current.value || "").replace(/\s+/g, " ").trim();
-        if (/menuSelected\s*\(\s*['"]Investigation['"]\s*,\s*true\s*\)/i.test(onclick) || /^Investigation$/i.test(label)) return true;
-      } catch (e) {}
-    }
-    return false;
-  }
-
-  function installNavigationTrace() {
+  function installClearSignals() {
     var doc = root.document;
-    watchFrame();
-    if (doc && !doc.__nimsInvestigationTraceInstalled && typeof doc.addEventListener === "function") {
-      doc.__nimsInvestigationTraceInstalled = true;
-      doc.addEventListener("click", function (event) {
-        if (!isInvestigationTarget(event && event.target)) return;
-        postDebug("NAV investigation_click");
-        frameSnapshot("before_click");
-        scheduleSnapshots("after_click");
-      }, true);
-    }
-    if (typeof root.addEventListener === "function") {
-      root.addEventListener("error", function (event) {
-        var source = event && event.filename ? String(event.filename).split("/").pop() : "";
-        var message = event && event.message ? String(event.message).replace(/\s+/g, " ").slice(0, 120) : "error";
-        postDebug("NAV page_error message=" + message + " source=" + source + " line=" + (event && event.lineno ? event.lineno : 0));
-      });
-    }
-    try {
-      if (typeof MutationObserver !== "undefined" && doc && doc.documentElement) {
-        new MutationObserver(watchFrame).observe(doc.documentElement, { childList: true, subtree: true });
-      }
-    } catch (e) {}
+    if (!doc || doc.__nimsReportClearSignalsInstalled) return;
+    doc.__nimsReportClearSignalsInstalled = true;
+    doc.addEventListener("submit", function (event) {
+      if (isCrSearchForm(event && event.target)) postClear("cr_submit");
+    }, true);
+    root.addEventListener("beforeunload", function () {
+      var path = safePath(root.location && root.location.href);
+      if (path.indexOf(REPORT_LIST_PATH) >= 0) postClear("report_frame_unload");
+    });
   }
 
   var lastKey = "";
+  var hadReport = false;
   function tick() {
     var u = utils();
-    var b = bridge();
-    if (!u || !b) return;
+    if (!u || !bridge()) return;
     var report = buildFrameReport(u, root.document, safePath(root.location && root.location.href));
-    if (!report) return;
+    if (!report) {
+      if (!hadReport && safePath(root.location && root.location.href).indexOf(REPORT_LIST_PATH) >= 0) postClear("cr_search_or_loading");
+      return;
+    }
+    hadReport = true;
     var key = frameReportKey(report);
     if (key === lastKey) return;
     lastKey = key;
-    try { b.postMessage(JSON.stringify(report)); } catch (e) {}
+    post(report);
   }
 
   function start() {
-    installNavigationTrace();
+    installClearSignals();
     tick();
+    var scheduled = false;
+    function scheduleTick() {
+      if (scheduled) return;
+      scheduled = true;
+      root.setTimeout(function () {
+        scheduled = false;
+        tick();
+      }, 150);
+    }
+    try {
+      if (typeof MutationObserver !== "undefined" && root.document.documentElement) {
+        new MutationObserver(scheduleTick).observe(root.document.documentElement, { childList: true, subtree: true, attributes: true });
+      }
+    } catch (e) { /* bounded interval remains */ }
     var ticks = 0;
     var interval = root.setInterval(function () {
       ticks += 1;
-      watchFrame();
       tick();
-      if (ticks >= 80) root.clearInterval(interval);
-    }, 750);
+      if (ticks >= 180) root.clearInterval(interval);
+    }, 1000);
   }
 
   if (root.document.readyState !== "loading") start();
