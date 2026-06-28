@@ -1,9 +1,11 @@
 name: Android diagnostic
+
 on:
-  push:
-    branches: [refactor/android-on-demand-webview]
+  pull_request:
+
 permissions:
   contents: read
+
 jobs:
   compile:
     runs-on: ubuntu-latest
