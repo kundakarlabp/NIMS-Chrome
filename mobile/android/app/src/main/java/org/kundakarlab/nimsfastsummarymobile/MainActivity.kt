@@ -21,6 +21,7 @@ import android.webkit.WebStorage
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import androidx.webkit.ScriptHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -123,6 +124,9 @@ class MainActivity : ComponentActivity() {
     private var mappingValidated = false
     private var crossFrameReport: JSONObject? = null
     private var webViewUserAgent = ""
+    private var documentStartScriptHandler: ScriptHandler? = null
+    private var webRuntimeSupported = false
+    private var webRuntimeError = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
     private var statusMessage by mutableStateOf("Open NIMS and login manually.")
@@ -165,10 +169,14 @@ class MainActivity : ComponentActivity() {
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
-        clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
         webViewUserAgent = webView.settings.userAgentString
-        val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
-        setState(initial.state, initial.message)
+        if (webRuntimeSupported) {
+            clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
+            val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+            setState(initial.state, initial.message)
+        } else {
+            setState(AppState.ERROR, webRuntimeError.ifBlank { "NIMS WebView runtime could not be installed." })
+        }
         setContent {
             NimsTheme {
                 NimsFastSummaryApp(
@@ -191,14 +199,20 @@ class MainActivity : ComponentActivity() {
                     onClearHelper = { clearHelperSettings() },
                     processingMode = processingMode,
                     onProcessingModeChange = { updateProcessingMode(it) },
-                    onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
+                    onNimsLogin = {
+                        if (webRuntimeSupported) webView.loadUrl(NIMS_LOGIN_URL)
+                        else setState(AppState.ERROR, webRuntimeError.ifBlank { "Update Chrome and Android System WebView." })
+                    },
                     onClearNimsSession = { clearNimsSession() },
                     onBack = { if (webView.canGoBack()) webView.goBack() },
                     onForward = { if (webView.canGoForward()) webView.goForward() },
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
-                    onOpenCrReports = { runMode("bulk_fast") },
+                    onOpenCrReports = {
+                        val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
+                        if (visibleRows > 0) runMode("bulk_fast") else openCrWiseReports()
+                    },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
@@ -226,13 +240,7 @@ class MainActivity : ComponentActivity() {
         // Let a desktop Chrome (chrome://inspect over USB) attach to this WebView,
         // and let the WebView report its own console/network errors (wired below).
         runCatching { WebView.setWebContentsDebuggingEnabled(true) }
-        val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
-        val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
-        val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
-        // Runtime compatibility shim: neutralizes NIMS's confirmed crashes
-        // (missing date_time global, and the $("#menuStrip").offset().left throw
-        // in tabmenu.js) so the menu/content render isn't aborted in the WebView.
-        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
+        // NimsWebViewRuntime loads and registers the bundled runtime assets below.
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             // Identify as the desktop Chrome the extension actually works in.
@@ -330,34 +338,15 @@ class MainActivity : ComponentActivity() {
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
                 onResourceError = { detail -> log(detail) }
             )
-            // All-frames bridge (mirrors the extension's all_frames model). The
-            // top frame cannot read a cross-origin result iframe, so inject the
-            // core + bridge into every frame and let the frame that owns the rows
-            // post them back via nimsAndroidBridge. Feature-gated; if unsupported,
-            // the existing same-origin top-frame path still runs.
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-                runCatching {
-                    WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("*")) { _, message, _, _, _ ->
-                        message.data?.let { data -> post { onFrameReport(data) } }
-                    }
-                }
-            }
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                // The shim is the render fix and must run first, before NIMS's
-                // own scripts, and even if the reader assets failed to load.
-                val readerJs = if (coreJs != null && utilsJs != null && bridgeJs != null) {
-                    "\n$coreJs\n$utilsJs\n$bridgeJs"
-                } else {
-                    ""
-                }
-                val payload = (shimJs ?: "") + readerJs
-                if (payload.isNotBlank()) {
-                    runCatching {
-                        val injected = "try{\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
-                        WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
-                    }
-                }
-            }
+            val runtime = NimsWebViewRuntime.install(
+                webView = this,
+                onMessage = { data -> post { onFrameReport(data) } },
+                onLog = { detail -> log(detail) }
+            )
+            documentStartScriptHandler = runtime.scriptHandler
+            webRuntimeSupported = runtime.supported
+            webRuntimeError = runtime.error
+            if (!runtime.supported) log(runtime.error)
         }
     }
 
@@ -546,6 +535,26 @@ class MainActivity : ComponentActivity() {
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
+            "nims_runtime_ready" -> {
+                val path = json.optString("path").take(180)
+                val jqueryVersion = json.optString("jqueryVersion").take(24)
+                val ready = json.optBoolean("dateTimeReady") &&
+                    (!path.startsWith("/HISInvestigationG5/") || json.optBoolean("jqueryPresent"))
+                log("Runtime frame=$path ready=$ready jquery=${jqueryVersion.ifBlank { "none" }} fallback=${json.optBoolean("jqueryFallbackUsed")} offset=${json.optBoolean("offsetPatched")} tab=${json.optBoolean("ajaxCompleteTabPatched")}")
+                if (ready && path.startsWith("/HISInvestigationG5/") && appStateValue == AppState.HELPER_READY && activeProcessingJob?.isActive != true) {
+                    setState(AppState.HELPER_READY, "NIMS Investigation runtime ready. Continue to the CR-wise report page.")
+                }
+                return
+            }
+            "nims_runtime_error" -> {
+                val path = json.optString("path").take(180)
+                val detail = json.optString("detail", "WebView runtime error").take(160)
+                log("Runtime error frame=$path detail=$detail")
+                if (!detail.contains("without a matching iframe", ignoreCase = true)) {
+                    setState(AppState.ERROR, "NIMS WebView runtime error. Reload the page and retry.")
+                }
+                return
+            }
             "nims_frame_debug" -> {
                 val errs = json.optJSONArray("errors")
                 val errStr = if (errs != null && errs.length() > 0) {
@@ -560,6 +569,7 @@ class MainActivity : ComponentActivity() {
             "nims_report_frame" -> { /* fall through to handling below */ }
             else -> return
         }
+        if (FrameReportNormalizer.normalize(json, webView.url ?: NIMS_LOGIN_URL) { log(it) } == null) return
         crossFrameReport = json
         val rowCount = json.optJSONArray("rows")?.length() ?: 0
         val hasTemplate = json.optJSONObject("template") != null
@@ -1070,6 +1080,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         cancelNavigation()
         activeProcessingJob?.cancel()
+        runCatching { documentStartScriptHandler?.remove() }
+        documentStartScriptHandler = null
         runCatching {
             if (::webView.isInitialized) {
                 webView.stopLoading()
@@ -1280,7 +1292,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Analyze Current Results") } }
+            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR / Analyze") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }
             item { Button(onClick = onTestOne) { Text("Test One") } }
@@ -1492,7 +1504,7 @@ private fun StatusCard(state: AppState) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
-                AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."
+                AppState.REPORT_PAGE_READY -> "Enter the CR number if needed; after the report list appears, tap Open CR / Analyze."
                 AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."
