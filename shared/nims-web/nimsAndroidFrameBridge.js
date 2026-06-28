@@ -28,7 +28,8 @@
   }
 
   function isReportDocument(doc) {
-    var path = safePath(doc && doc.location ? doc.location.href : "").toLowerCase();
+    if (!doc || !doc.location || !doc.location.href) return true;
+    var path = safePath(doc.location.href).toLowerCase();
     return REPORT_PATHS.some(function (item) { return path.indexOf(item) >= 0; });
   }
 
@@ -53,6 +54,7 @@
   }
 
   function strictVisibleRows(doc, rows) {
+    if (!doc || typeof doc.querySelectorAll !== "function") return rows || [];
     var domRows = [];
     try { domRows = Array.prototype.slice.call(doc.querySelectorAll("tr")); } catch (e) { domRows = []; }
     return (rows || []).filter(function (row) {
