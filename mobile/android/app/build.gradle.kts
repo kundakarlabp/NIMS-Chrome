@@ -10,7 +10,7 @@ val generatedWebAssets = layout.buildDirectory.dir("generated/nimsWebAssets")
 val prepareBundledJquery by tasks.registering(Copy::class) {
     from({ jqueryWebJar.resolve().map { zipTree(it) } }) {
         include("META-INF/resources/webjars/jquery/3.7.1/jquery.min.js")
-        rename { "jquery-3.7.1.min.js" }
+        eachFile { path = "jquery-3.7.1.min.js" }
         includeEmptyDirs = false
     }
     into(generatedWebAssets)
