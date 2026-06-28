@@ -12,18 +12,9 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.9.1"
+        versionCode = 25
+        versionName = "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    // shared/nims-web is the canonical source for pure browser/WebView logic.
-    // No generated assets or source mutation occurs during the Android build.
-    sourceSets {
-        getByName("main").assets.srcDirs(
-            "src/main/assets",
-            "../../../shared/nims-web"
-        )
     }
 
     buildFeatures {
@@ -43,13 +34,8 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 tasks.register("verifyNimsRuntimeAssets") {
     doLast {
-        val shared = rootProject.file("../../shared/nims-web")
-        listOf(
-            "nimsReportCore.js",
-            "contentUtils.js",
-            "nimsPassiveObserver.js"
-        ).forEach { name ->
-            check(shared.resolve(name).isFile) { "Missing shared NIMS runtime asset: $name" }
+        check(project.file("src/main/assets/nimsOnDemandExtractor.js").isFile) {
+            "Missing on-demand NIMS extractor asset"
         }
     }
 }

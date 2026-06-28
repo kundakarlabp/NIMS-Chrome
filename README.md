@@ -98,12 +98,7 @@ The extension still performs direct NIMS report fetching in the browser session.
 
 ### Android WebView Mobile Mode
 
-The Android app under `mobile/android/` separates the NIMS portal from the native
-results UI. NIMS remains responsible for manual login, menu navigation, CR-number
-entry, form submission, and rendering. A passive all-frame observer detects the
-genuine CR search/result frame and sends sanitized report references to Android.
-The app then fetches supported reports with the authenticated WebView session,
-processes them on-device, and presents Reports, Trends, Cultures, and Summary.
+Android version 0.10.0 uses a browser-first WebView. NIMS loads normally during login and navigation with no document-start JavaScript, no persistent JavaScript bridge, no polling observer, and no injected jQuery or compatibility layer.
 
 Normal workflow:
 
@@ -112,13 +107,12 @@ Normal workflow:
 3. Navigate in NIMS to **Investigation → CR No Wise Result Report Printing New**.
 4. Enter and submit the CR number manually.
 5. Keep the result table with visible **View Report** rows on screen.
-6. Tap **Analyze Results**.
-7. Review the native result tabs and verify values against source reports.
+6. Tap **Analyze**.
+7. Review the native Reports, Trends, Cultures, and Summary tabs and verify values against source reports.
 
-The Android runtime does not bundle jQuery, patch `date_time`, wrap
-`ajaxCompleteTab`, click menus, automate login, or navigate directly to internal
-NIMS endpoints. Railway remains optional advanced fallback; on-device processing
-is the default. Image-only PDFs remain unsupported because OCR is not enabled.
+Only after Analyze is tapped does the app run one read-only extraction script against the currently rendered approved NIMS page. It validates safe report references, fetches supported reports using the authenticated WebView session, processes text/HTML and text-based PDFs on-device, and presents native results. Image-only PDFs remain unsupported because OCR is not enabled.
+
+The Android app does not automate login, captcha or OTP, menu navigation, CR entry, form submission, or report opening. Raw report bytes, cookies, full URLs, query values, and transient report filenames are not persisted.
 
 Android build steps:
 
@@ -228,5 +222,3 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 ## Security
 
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
-
-

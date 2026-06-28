@@ -80,15 +80,21 @@ class NimsReportTemplateTest {
     }
 
     @Test
-    fun androidAssetSourceIncludesSharedWebCore() {
+    fun androidBuildPackagesOnlyTheOnDemandExtractor() {
         val userDir = checkNotNull(System.getProperty("user.dir")) {
             "Expected user.dir system property for repository-root fixture lookup"
         }
         val repoRoot = generateSequence(File(userDir).absoluteFile) { current ->
             current.parentFile
-        }.first { File(it, "shared/nims-web/nimsReportCore.js").isFile }
-        assertTrue(File(repoRoot, "shared/nims-web/nimsReportCore.js").isFile)
+        }.first { File(it, "mobile/android/app/build.gradle.kts").isFile }
+        assertTrue(
+            File(
+                repoRoot,
+                "mobile/android/app/src/main/assets/nimsOnDemandExtractor.js"
+            ).isFile
+        )
         val buildGradle = File(repoRoot, "mobile/android/app/build.gradle.kts").readText()
-        assertTrue(buildGradle.contains("\"../../../shared/nims-web\""))
+        assertFalse(buildGradle.contains("../../../shared/nims-web"))
+        assertFalse(buildGradle.contains("jquery-3.7.1.min.js"))
     }
 }
