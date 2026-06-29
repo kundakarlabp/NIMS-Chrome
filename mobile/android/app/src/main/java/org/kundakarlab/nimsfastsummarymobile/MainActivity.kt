@@ -198,7 +198,10 @@ class MainActivity : ComponentActivity() {
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
-                    onOpenCrReports = { runMode("bulk_fast") },
+                    onOpenCrReports = {
+                        val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
+                        if (visibleRows > 0) runMode("bulk_fast") else openCrWiseReports()
+                    },
                     onOpenCrSearchDirect = { openCrSearchDirect() },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
@@ -624,6 +627,7 @@ class MainActivity : ComponentActivity() {
             "nims_report_frame" -> { /* fall through to handling below */ }
             else -> return
         }
+        if (FrameReportNormalizer.normalize(json, webView.url ?: NIMS_LOGIN_URL) { log(it) } == null) return
         crossFrameReport = json
         val rowCount = json.optJSONArray("rows")?.length() ?: 0
         val hasTemplate = json.optJSONObject("template") != null
@@ -1350,7 +1354,7 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
             item { Button(onClick = onOpenCrSearchDirect, enabled = !navigationInProgress) { Text("Open CR Results") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Analyze Current Results") } }
+            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR / Analyze") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }
             item { Button(onClick = onTestOne) { Text("Test One") } }
@@ -1562,7 +1566,7 @@ private fun StatusCard(state: AppState) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
-                AppState.REPORT_PAGE_READY -> "Report list detected. Discover mapping."
+                AppState.REPORT_PAGE_READY -> "Enter the CR number if needed; after the report list appears, tap Open CR / Analyze."
                 AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."

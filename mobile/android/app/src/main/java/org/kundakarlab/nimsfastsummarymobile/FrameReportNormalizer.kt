@@ -59,10 +59,19 @@ object FrameReportNormalizer {
         return normalized
     }
 
+    // BUG FIX (same defect as nimsAndroidFrameBridge.js's old firstPrintReportButton):
+    // matchEntire with ^...$ anchors required the WHOLE onclick attribute to be
+    // exactly printReport('x') or printReport('x');. Real NIMS markup can wrap
+    // the call (observed live: "return printReport('x.pdf');"), which a fully
+    // anchored pattern rejects outright. This is normally a fallback (the JS
+    // side now populates transientPrintReportArg directly in the common case),
+    // but it must not silently fail the same way if it's ever the only source.
+    // find() + explicit function-name/arg-shape checks instead of matchEntire.
     internal fun extractSinglePrintReportArg(onclick: String): String {
-        val quoted = Regex(
-            pattern = """(?is)^\s*(?:javascript:\s*)?printReport\s*\(\s*(['\"])(.*?)\1\s*\)\s*;?\s*$"""
-        ).matchEntire(onclick)?.groupValues?.getOrNull(2)
+        val callPattern = Regex(
+            pattern = """(?is)printReport\s*\(\s*(['\"])(.*?)\1\s*\)"""
+        )
+        val quoted = callPattern.find(onclick)?.groupValues?.getOrNull(2)
         if (!quoted.isNullOrBlank()) {
             return quoted
                 .replace("\\'", "'")
@@ -70,9 +79,10 @@ object FrameReportNormalizer {
                 .replace("\\\\", "\\")
         }
 
-        val unquoted = Regex(
-            pattern = """(?is)^\s*(?:javascript:\s*)?printReport\s*\(\s*([^,()]+)\s*\)\s*;?\s*$"""
-        ).matchEntire(onclick)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val unquotedPattern = Regex(
+            pattern = """(?is)printReport\s*\(\s*([^,()'\"]+)\s*\)"""
+        )
+        val unquoted = unquotedPattern.find(onclick)?.groupValues?.getOrNull(1)?.trim().orEmpty()
         return unquoted.takeIf { it.isNotBlank() && !it.equals("null", true) && !it.equals("undefined", true) }.orEmpty()
     }
 

@@ -59,4 +59,55 @@ class FrameReportNormalizerTest {
         assertNotNull(result)
         assertEquals(0, result!!.getJSONArray("rows").length())
     }
+
+    // REGRESSION: live NIMS markup wraps the call (e.g. "return printReport('x.pdf');"),
+    // which the old fully-anchored matchEntire(^...$) pattern rejected outright,
+    // matching the exact defect found and fixed in nimsAndroidFrameBridge.js.
+    @Test
+    fun extractsArgumentWhenOnclickIsWrappedInAReturnStatement() {
+        assertEquals(
+            "260611R1114_E9736.pdf",
+            FrameReportNormalizer.extractSinglePrintReportArg("return printReport('260611R1114_E9736.pdf');")
+        )
+    }
+
+    @Test
+    fun extractsArgumentWhenOnclickHasATrailingStatement() {
+        assertEquals(
+            "260611R1114_E9736.pdf",
+            FrameReportNormalizer.extractSinglePrintReportArg("printReport('260611R1114_E9736.pdf'); return false;")
+        )
+    }
+
+    @Test
+    fun stillExtractsThePlainUnwrappedFormAfterTheFix() {
+        assertEquals(
+            "260611R1114_E9736.pdf",
+            FrameReportNormalizer.extractSinglePrintReportArg("printReport('260611R1114_E9736.pdf')")
+        )
+    }
+
+    @Test
+    fun returnsEmptyForAnUnrelatedFunctionCall() {
+        assertEquals("", FrameReportNormalizer.extractSinglePrintReportArg("submitForm('NEW');"))
+    }
+
+    @Test
+    fun wrappedFormFlowsThroughFullNormalizeEndToEnd() {
+        val row = JSONObject()
+            .put("report_name", "Cultures")
+            .put("onclick", "return printReport('TOKEN_42.pdf');")
+        val input = JSONObject()
+            .put("type", "nims_report_frame")
+            .put("href", "www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt")
+            .put("rows", JSONArray().put(row))
+
+        val result = FrameReportNormalizer.normalize(input, "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action")
+
+        assertNotNull(result)
+        assertEquals(
+            "TOKEN_42.pdf",
+            result!!.getJSONArray("rows").getJSONObject(0).getString("transientPrintReportArg")
+        )
+    }
 }
