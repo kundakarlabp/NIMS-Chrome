@@ -197,6 +197,7 @@ class MainActivity : ComponentActivity() {
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
                     onOpenCrSearchDirect = { openCrSearchDirect() },
+                    onCopyFullLog = { copyFullLog() },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
@@ -970,6 +971,21 @@ class MainActivity : ComponentActivity() {
         copyText("NIMS Fast Summary", cleanSummaryText())
     }
 
+    // The on-screen log panel only shows the last 1200 chars for layout
+    // reasons, which routinely cuts off exactly the part that matters (a JS
+    // exception's message, which often comes at the END of a log line). This
+    // copies the COMPLETE retained log buffer to the clipboard so it can be
+    // pasted in full, instead of relying on a screenshot of a panel that may
+    // be showing a truncated view of a truncated entry.
+    private fun copyFullLog() {
+        val text = safeLogBuffer.fullText()
+        if (text.isBlank()) {
+            log("Nothing to copy yet.")
+            return
+        }
+        copyText("NIMS Fast Summary Mobile log", text)
+    }
+
     private fun copyText(label: String, text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
@@ -1087,6 +1103,7 @@ private fun NimsFastSummaryApp(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
+    onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
@@ -1137,6 +1154,7 @@ private fun NimsFastSummaryApp(
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
                 onOpenCrSearchDirect = onOpenCrSearchDirect,
+                onCopyFullLog = onCopyFullLog,
                 navigationInProgress = navigationInProgress,
                 onDiagnose = onDiagnose,
                 onDiscover = onDiscover,
@@ -1212,6 +1230,7 @@ private fun NimsWebViewScreen(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
+    onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
     onDiscover: () -> Unit,
@@ -1239,15 +1258,21 @@ private fun NimsWebViewScreen(
             item { Button(onClick = onFast) { Text("Fast") } }
             item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
             item { Button(onClick = onFull) { Text("Full") } }
+            item { OutlinedButton(onClick = onCopyFullLog) { Text("Copy Log") } }
             if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
         if (logText.isNotBlank()) {
+            // Was takeLast(1200) at 96.dp -- routinely cut off the exact part
+            // of a crash message that matters. Copy Log (above) gives the
+            // full untruncated buffer; this panel is widened and made
+            // scrollable to reduce how often that button is even needed.
             Text(
-                logText.takeLast(1200),
+                logText.takeLast(4000),
                 Modifier
                     .fillMaxWidth()
-                    .height(96.dp)
+                    .height(160.dp)
+                    .verticalScroll(rememberScrollState())
                     .background(Color(0xFFF7F9FC))
                     .padding(8.dp),
                 style = MaterialTheme.typography.bodySmall
