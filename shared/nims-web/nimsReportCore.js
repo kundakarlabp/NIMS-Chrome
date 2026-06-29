@@ -811,6 +811,17 @@
     return bestReportDocument(doc || root.document).rows;
   }
 
+  // Combined helper: read rows from the best document AND select for mode in
+  // one JS-side call, so Kotlin never needs to interpolate a JSONArray of row
+  // data into JavaScript source code. Interpolating JSONArray.toString() into
+  // JS produces syntax errors when row values contain " characters (specifically
+  // the onclick attribute, e.g. "return printReport(\"x.pdf\");"), which broke
+  // the WebView renderer and caused the process crash reported live.
+  function selectRowsForModeFromDoc(mode, doc) {
+    const rows = bestReportDocument(doc || root.document).rows;
+    return selectRowsForMode(rows, mode);
+  }
+
   function clickFirstReportForMode(mode, doc) {
     const best = bestReportDocument(doc || root.document);
     const rowInfo = selectRowsForMode(best.rows, mode || "test_direct")[0];
@@ -973,7 +984,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect, closeReportPopup };
+  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, selectRowsForModeFromDoc, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect, closeReportPopup };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

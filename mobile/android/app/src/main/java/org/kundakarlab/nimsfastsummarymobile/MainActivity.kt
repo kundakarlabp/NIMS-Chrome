@@ -683,22 +683,26 @@ class MainActivity : ComponentActivity() {
                 setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
             }
         }, watchdogMs)
-        evaluateJsonArray("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rows ->
+        // ROOT CAUSE FIX 2: the original two-hop chain interpolated the
+        // JSONArray from the first evaluateJsonArray directly into the second
+        // JS call as ${rows} -- JSONArray.toString() contains " chars which
+        // break the JS string literal. selectRowsForModeFromDoc does both
+        // steps in JS so no row data ever crosses the Kotlin->JS boundary
+        // as interpolated source. mode is a safe alphanumeric string constant.
+        evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForModeFromDoc('$mode', document))") { selectedAll ->
             if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
-            if (rows.length() == 0) {
-                setState(AppState.ERROR, "Could not read the report list from the page (it may have been disturbed by a popup, or the page is mid-navigation). Keep the result list visible and retry.")
+            if (selectedAll.length() == 0) {
+                setState(AppState.ERROR, "No matching report rows found for this mode. Keep the result list visible and retry.")
                 return@evaluateJsonArray
             }
-            evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedAll ->
-                val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                    JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
-                } else {
-                    selectedAll
-                }
-                log("Selected ${selected.length()} reports")
-                prepareReportRequests(selected, currentMapping) { prepared ->
-                    startFetchParseSummarize(mode, prepared)
-                }
+            val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
+                JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
+            } else {
+                selectedAll
+            }
+            log("Selected ${selected.length()} reports")
+            prepareReportRequests(selected, currentMapping) { prepared ->
+                startFetchParseSummarize(mode, prepared)
             }
         }
     }
@@ -706,19 +710,20 @@ class MainActivity : ComponentActivity() {
     private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
         val prepared = mutableListOf<PreparedReportRequest>()
         fun step(index: Int) {
-            if (index >= selected.length()) {
-                callback(prepared)
-                return
-            }
-            val row = selected.optJSONObject(index)
-            if (row == null) {
-                step(index + 1)
-                return
-            }
-            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))") { payload ->
+            if (index >= selected.length()) { callback(prepared); return }
+            val row = selected.optJSONObject(index) ?: run { step(index + 1); return }
+            // ROOT CAUSE FIX: do NOT interpolate `row` (a JSONObject) directly
+            // into JavaScript source code. JSONObject.toString() contains " chars
+            // which break the surrounding JS string literal, especially the
+            // onclick attribute ("return printReport(\"x.pdf\");") -- this
+            // produced a JS syntax error that crashed the WebView renderer.
+            // Pass only the safe integer row_index; JS re-reads everything else
+            // from the DOM directly (findReportRow uses only row_index anyway).
+            val rowIndex = row.optInt("row_index", index)
+            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow({row_index:$rowIndex}, document))") { payload ->
                 val transient = payload.optString("transientPrintReportArg")
                 if (transient.isBlank()) {
-                    log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
+                    log("Skipping row $rowIndex (${row.optString("report_name", "report")}): Required report argument missing")
                 } else {
                     prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
                 }
