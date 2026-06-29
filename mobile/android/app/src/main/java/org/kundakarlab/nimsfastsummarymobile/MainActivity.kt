@@ -1444,7 +1444,7 @@ private fun StatusCard(state: AppState) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
                 AppState.HELPER_READY -> "Login to NIMS manually."
                 AppState.NIMS_LOGIN -> "Open the report page after login."
-                AppState.REPORT_PAGE_READY -> "Enter the CR number if needed; after the report list appears, tap Open CR / Analyze."
+                AppState.REPORT_PAGE_READY -> "Report list detected. Tap Test One, Fast, Cultures, or Full."
                 AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."
