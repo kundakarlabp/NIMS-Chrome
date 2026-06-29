@@ -746,6 +746,41 @@
     return getSafeSetPdfTemplate(best.doc);
   }
 
+  // discoverSetPdfTemplate's caller (Android's discoverMapping) must click a
+  // real "View Report" row once to make NIMS run its own printReport() ->
+  // AddRowToTableAddMoreValues() -> popup("popUpDiv") chain, so the resulting
+  // #setPdf iframe src can be read as proof of the live request template
+  // (see section 13 of the technical dossier). NOTHING previously closed that
+  // popup afterward: it stayed open, empty, on top of the report list for the
+  // rest of the session (the blank "Patient Report" box seen live), sharing
+  // the WebView's render/script thread with every subsequent evaluateJavascript
+  // call from Test One/Fast/Cultures and contributing to perceived hangs.
+  // Close it the same way the page's own Cancel control does -- call its own
+  // popup()/toggle() so we match its exact show/hide contract -- with a
+  // direct style fallback if those aren't reachable.
+  function closeReportPopup(doc) {
+    const target = doc || root.document;
+    const win = target.defaultView || root;
+    const div = target.getElementById && target.getElementById("popUpDiv");
+    if (!div) return { ok: true, action: "not_present" };
+    const isOpen = win.getComputedStyle ? win.getComputedStyle(div).display !== "none" : true;
+    if (!isOpen) return { ok: true, action: "already_closed" };
+    if (typeof win.popup === "function") {
+      try { win.popup("popUpDiv"); return { ok: true, action: "closed_via_page_popup" }; } catch (e) { /* fall through */ }
+    }
+    if (typeof win.toggle === "function") {
+      try { win.toggle("popUpDiv"); return { ok: true, action: "closed_via_page_toggle" }; } catch (e) { /* fall through */ }
+    }
+    try {
+      div.style.display = "none";
+      const iframe = div.querySelector("iframe");
+      if (iframe) iframe.setAttribute("src", "about:blank");
+      return { ok: true, action: "closed_via_style_fallback" };
+    } catch (e) {
+      return { ok: false, action: "close_failed", errorCode: "popup_close_failed" };
+    }
+  }
+
   function getSafeSetPdfTemplate(doc) {
     const frame = (doc || root.document).querySelector("iframe#setPdf");
     const src = frame ? frame.getAttribute("src") || "" : "";
@@ -938,7 +973,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect };
+  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect, closeReportPopup };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

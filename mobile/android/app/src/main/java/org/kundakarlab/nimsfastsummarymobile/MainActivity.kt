@@ -122,6 +122,8 @@ class MainActivity : ComponentActivity() {
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
     private var crossFrameReport: JSONObject? = null
+    // Token identity for the runFrameBridgeMode watchdog (see there for why).
+    private var activeFrameBridgeWatchdog: Any? = null
     private var webViewUserAgent = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
@@ -330,7 +332,28 @@ class MainActivity : ComponentActivity() {
                 }
             }
             webViewClient = NimsWebViewClient(
-                onPageChanged = { safeUrl -> currentPage = safeUrl.ifBlank { "NIMS" } },
+                onPageChanged = { safeUrl ->
+                    currentPage = safeUrl.ifBlank { "NIMS" }
+                    // BUG FIX: navigating away from the CR-wise report list (e.g. a
+                    // session-expired redirect to the NIMS login page, or back/
+                    // forward navigation) used to leave mapping/crossFrameReport/
+                    // mappingValidated pointing at the OLD page's now-dead template
+                    // and tokens. A subsequent Test One/Fast tap would then try to
+                    // fetch with state from a page that's no longer there, which
+                    // looks like a generic failure rather than what it actually is.
+                    // Clear it whenever the WebView leaves the known report-list
+                    // path, so the next action correctly asks to re-discover.
+                    if (!safeUrl.contains("viewcrnowisereportprocess.cnt", ignoreCase = true) &&
+                        !safeUrl.contains("invresultreportprintingcrnowise.cnt", ignoreCase = true)
+                    ) {
+                        if (mapping != null || crossFrameReport != null || mappingValidated) {
+                            log("Left the CR result list ($safeUrl); clearing stale mapping/report state")
+                        }
+                        mapping = null
+                        crossFrameReport = null
+                        mappingValidated = false
+                    }
+                },
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
                 onResourceError = { detail -> log(detail) }
             )
@@ -590,6 +613,11 @@ class MainActivity : ComponentActivity() {
             log("Waiting for report mapping")
             Handler(Looper.getMainLooper()).postDelayed({
                 evaluateCore("JSON.stringify(NimsReportCore.discoverSetPdfTemplate(document))") { template ->
+                    // Always close the popup discoverSetPdfTemplate's click just opened,
+                    // success or failure, before anything else touches the WebView.
+                    evaluateCore("JSON.stringify(NimsReportCore.closeReportPopup(document))") { closeResult ->
+                        log("Closed report-discovery popup: ${closeResult.optString("action")}")
+                    }
                     if (!template.optBoolean("discovered")) {
                         setState(AppState.ERROR, "Mapping not discovered. Open the report page and retry.")
                         return@evaluateCore
@@ -649,7 +677,27 @@ class MainActivity : ComponentActivity() {
             setState(AppState.ERROR, "No usable report rows from the visible frame. Keep the result list visible and retry.")
             return
         }
+        // Watchdog: evaluateJavascript's callback should always eventually
+        // fire, but a NIMS popup/modal left open from an earlier template
+        // discovery click can occupy the WebView's render/script thread for a
+        // long time, and a killed renderer process drops the callback
+        // entirely. Without this, the screen can sit on stale "Next action"
+        // text indefinitely with no error -- which read as "crashed" when
+        // reported live. Surface a clear, retryable error instead of nothing.
+        val watchdogToken = Any()
+        activeFrameBridgeWatchdog = watchdogToken
+        val watchdogMs = if (mode == "test_direct") 20_000L else 60_000L
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (activeFrameBridgeWatchdog === watchdogToken) {
+                activeFrameBridgeWatchdog = null
+                setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
+            }
+        }, watchdogMs)
+        fun clearWatchdog() {
+            if (activeFrameBridgeWatchdog === watchdogToken) activeFrameBridgeWatchdog = null
+        }
         evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rowsArr}, '$mode'))") { selectedText ->
+            clearWatchdog()
             val selectedAll = runCatching { JSONArray(selectedText) }.getOrDefault(JSONArray())
             val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
                 JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
