@@ -83,9 +83,6 @@ import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import org.kundakarlab.nimsfastsummarymobile.security.UrlClassification
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationCoordinator
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationOutcome
-import org.kundakarlab.nimsfastsummarymobile.navigation.NimsNavigationStep
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.withPermit
@@ -121,9 +118,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
-    private var crossFrameReport: JSONObject? = null
-    // Token identity for the runFrameBridgeMode watchdog (see there for why).
-    private var activeFrameBridgeWatchdog: Any? = null
+    // Token identity for runModeInternal's evaluateJavascript watchdog.
+    private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
@@ -200,10 +196,6 @@ class MainActivity : ComponentActivity() {
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
-                    onOpenCrReports = {
-                        val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
-                        if (visibleRows > 0) runMode("bulk_fast") else openCrWiseReports()
-                    },
                     onOpenCrSearchDirect = { openCrSearchDirect() },
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
@@ -334,23 +326,22 @@ class MainActivity : ComponentActivity() {
             webViewClient = NimsWebViewClient(
                 onPageChanged = { safeUrl ->
                     currentPage = safeUrl.ifBlank { "NIMS" }
-                    // BUG FIX: navigating away from the CR-wise report list (e.g. a
+                    // Navigating away from the CR-wise report list (e.g. a
                     // session-expired redirect to the NIMS login page, or back/
-                    // forward navigation) used to leave mapping/crossFrameReport/
-                    // mappingValidated pointing at the OLD page's now-dead template
-                    // and tokens. A subsequent Test One/Fast tap would then try to
-                    // fetch with state from a page that's no longer there, which
-                    // looks like a generic failure rather than what it actually is.
-                    // Clear it whenever the WebView leaves the known report-list
-                    // path, so the next action correctly asks to re-discover.
+                    // forward navigation) used to leave mapping/mappingValidated
+                    // pointing at the OLD page's now-dead template and tokens. A
+                    // subsequent Test One/Fast tap would then try to fetch with
+                    // state from a page that's no longer there, which looks like
+                    // a generic failure rather than what it actually is. Clear it
+                    // whenever the WebView leaves the known report-list path, so
+                    // the next action correctly asks to re-discover.
                     if (!safeUrl.contains("viewcrnowisereportprocess.cnt", ignoreCase = true) &&
                         !safeUrl.contains("invresultreportprintingcrnowise.cnt", ignoreCase = true)
                     ) {
-                        if (mapping != null || crossFrameReport != null || mappingValidated) {
-                            log("Left the CR result list ($safeUrl); clearing stale mapping/report state")
+                        if (mapping != null || mappingValidated) {
+                            log("Left the CR result list ($safeUrl); clearing stale mapping state")
                         }
                         mapping = null
-                        crossFrameReport = null
                         mappingValidated = false
                     }
                 },
@@ -473,7 +464,6 @@ class MainActivity : ComponentActivity() {
         cancelNavigation()
         mapping = null
         mappingValidated = false
-        crossFrameReport = null
         setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
         evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
             when {
@@ -487,71 +477,6 @@ class MainActivity : ComponentActivity() {
                     setState(AppState.HELPER_READY, "Loading CR-wise result page… If a login screen appears, sign in and retry.")
                 }
             }
-        }
-    }
-
-    private fun openCrWiseReports() {
-        cancelNavigation()
-        mapping = null
-        mappingValidated = false
-        val generation = ++navigationGeneration
-        val coordinator = NimsNavigationCoordinator()
-        navigationJob = lifecycleScope.launch {
-            navigationInProgress = true
-            var lastStep: NimsNavigationStep? = null
-            setState(AppState.HELPER_READY, "Checking current NIMS page…")
-            val outcome = coordinator.execute(
-                stepProvider = {
-                    evaluateNavigationStep()
-                },
-                onStep = { step ->
-                    lastStep = step
-                    if (generation == navigationGeneration) {
-                        setState(
-                            AppState.HELPER_READY,
-                            navigationMessage(step)
-                        )
-                    }
-                }
-            )
-            if (generation == navigationGeneration) {
-                val where = lastStep?.let { " (last: ${it.stage}/${it.action}${if (it.errorCode.isBlank()) "" else "/" + it.errorCode})" } ?: ""
-                when (outcome) {
-                    NimsNavigationOutcome.CrSearchReady -> setState(AppState.REPORT_PAGE_READY, "CR-wise report page ready. Enter the CR number.")
-                    NimsNavigationOutcome.ReportListReady -> setState(AppState.REPORT_PAGE_READY, "Report list detected.")
-                    NimsNavigationOutcome.ManualLoginRequired -> setState(AppState.ERROR, "Manual NIMS login required.")
-                    NimsNavigationOutcome.SessionExpired -> setState(AppState.ERROR, "NIMS session expired. Login again.")
-                    NimsNavigationOutcome.Timeout -> setState(AppState.ERROR, "Navigation timed out$where. Run Diagnose and retry.")
-                    NimsNavigationOutcome.Cancelled -> Unit
-                    is NimsNavigationOutcome.Failed -> setState(AppState.ERROR, "Unable to open CR-wise reports$where. Use Diagnose and retry.")
-                }
-                navigationInProgress = false
-                navigationJob = null
-            }
-        }
-    }
-
-    private suspend fun evaluateNavigationStep(): NimsNavigationStep = suspendCancellableCoroutine { continuation ->
-        evaluateJson("JSON.stringify(NimsReportCore.navigateToCrWiseReports(document))") { rawJson ->
-            if (continuation.isActive) continuation.resume(NimsNavigationStep.fromRawJson(rawJson))
-        }
-    }
-
-    private fun navigationMessage(result: NimsNavigationStep): String = when (result.action) {
-        "selected_investigation" -> "Opening Investigation…"
-        "clicked_investigation_module" -> "Opening Investigation…"
-        "clicked_cr_wise_menu" -> "Opening CR-wise reports…"
-        "called_child_menu_function", "called_top_menu_function" -> "Opening CR-wise reports…"
-        "waiting_for_report_frame" -> "Loading CR-wise report page…"
-        "waiting_for_shell" -> "Waiting for NIMS menu to load…"
-        "cooldown" -> "Waiting for NIMS navigation…"
-        else -> when (result.errorCode) {
-            "navigation_step_timeout" -> "Checking current NIMS page…"
-            "manual_login_required" -> "Login to NIMS manually, then tap Open CR Reports."
-            "navigation_contract_not_found" -> "Waiting for the NIMS page to load…"
-            "investigation_module_not_found" -> "Unable to locate the Investigation menu."
-            "cr_wise_menu_not_found" -> "Unable to locate the CR-wise reports menu."
-            else -> "Checking current NIMS page…"
         }
     }
 
@@ -636,8 +561,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Receives the report-frame announcement posted by nimsAndroidFrameBridge.js
-    // from whichever frame (even cross-origin) actually contains the result rows.
+    // SIMPLIFIED: nimsAndroidFrameBridge.js still runs and posts messages (it
+    // remains useful diagnostic signal, and removing the JS layer is a larger,
+    // separate change), but the Kotlin side no longer ACTS on nims_report_frame
+    // announcements -- no crossFrameReport state, no auto REPORT_PAGE_READY,
+    // no normalizer call (FrameReportNormalizer.kt was removed along with the
+    // rest of the dual-path architecture it only served). That decision-making
+    // moved entirely to runMode/discoverMapping/runModeInternal reading the
+    // top document directly (see runMode's comment for why). This function is
+    // now pure logging, so a flaky bridge poll can never again silently steer
+    // which code path a button tap takes.
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
@@ -650,146 +583,26 @@ class MainActivity : ComponentActivity() {
                     "FRAME ${json.optString("url")}: children=${json.optInt("children")} " +
                         "text=${json.optInt("textLen")} h=${json.optInt("height")}$errStr"
                 )
-                return
             }
-            "nims_report_frame" -> { /* fall through to handling below */ }
-            else -> return
-        }
-        if (FrameReportNormalizer.normalize(json, webView.url ?: NIMS_LOGIN_URL) { log(it) } == null) return
-        crossFrameReport = json
-        val rowCount = json.optJSONArray("rows")?.length() ?: 0
-        val hasTemplate = json.optJSONObject("template") != null
-        log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
-        if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
-            appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Current Results.")
-        }
-    }
-
-    // Single-mode run using only the cross-frame announcement (rows already carry
-    // their printReport argument; the template is already discovered). No
-    // top-frame DOM access, so it is origin-independent. selectRowsForMode is a
-    // pure function evaluated on the announced rows.
-    private fun runFrameBridgeMode(mode: String, report: JSONObject, template: ReportTemplate) {
-        mapping = template
-        val rowsArr = report.optJSONArray("rows") ?: JSONArray()
-        if (rowsArr.length() == 0) {
-            setState(AppState.ERROR, "No usable report rows from the visible frame. Keep the result list visible and retry.")
-            return
-        }
-        // Watchdog: evaluateJavascript's callback should always eventually
-        // fire, but a NIMS popup/modal left open from an earlier template
-        // discovery click can occupy the WebView's render/script thread for a
-        // long time, and a killed renderer process drops the callback
-        // entirely. Without this, the screen can sit on stale "Next action"
-        // text indefinitely with no error -- which read as "crashed" when
-        // reported live. Surface a clear, retryable error instead of nothing.
-        val watchdogToken = Any()
-        activeFrameBridgeWatchdog = watchdogToken
-        val watchdogMs = if (mode == "test_direct") 20_000L else 60_000L
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (activeFrameBridgeWatchdog === watchdogToken) {
-                activeFrameBridgeWatchdog = null
-                setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
-            }
-        }, watchdogMs)
-        fun clearWatchdog() {
-            if (activeFrameBridgeWatchdog === watchdogToken) activeFrameBridgeWatchdog = null
-        }
-        evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rowsArr}, '$mode'))") { selectedText ->
-            clearWatchdog()
-            val selectedAll = runCatching { JSONArray(selectedText) }.getOrDefault(JSONArray())
-            val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
-            } else {
-                selectedAll
-            }
-            if (selected.length() == 0) {
-                setState(AppState.ERROR, "No matching report rows for this mode in the visible frame.")
-                return@evaluateJson
-            }
-            val prepared = mutableListOf<PreparedReportRequest>()
-            for (i in 0 until selected.length()) {
-                val row = selected.optJSONObject(i) ?: continue
-                val transient = row.optString("transientPrintReportArg")
-                if (transient.isBlank()) {
-                    log("Skipping ${row.optString("report_name", "report")}: report argument missing")
-                    continue
-                }
-                prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
-            }
-            if (prepared.isEmpty()) {
-                setState(AppState.ERROR, "Visible report rows had no usable print argument.")
-                return@evaluateJson
-            }
-            log("Frame-bridge selected ${prepared.size} reports for $mode")
-            startFetchParseSummarize(mode, prepared)
-        }
-    }
-
-    // Cross-frame entry: validate one report (if needed) then run the bulk mode.
-    private fun runModeViaFrameBridge(mode: String, report: JSONObject) {
-        val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
-        val tpl = report.optJSONObject("template")
-        if (tpl == null) {
-            val rowCount = report.optJSONArray("rows")?.length() ?: 0
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible) using the extension's reader. Fetch and summarize wiring is the next step.")
-            return
-        }
-        val template = ReportTemplate(
-            origin = tpl.optString("origin"),
-            pathname = tpl.optString("pathname"),
-            modeParamName = tpl.optString("modeParamName", "hmode"),
-            modeParamValue = tpl.optString("modeParamValue", "PRINTREPORT"),
-            argumentParameterName = tpl.optString("argumentParameterName", "fileName")
-        )
-        if (mode !in bulkModes || mappingValidated) {
-            runFrameBridgeMode(mode, report, template)
-            return
-        }
-        if (navigationInProgress) {
-            setState(AppState.HELPER_READY, "Analysis startup is already running.")
-            return
-        }
-        cancelNavigation()
-        cancelActiveProcessing()
-        navigationInProgress = true
-        setState(AppState.FETCHING, "Testing one visible report before bulk analysis…")
-        runFrameBridgeMode("test_direct", report, template)
-        navigationJob = lifecycleScope.launch {
-            try {
-                var checks = 0
-                while (!mappingValidated && checks < 90) {
-                    delay(500)
-                    checks += 1
-                }
-                if (!mappingValidated) {
-                    setState(AppState.ERROR, "One-report validation did not succeed. Keep the result list visible and retry.")
-                    return@launch
-                }
-                setState(AppState.FETCHING, "Mapping validated. Starting analysis…")
-                runFrameBridgeMode(mode, report, template)
-            } finally {
-                navigationInProgress = false
+            "nims_report_frame" -> {
+                val rowCount = json.optJSONArray("rows")?.length() ?: 0
+                log("Frame bridge (diagnostic only): rows=$rowCount from=${json.optString("href")}")
             }
         }
     }
 
-    // MANUAL_RESULTS_ONE_CLICK
-    // The user navigates to the submitted CR result list manually. Any bulk
-    // action now performs discovery -> one-report validation -> requested run.
-    // No NIMS menu or frame navigation is attempted here.
+    // SIMPLIFIED (single path): now that "Open CR Results" always navigates the
+    // CR-wise list to the TOP-LEVEL document (no EasyUI tab, no iframe), there
+    // is no cross-origin boundary left to cross, and the old cross-frame-
+    // bridge path (which raced this one, selected by whichever happened to
+    // have fresher data) has been removed entirely. One reader
+    // (rowsFromBestFrame(document)), one template (discoverMapping), one
+    // validation flag (mappingValidated).
     private fun runMode(mode: String) {
         val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
-        // Prefer the all-frames bridge: if the frame that owns the rows has
-        // announced them, use that (works even when the result iframe is a
-        // different origin the top frame cannot read).
-        val report = crossFrameReport
-        if (report != null && (report.optJSONArray("rows")?.length() ?: 0) > 0) {
-            runModeViaFrameBridge(mode, report)
-            return
-        }
-        if (mode !in bulkModes || mappingValidated) {
+        // Already discovered and (for bulk modes) already validated with one
+        // report: run directly, no re-discovery, no re-validation.
+        if (mapping != null && (mode !in bulkModes || mappingValidated)) {
             runModeInternal(mode)
             return
         }
@@ -797,7 +610,6 @@ class MainActivity : ComponentActivity() {
             setState(AppState.HELPER_READY, "Analysis startup is already running.")
             return
         }
-
         cancelNavigation()
         cancelActiveProcessing()
         mapping = null
@@ -815,6 +627,12 @@ class MainActivity : ComponentActivity() {
                 }
                 if (mapping == null) {
                     setState(AppState.ERROR, "No usable visible report rows were found. Navigate manually to the submitted CR report list and retry.")
+                    return@launch
+                }
+
+                if (mode !in bulkModes) {
+                    setState(AppState.FETCHING, "Running Test One Report…")
+                    runModeInternal(mode)
                     return@launch
                 }
 
@@ -848,9 +666,26 @@ class MainActivity : ComponentActivity() {
             setState(AppState.ERROR, "Run Test One Report successfully before bulk summary.")
             return
         }
+        // Watchdog (ported from the removed cross-frame-bridge path): a NIMS
+        // popup/modal left open from an earlier template-discovery click can
+        // occupy the WebView's render/script thread for a long time, and a
+        // killed renderer process drops evaluateJavascript's callback
+        // entirely. Without this, the screen can sit on stale "Next action"
+        // text indefinitely with no error. Surface a clear, retryable error
+        // instead of silence.
+        val watchdogToken = Any()
+        activeEvaluateWatchdog = watchdogToken
+        val watchdogMs = if (mode == "test_direct") 20_000L else 60_000L
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (activeEvaluateWatchdog === watchdogToken) {
+                activeEvaluateWatchdog = null
+                setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
+            }
+        }, watchdogMs)
         evaluateJson("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rowsText ->
             val rows = JSONArray(rowsText)
             evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedText ->
+                if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
                 val selectedAll = JSONArray(selectedText)
                 val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
                     JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
@@ -1159,7 +994,6 @@ class MainActivity : ComponentActivity() {
         sanitizedSummaryText = ""
         uiSummary = null
         physicianNote = ""
-        crossFrameReport = null
         mapping = null
         mappingValidated = false
         setState(AppState.HELPER_READY, "Results cleared.")
@@ -1252,7 +1086,6 @@ private fun NimsFastSummaryApp(
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onOpenCrReports: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
@@ -1303,7 +1136,6 @@ private fun NimsFastSummaryApp(
                 onReload = onReload,
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
-                onOpenCrReports = onOpenCrReports,
                 onOpenCrSearchDirect = onOpenCrSearchDirect,
                 navigationInProgress = navigationInProgress,
                 onDiagnose = onDiagnose,
@@ -1379,7 +1211,6 @@ private fun NimsWebViewScreen(
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onOpenCrReports: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
     navigationInProgress: Boolean,
     onDiagnose: () -> Unit,
@@ -1402,7 +1233,6 @@ private fun NimsWebViewScreen(
             item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
             item { Button(onClick = onOpenCrSearchDirect, enabled = !navigationInProgress) { Text("Open CR Results") } }
-            item { Button(onClick = onOpenCrReports, enabled = !navigationInProgress) { Text("Open CR / Analyze") } }
             item { Button(onClick = onDiagnose) { Text("Diagnose") } }
             item { Button(onClick = onDiscover) { Text("Discover") } }
             item { Button(onClick = onTestOne) { Text("Test One") } }
