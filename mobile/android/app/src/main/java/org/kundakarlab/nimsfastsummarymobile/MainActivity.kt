@@ -683,11 +683,13 @@ class MainActivity : ComponentActivity() {
                 setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
             }
         }, watchdogMs)
-        evaluateJson("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rowsText ->
-            val rows = JSONArray(rowsText)
-            evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedText ->
-                if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
-                val selectedAll = JSONArray(selectedText)
+        evaluateJsonArray("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rows ->
+            if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
+            if (rows.length() == 0) {
+                setState(AppState.ERROR, "Could not read the report list from the page (it may have been disturbed by a popup, or the page is mid-navigation). Keep the result list visible and retry.")
+                return@evaluateJsonArray
+            }
+            evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedAll ->
                 val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
                     JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
                 } else {
@@ -901,6 +903,26 @@ class MainActivity : ComponentActivity() {
             val json = runCatching { JSONObject(raw) }.getOrElse { JSONObject().put("ok", false).put("errorCode", "navigation_js_decode_failed") }
             callback(json)
         }
+    }
+
+    // ROOT CAUSE FIX: runModeInternal used to call evaluateJson directly and
+    // do JSONArray(rowsText) with no guard. evaluateJson's own internals are
+    // defensive (decodeJsString is wrapped in runCatching and falls back to
+    // an EMPTY STRING on any failure) -- but an empty string is not valid
+    // JSON, so JSONArray("") throws org.json.JSONException, uncaught, on the
+    // main thread. An uncaught exception on the main thread is a process
+    // crash on Android, not a catchable in-app error -- which is exactly
+    // what was reported live: the app died and logged out, with no chance to
+    // even tap Copy Log. This happened specifically after Test One because
+    // it is the only path that does two CHAINED evaluateJson calls, each one
+    // a fresh chance for the page (often disturbed by the popup NIMS just
+    // opened/closed during template discovery) to return something that
+    // doesn't parse as JSON. evaluateCore already had this exact guard for
+    // JSONObject; this is the missing JSONArray equivalent, used everywhere
+    // an array is expected so a malformed/empty response degrades to a clear
+    // error message instead of killing the process.
+    private fun evaluateJsonArray(expression: String, callback: (JSONArray) -> Unit) {
+        evaluateJson(expression) { raw -> callback(SafeJsonArrayDecoder.decode(raw)) }
     }
 
     private fun evaluateJson(expression: String, callback: (String) -> Unit) {
