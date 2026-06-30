@@ -767,14 +767,40 @@ class MainActivity : ComponentActivity() {
     // is nothing left to re-derive here -- just read it.
     private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
         val prepared = mutableListOf<PreparedReportRequest>()
+        var skipped = 0
         for (i in 0 until selected.length()) {
             val row = selected.optJSONObject(i) ?: continue
             val transient = row.optString("transientPrintReportArg")
             if (transient.isBlank()) {
-                log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
+                log("Skipping row ${i + 1}: report argument missing")
+                skipped += 1
                 continue
             }
-            prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
+            // CRASH FIX: was NimsReportTemplate.directReportUrl() which throws
+            // IllegalArgumentException via require() when the token doesn't
+            // satisfy its validator. An uncaught exception on the main thread
+            // is a process crash (confirmed from Vivo crash logs: 14 instances,
+            // "Invalid transient NIMS report token"). Now uses the null-returning
+            // variant so a rejected token skips the row cleanly.
+            val directUrl = NimsReportTemplate.directReportUrlOrNull(template, transient)
+            if (directUrl == null) {
+                // Log only safe, non-identifying metadata — never the token itself.
+                log("Skipping row ${i + 1}: token rejected " +
+                    "(len=${transient.length} hasPdf=${transient.endsWith(".pdf", ignoreCase = true)} " +
+                    "hasSlash=${transient.contains('/') || transient.contains('\\')} " +
+                    "hasControl=${transient.any { it.code < 0x20 }})")
+                skipped += 1
+                continue
+            }
+            prepared.add(PreparedReportRequest(row, transient, directUrl))
+        }
+        if (skipped > 0 && prepared.isEmpty()) {
+            setState(AppState.ERROR, "NIMS report rows were detected but their identifiers were not accepted. " +
+                "Tap Discover again or check that the result list is fully loaded.")
+            return
+        }
+        if (skipped > 0) {
+            log("Prepared ${prepared.size} reports; skipped $skipped with unsupported identifiers")
         }
         callback(prepared)
     }
