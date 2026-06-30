@@ -175,6 +175,12 @@ class MainActivity : ComponentActivity() {
         webView = createWebView()
         clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
         webViewUserAgent = webView.settings.userAgentString
+        // Logged unmistakably, first thing, every launch: which exact build is
+        // actually running. Several rounds of "still crashes after the fix"
+        // turned out to be testing a stale install rather than the new build --
+        // this line removes that ambiguity from any future log, instead of it
+        // having to be argued about after the fact.
+        log("BUILD: versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
         val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
         setState(initial.state, initial.message)
         setContent {
@@ -211,10 +217,10 @@ class MainActivity : ComponentActivity() {
                     navigationInProgress = navigationInProgress,
                     onDiagnose = { diagnosePage() },
                     onDiscover = { discoverMapping() },
-                    onTestOne = { runMode("test_direct") },
-                    onFast = { runMode("bulk_fast") },
-                    onCulturesOnly = { runMode("bulk_cultures_only") },
-                    onFull = { runMode("bulk_full") },
+                    onTestOne = { log("Test One tapped"); runMode("test_direct") },
+                    onFast = { log("Fast tapped"); runMode("bulk_fast") },
+                    onCulturesOnly = { log("Cultures tapped"); runMode("bulk_cultures_only") },
+                    onFull = { log("Full tapped"); runMode("bulk_full") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
