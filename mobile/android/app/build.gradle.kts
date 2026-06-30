@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.9.0"
+        versionCode = 30
+        versionName = "0.9.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

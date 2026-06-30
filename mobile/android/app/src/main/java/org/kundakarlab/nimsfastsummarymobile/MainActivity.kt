@@ -118,6 +118,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
+    // ROOT CAUSE FIX: holds the exact row (with its transientPrintReportArg
+    // token already attached) that discoverMapping's clickFirstReportForMode
+    // just clicked. Test One must use THIS row directly, never re-derive a
+    // "test_direct" row from the live document afterward -- NIMS's own
+    // printReport()/AddRowToTableAddMoreValues() mutates the DOM as a side
+    // effect of that exact click (inserts a row for the #setPdf iframe), so a
+    // position-based re-lookup after the click is not reliable. See
+    // clickFirstReportForMode's comment in nimsReportCore.js for the full
+    // explanation. Cleared whenever mapping/mappingValidated are cleared.
+    private var discoveredTestRow: JSONObject? = null
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
@@ -344,6 +354,7 @@ class MainActivity : ComponentActivity() {
                         }
                         mapping = null
                         mappingValidated = false
+                        discoveredTestRow = null
                     }
                 },
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
@@ -422,6 +433,7 @@ class MainActivity : ComponentActivity() {
         cancelNavigation()
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         clearWebViewSession(coldStartOnly = false) {
             webView.loadUrl(NIMS_LOGIN_URL)
             setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
@@ -465,6 +477,7 @@ class MainActivity : ComponentActivity() {
         cancelNavigation()
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
         evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
             when {
@@ -531,11 +544,18 @@ class MainActivity : ComponentActivity() {
 
     private fun discoverMapping() {
         mappingValidated = false
+        discoveredTestRow = null
         evaluateCore("JSON.stringify(NimsReportCore.clickFirstReportForMode('test_direct', document))") { click ->
             if (!click.optBoolean("ok")) {
                 setState(AppState.ERROR, click.optString("error", "No View Report button found for row"))
                 return@evaluateCore
             }
+            // Capture the exact row NOW, with its token already attached by
+            // clickFirstReportForMode -- before NIMS's popup/DOM-mutation
+            // chain runs. This is what makes Test One reliable: it uses this
+            // row directly instead of trying to re-find "the test row" by
+            // position in a document that the click is about to change.
+            discoveredTestRow = click.optJSONObject("row")
             log("Waiting for report mapping")
             Handler(Looper.getMainLooper()).postDelayed({
                 evaluateCore("JSON.stringify(NimsReportCore.discoverSetPdfTemplate(document))") { template ->
@@ -615,6 +635,7 @@ class MainActivity : ComponentActivity() {
         cancelActiveProcessing()
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         navigationInProgress = true
         setState(AppState.HELPER_READY, "Checking the visible NIMS report-result list…")
 
@@ -667,6 +688,28 @@ class MainActivity : ComponentActivity() {
             setState(AppState.ERROR, "Run Test One Report successfully before bulk summary.")
             return
         }
+        // ROOT CAUSE FIX: for test_direct specifically, use the EXACT row
+        // discoverMapping's clickFirstReportForMode already clicked and
+        // captured the token for, instead of re-deriving "a test_direct row"
+        // from the live document. The whole point of capturing it at
+        // click-time is that NIMS's own printReport()/AddRowToTableAddMoreValues()
+        // mutates the DOM as a side effect of that exact click, so a fresh
+        // selectRowsForModeFromDoc('test_direct', document) call afterward is
+        // not guaranteed to even select the SAME row, let alone find its
+        // button. No JS round-trip needed at all for this case.
+        if (mode == "test_direct") {
+            val capturedRow = discoveredTestRow
+            val token = capturedRow?.optString("transientPrintReportArg").orEmpty()
+            if (capturedRow == null || token.isBlank()) {
+                setState(AppState.ERROR, "No View Report button found for row. Tap Discover again with the result list visible.")
+                return
+            }
+            log("Using the exact row captured at Discover time (no re-lookup)")
+            prepareReportRequests(JSONArray().put(capturedRow), currentMapping) { prepared ->
+                startFetchParseSummarize(mode, prepared)
+            }
+            return
+        }
         // Watchdog (ported from the removed cross-frame-bridge path): a NIMS
         // popup/modal left open from an earlier template-discovery click can
         // occupy the WebView's render/script thread for a long time, and a
@@ -676,29 +719,21 @@ class MainActivity : ComponentActivity() {
         // instead of silence.
         val watchdogToken = Any()
         activeEvaluateWatchdog = watchdogToken
-        val watchdogMs = if (mode == "test_direct") 20_000L else 60_000L
+        val watchdogMs = 60_000L
         Handler(Looper.getMainLooper()).postDelayed({
             if (activeEvaluateWatchdog === watchdogToken) {
                 activeEvaluateWatchdog = null
                 setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
             }
         }, watchdogMs)
-        // ROOT CAUSE FIX 2: the original two-hop chain interpolated the
-        // JSONArray from the first evaluateJsonArray directly into the second
-        // JS call as ${rows} -- JSONArray.toString() contains " chars which
-        // break the JS string literal. selectRowsForModeFromDoc does both
-        // steps in JS so no row data ever crosses the Kotlin->JS boundary
-        // as interpolated source. mode is a safe alphanumeric string constant.
-        evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForModeFromDoc('$mode', document))") { selectedAll ->
+        // selectRowsForModeFromDoc reads rows AND attaches each row's token
+        // in one JS-side pass (see its comment in nimsReportCore.js), so no
+        // row data ever needs to cross back into a second JS call.
+        evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForModeFromDoc('$mode', document))") { selected ->
             if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
-            if (selectedAll.length() == 0) {
+            if (selected.length() == 0) {
                 setState(AppState.ERROR, "No matching report rows found for this mode. Keep the result list visible and retry.")
                 return@evaluateJsonArray
-            }
-            val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
-            } else {
-                selectedAll
             }
             log("Selected ${selected.length()} reports")
             prepareReportRequests(selected, currentMapping) { prepared ->
@@ -707,30 +742,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ROOT CAUSE FIX (supersedes two prior, individually-incomplete attempts):
+    // this used to make a SECOND JS round-trip per row, re-locating each row
+    // by row_index via transientPayloadForRow/findReportRow. Two real,
+    // independent problems with that, now both fixed at the source instead
+    // of patched here:
+    //   1. Re-locating a row by position in a LATER call is unreliable if
+    //      anything mutated the DOM in between (e.g. Discover's own
+    //      template-discovery click, which inserts a row for NIMS's #setPdf
+    //      iframe) -- findReportRow's only check was "is there still a row
+    //      at this index", which a totally different row can satisfy.
+    //   2. An earlier attempt to fix a JS-injection crash by passing the row
+    //      data into that second call as interpolated JSON text was itself
+    //      unsafe (onclick attributes contain " chars that break JS source).
+    // selectRowsForModeFromDoc (nimsReportCore.js) now reads each row's token
+    // in the SAME DOM pass that selects the row, before anything downstream
+    // can mutate the page, and attaches it directly to the row object. There
+    // is nothing left to re-derive here -- just read it.
     private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
         val prepared = mutableListOf<PreparedReportRequest>()
-        fun step(index: Int) {
-            if (index >= selected.length()) { callback(prepared); return }
-            val row = selected.optJSONObject(index) ?: run { step(index + 1); return }
-            // ROOT CAUSE FIX: do NOT interpolate `row` (a JSONObject) directly
-            // into JavaScript source code. JSONObject.toString() contains " chars
-            // which break the surrounding JS string literal, especially the
-            // onclick attribute ("return printReport(\"x.pdf\");") -- this
-            // produced a JS syntax error that crashed the WebView renderer.
-            // Pass only the safe integer row_index; JS re-reads everything else
-            // from the DOM directly (findReportRow uses only row_index anyway).
-            val rowIndex = row.optInt("row_index", index)
-            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow({row_index:$rowIndex}, document))") { payload ->
-                val transient = payload.optString("transientPrintReportArg")
-                if (transient.isBlank()) {
-                    log("Skipping row $rowIndex (${row.optString("report_name", "report")}): Required report argument missing")
-                } else {
-                    prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
-                }
-                step(index + 1)
+        for (i in 0 until selected.length()) {
+            val row = selected.optJSONObject(i) ?: continue
+            val transient = row.optString("transientPrintReportArg")
+            if (transient.isBlank()) {
+                log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
+                continue
             }
+            prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
         }
-        step(0)
+        callback(prepared)
     }
 
     private fun startFetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
@@ -1039,6 +1079,7 @@ class MainActivity : ComponentActivity() {
         physicianNote = ""
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 

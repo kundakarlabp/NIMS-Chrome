@@ -817,11 +817,56 @@
   // JS produces syntax errors when row values contain " characters (specifically
   // the onclick attribute, e.g. "return printReport(\"x.pdf\");"), which broke
   // the WebView renderer and caused the process crash reported live.
+  // ROOT CAUSE FIX (combining two real, independently-found defects):
+  // (1) row data must never be interpolated back into a second JS call --
+  //     JSONObject/JSONArray.toString() contains " chars (onclick attributes
+  //     do) which breaks the JS string literal and previously crashed the
+  //     WebView renderer process.
+  // (2) a row must never be re-located by row_index in a LATER, separate
+  //     call -- if anything mutated the DOM between selection and that later
+  //     call (most relevantly: NIMS's own printReport()/
+  //     AddRowToTableAddMoreValues() inserting a row for the #setPdf iframe,
+  //     which happens during Discover's template-discovery click), row_index
+  //     no longer reliably identifies the same row, and findReportRow's only
+  //     corroborating check ("does this row still say View Report") is true
+  //     of every report row, so it can silently resolve to the WRONG row.
+  // Fix for both: read the token from each row's own button HERE, in the
+  // same DOM snapshot used to select the rows, and attach it directly to the
+  // row object. Nothing downstream ever needs a second JS round-trip or a
+  // row_index re-lookup to get a token -- it is already on the row.
   function selectRowsForModeFromDoc(mode, doc) {
-    const rows = bestReportDocument(doc || root.document).rows;
-    return selectRowsForMode(rows, mode);
+    const best = bestReportDocument(doc || root.document);
+    const selected = selectRowsForMode(best.rows, mode);
+    return selected.map((rowInfo) => {
+      const row = findReportRow(rowInfo, best.doc);
+      if (!row) return { ...rowInfo, transientPrintReportArg: "" };
+      const button = Array.from(row.querySelectorAll("[onclick]")).find((node) => {
+        const parsed = parseFunctionArgs(node.getAttribute("onclick") || "");
+        return parsed.functionName === "printReport" && parsed.args.length === 1;
+      });
+      const transientPrintReportArg = button ? (parseFunctionArgs(button.getAttribute("onclick") || "").args[0] || "") : "";
+      return { ...rowInfo, transientPrintReportArg };
+    });
   }
 
+  // ROOT CAUSE FIX: this used to click the button and return ONLY rowInfo
+  // (a row_index-based positional descriptor), discarding the token it had
+  // just read off the button's own onclick attribute one line earlier. The
+  // caller (discoverMapping) would then wait for NIMS's printReport()/popup
+  // chain to run -- which mutates the DOM (AddRowToTableAddMoreValues inserts
+  // a new table row for the PDF iframe, per the live technical findings) --
+  // and only AFTERWARD try to re-find "the same row" by row_index via
+  // findReportRow/transientPayloadForRow. After a DOM mutation, row_index is
+  // not reliable: findReportRow's only corroborating check is that the row at
+  // that index still contains "View Report" text, which is true of EVERY
+  // report row, so it can silently return the WRONG row, or no row at all if
+  // indices shifted. This was the structural cause of "No View Report button
+  // found for row" on Test One after a successful Discover.
+  //
+  // Fix: capture the token (and the row's identifying fields) in THIS
+  // function, synchronously, in the same tick as finding the button and
+  // before the click can mutate anything. Nothing downstream needs to
+  // re-locate this row by position ever again for this click.
   function clickFirstReportForMode(mode, doc) {
     const best = bestReportDocument(doc || root.document);
     const rowInfo = selectRowsForMode(best.rows, mode || "test_direct")[0];
@@ -833,8 +878,11 @@
       return parsed.functionName === "printReport" && parsed.args.length === 1;
     });
     if (!button) return { ok: false, error: "No View Report button found for row" };
+    const transientPrintReportArg = parseFunctionArgs(button.getAttribute("onclick") || "").args[0] || "";
+    if (!transientPrintReportArg) return { ok: false, error: "No View Report button found for row" };
+    const clickedRow = { ...rowInfo, transientPrintReportArg };
     button.click();
-    return { ok: true, row: rowInfo };
+    return { ok: true, row: clickedRow };
   }
 
   function transientPayloadForRow(rowInfo, doc) {
@@ -950,10 +998,19 @@
     return match ? Date.UTC(Number(match[3]) < 100 ? 2000 + Number(match[3]) : Number(match[3]), month[match[2].toLowerCase()], Number(match[1])) : 0;
   }
 
+  // Was rows[index] with NO corroborating check at all -- the weakest of the
+  // (at least two) duplicate copies of this logic in this codebase. Brought
+  // up to the same minimum bar as contentUtils.js's version: the row at that
+  // index must still actually look like a report row. This is still
+  // positional and can be wrong after a DOM mutation, which is exactly why
+  // selectRowsForModeFromDoc below now captures the token in the SAME pass
+  // that selects the row, rather than ever calling this function again later
+  // for a row that was selected in an earlier, separate JS round-trip.
   function findReportRow(rowInfo, doc) {
     const rows = Array.from((doc || root.document).querySelectorAll("tr"));
     const index = Number(rowInfo && rowInfo.row_index);
-    return Number.isFinite(index) ? rows[index] : null;
+    if (Number.isFinite(index) && rows[index] && /view\s*report/i.test(compactText(textOf(rows[index])))) return rows[index];
+    return null;
   }
 
   function guessReportName(cells, text) {
