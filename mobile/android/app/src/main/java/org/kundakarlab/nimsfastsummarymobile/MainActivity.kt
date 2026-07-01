@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -207,20 +209,13 @@ class MainActivity : ComponentActivity() {
                     onProcessingModeChange = { updateProcessingMode(it) },
                     onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
                     onClearNimsSession = { clearNimsSession() },
-                    onBack = { if (webView.canGoBack()) webView.goBack() },
-                    onForward = { if (webView.canGoForward()) webView.goForward() },
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
                     onOpenCrSearchDirect = { openCrSearchDirect() },
                     onCopyFullLog = { copyFullLog() },
                     navigationInProgress = navigationInProgress,
-                    onDiagnose = { diagnosePage() },
-                    onDiscover = { discoverMapping() },
-                    onTestOne = { log("Test One tapped"); runMode("test_direct") },
-                    onFast = { log("Fast tapped"); runMode("bulk_fast") },
-                    onCulturesOnly = { log("Cultures tapped"); runMode("bulk_cultures_only") },
-                    onFull = { log("Full tapped"); runMode("bulk_full") },
+                    onFetchReports = { log("Fetch Reports tapped"); runMode("bulk_fast") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
@@ -1197,20 +1192,13 @@ private fun NimsFastSummaryApp(
     onClearHelper: () -> Unit,
     onNimsLogin: () -> Unit,
     onClearNimsSession: () -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
     onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
-    onDiagnose: () -> Unit,
-    onDiscover: () -> Unit,
-    onTestOne: () -> Unit,
-    onFast: () -> Unit,
-    onCulturesOnly: () -> Unit,
-    onFull: () -> Unit,
+    onFetchReports: () -> Unit,
     onCancelProcessing: () -> Unit,
     summary: UiSummary?,
     physicianNote: String,
@@ -1248,20 +1236,13 @@ private fun NimsFastSummaryApp(
                 state = state,
                 onNimsLogin = onNimsLogin,
                 onClearNimsSession = onClearNimsSession,
-                onBack = onBack,
-                onForward = onForward,
                 onReload = onReload,
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
                 onOpenCrSearchDirect = onOpenCrSearchDirect,
                 onCopyFullLog = onCopyFullLog,
                 navigationInProgress = navigationInProgress,
-                onDiagnose = onDiagnose,
-                onDiscover = onDiscover,
-                onTestOne = onTestOne,
-                onFast = onFast,
-                onCulturesOnly = onCulturesOnly,
-                onFull = onFull,
+                onFetchReports = onFetchReports,
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
@@ -1324,59 +1305,88 @@ private fun NimsWebViewScreen(
     state: AppState,
     onNimsLogin: () -> Unit,
     onClearNimsSession: () -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onOpenCrSearchDirect: () -> Unit,
     onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
-    onDiagnose: () -> Unit,
-    onDiscover: () -> Unit,
-    onTestOne: () -> Unit,
-    onFast: () -> Unit,
-    onCulturesOnly: () -> Unit,
-    onFull: () -> Unit,
+    onFetchReports: () -> Unit,
     onCancelProcessing: () -> Unit,
     logText: String
 ) {
+    var logExpanded by remember { mutableStateOf(false) }
     Column(modifier) {
-        StatusCard(state)
-        LazyRow(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { OutlinedButton(onClick = onBack) { Text("Back") } }
-            item { OutlinedButton(onClick = onForward) { Text("Forward") } }
+        // Single action row — only the controls that are genuinely useful
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
-            item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
-            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear NIMS Session") } }
-            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
+            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom −") } }
             item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-            item { Button(onClick = onOpenCrSearchDirect, enabled = !navigationInProgress) { Text("Open CR Results") } }
-            item { Button(onClick = onDiagnose) { Text("Diagnose") } }
-            item { Button(onClick = onDiscover) { Text("Discover") } }
-            item { Button(onClick = onTestOne) { Text("Test One") } }
-            item { Button(onClick = onFast) { Text("Fast") } }
-            item { Button(onClick = onCulturesOnly) { Text("Cultures") } }
-            item { Button(onClick = onFull) { Text("Full") } }
+            item { OutlinedButton(onClick = onNimsLogin) { Text("Login") } }
+            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear Session") } }
+            item {
+                Button(
+                    onClick = onOpenCrSearchDirect,
+                    enabled = !navigationInProgress
+                ) { Text("Open CR Results") }
+            }
+            item {
+                Button(
+                    onClick = onFetchReports,
+                    enabled = !navigationInProgress
+                ) { Text(if (navigationInProgress) "Fetching…" else "Fetch Reports") }
+            }
+            if (state == AppState.FETCHING) {
+                item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
+            }
             item { OutlinedButton(onClick = onCopyFullLog) { Text("Copy Log") } }
-            if (state == AppState.FETCHING) item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
+        // Collapsible log — tap header to expand/collapse
         if (logText.isNotBlank()) {
-            // Was takeLast(1200) at 96.dp -- routinely cut off the exact part
-            // of a crash message that matters. Copy Log (above) gives the
-            // full untruncated buffer; this panel is widened and made
-            // scrollable to reduce how often that button is even needed.
-            Text(
-                logText.takeLast(4000),
+            Column(
                 Modifier
                     .fillMaxWidth()
-                    .height(160.dp)
-                    .verticalScroll(rememberScrollState())
-                    .background(Color(0xFFF7F9FC))
-                    .padding(8.dp),
-                style = MaterialTheme.typography.bodySmall
-            )
+                    .background(Color(0xFFF0F4F8))
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { logExpanded = !logExpanded }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (logExpanded) "▾ Log" else "▸ Log",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // Show last status line as inline preview when collapsed
+                    if (!logExpanded) {
+                        Text(
+                            logText.trimEnd().substringAfterLast('\n').take(60),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF555555),
+                            maxLines = 1
+                        )
+                    }
+                }
+                if (logExpanded) {
+                    Text(
+                        logText.takeLast(4000),
+                        Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
     }
 }
@@ -1385,7 +1395,7 @@ private fun NimsWebViewScreen(
 private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Source reports", "${reports.size} reports") }
-        if (reports.isEmpty()) item { EmptyCard("No reports parsed yet.") }
+        if (reports.isEmpty()) item { EmptyCard("Tap Fetch Reports on the NIMS tab to load reports.") }
         items(reports) { report ->
             ResultCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1397,7 +1407,11 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
                     Spacer(Modifier.width(6.dp))
                     Badge(report.status, if (report.hasError) Color(0xFFFFE2E0) else Color(0xFFE6F4EA))
                 }
-                if (report.notes.isNotBlank()) Text(report.notes, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (report.notes.isNotBlank()) Text(
+                    report.notes,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -1407,22 +1421,77 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
 private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Lab trends", "${rows.size} parameters") }
-        if (rows.isEmpty()) item { EmptyCard("Run Fast Summary to view lab trends.") }
-        items(rows) { row ->
-            ResultCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(row.parameter, fontWeight = FontWeight.Bold)
-                        Text(row.latestDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+        if (rows.isEmpty()) {
+            item { EmptyCard("Tap Fetch Reports to generate lab trends. Results must include CBC, chemistry, or other numerical reports.") }
+        } else {
+            // Group by parameter category
+            val groups = rows.groupBy { row ->
+                when {
+                    row.parameter.uppercase().let { p ->
+                        p.contains("HB") || p.contains("HAEMOGLOBIN") || p.contains("PCV") ||
+                        p.contains("RBC") || p.contains("WBC") || p.contains("TLC") ||
+                        p.contains("DLC") || p.contains("PLATELET") || p.contains("MCV") ||
+                        p.contains("MCH") || p.contains("NEUTROPHIL") || p.contains("LYMPH")
+                    } -> "CBC / Haematology"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("CREATININE") || p.contains("UREA") || p.contains("SODIUM") ||
+                        p.contains("POTASSIUM") || p.contains("BILIRUBIN") || p.contains("ALT") ||
+                        p.contains("AST") || p.contains("SGOT") || p.contains("SGPT") ||
+                        p.contains("ALBUMIN") || p.contains("GLUCOSE")
+                    } -> "Metabolic / Chemistry"
+                    else -> "Other"
+                }
+            }
+            groups.entries.sortedBy { it.key }.forEach { (group, groupRows) ->
+                item {
+                    Text(
+                        group,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                    )
+                }
+                items(groupRows) { row ->
+                    ResultCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                if (!row.previousValue.isNullOrBlank()) {
+                                    Text(
+                                        "Prev: ${row.previousValue} (${row.previousDate ?: "?"})",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF666666)
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    row.latestValue.ifBlank { "—" },
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = abnormalityColor(row.abnormality)
+                                )
+                                Text(row.latestDate.ifBlank { "" }, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        if (row.history.size > 1) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "History: " + row.history.take(6).joinToString("  ·  ") { (d, v) -> "$d: $v" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF444444)
+                            )
+                        }
+                        Badge(
+                            row.trendText,
+                            when {
+                                row.trendText.contains("rising", true) -> Color(0xFFFFE2E0)
+                                row.trendText.contains("falling", true) -> Color(0xFFE6F4EA)
+                                else -> Color(0xFFEEEEEE)
+                            }
+                        )
                     }
-                    Text(row.latestValue.ifBlank { "-" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Badge(row.trendText)
-                    Badge(row.abnormality.name, abnormalityColor(row.abnormality))
-                    if (!row.previousValue.isNullOrBlank()) Badge("Prev ${row.previousValue}")
-                }
-                Text(row.history.take(5).joinToString(" | ") { "${it.first}: ${it.second}" }, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -1434,21 +1503,96 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
         item { SectionTitle("Cultures", "${rows.size} rows") }
         if (rows.isEmpty()) item { EmptyCard("No culture data parsed yet.") }
         items(rows) { row ->
-            ResultCard {
+            var expanded by remember { mutableStateOf(false) }
+            val isPositive = row.status.contains("growth_detected", true) ||
+                             row.organism.isNotBlank() && !row.organism.contains("growth_detected").not()
+            val growthColor = when {
+                row.status.contains("no_growth", true) -> Color(0xFFE6F4EA)
+                row.status.contains("growth_detected", true) -> Color(0xFFFFE8CC)
+                else -> Color(0xFFEEEEEE)
+            }
+            // Derive clean display organism name
+            val displayOrganism = when {
+                row.organism.isNotBlank() &&
+                !row.organism.equals("growth_detected", true) &&
+                !row.organism.equals("no_growth", true) -> row.organism
+                row.status.equals("no_growth", true) -> "No growth"
+                row.status.equals("growth_detected", true) -> "Growth detected"
+                else -> row.status.ifBlank { "Culture" }
+            }
+            // Specimen interpretation
+            val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { row.sourceReportName.ifBlank { null } }
+
+            ResultCard(
+                modifier = Modifier.clickable { expanded = !expanded }
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(row.organism.ifBlank { row.status.ifBlank { "Culture" } }, fontWeight = FontWeight.Bold)
-                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                        Text(displayOrganism, fontWeight = FontWeight.Bold)
+                        Text(
+                            row.collectionDate.ifBlank { "No date" },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (specimenDisplay != null) {
+                            Text(
+                                specimenDisplay,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF555555)
+                            )
+                        }
                     }
-                    Badge(row.status, if (row.status.contains("positive", true)) Color(0xFFFFE8CC) else Color(0xFFE6F4EA))
+                    Badge(row.status.replace("_", " "), growthColor)
                 }
-                Text(row.site.ifBlank { row.specimen }.ifBlank { "Site/specimen not parsed" })
-                if (row.sensitivitySummary.isNotBlank()) Text(row.sensitivitySummary, style = MaterialTheme.typography.bodySmall)
-                if (row.comment.isNotBlank()) Text(row.comment, style = MaterialTheme.typography.bodySmall)
+                // Expanded detail — shown on tap
+                if (expanded) {
+                    Spacer(Modifier.height(8.dp))
+                    if (row.sourceReportName.isNotBlank()) {
+                        Text("Report: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (row.cultureNo.isNotBlank()) {
+                        Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (row.sensitivitySummary.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("Sensitivity:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                        Text(row.sensitivitySummary, style = MaterialTheme.typography.bodySmall)
+                    } else if (row.status.contains("growth_detected", true)) {
+                        Text(
+                            "Sensitivity data not parsed from this report.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF888888)
+                        )
+                    }
+                    if (row.comment.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        if (expanded) "▲ Tap to collapse" else "▼ Tap for details",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                } else {
+                    if (row.sensitivitySummary.isNotBlank()) {
+                        Text(
+                            row.sensitivitySummary.take(80) + if (row.sensitivitySummary.length > 80) "…" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF333333)
+                        )
+                    }
+                    Text(
+                        "▼ Tap for details",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
         }
     }
 }
+
 
 @Composable
 private fun SummaryScreen(
@@ -1588,9 +1732,9 @@ private fun SectionTitle(title: String, subtitle: String) {
 }
 
 @Composable
-private fun ResultCard(content: @Composable () -> Unit) {
+private fun ResultCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(modifier),
         shape = RoundedCornerShape(10.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
