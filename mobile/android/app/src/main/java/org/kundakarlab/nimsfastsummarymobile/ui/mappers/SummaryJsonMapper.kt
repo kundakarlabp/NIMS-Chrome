@@ -34,7 +34,12 @@ object SummaryJsonMapper {
                         type = row.optString("type", row.optString("report_type", "other")),
                         status = status,
                         notes = notes,
-                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true) || notes.isNotBlank()
+                        // hasError must only be true for genuine failures (error/unsupported status),
+                        // NOT for processing notes like "Processed from PDF on-device." which are
+                        // normal and appear on every successfully-parsed PDF report. The old logic
+                        // (|| notes.isNotBlank()) caused every parsed PDF to show as "failed",
+                        // producing "Failed: 20" even when reports were successfully parsed.
+                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true)
                     )
                 )
             }

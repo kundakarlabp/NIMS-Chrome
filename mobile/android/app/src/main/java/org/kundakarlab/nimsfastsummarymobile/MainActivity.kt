@@ -57,6 +57,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,7 +66,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -215,7 +216,7 @@ class MainActivity : ComponentActivity() {
                     onOpenCrSearchDirect = { openCrSearchDirect() },
                     onCopyFullLog = { copyFullLog() },
                     navigationInProgress = navigationInProgress,
-                    onFetchReports = { log("Fetch Reports tapped"); runMode("bulk_fast") },
+                    onFetchReports = { log("Fetch Reports tapped"); runMode("bulk_full") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
@@ -1287,7 +1288,7 @@ private fun AppHeader(state: AppState, message: String, currentPage: String, pro
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("NIMS Fast Summary", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("NIMS Results", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(currentPage, color = Color(0xFFD7E8FF), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onSettings) { Text("Settings", color = Color.White) }
@@ -1419,77 +1420,147 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
 
 @Composable
 private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
-    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Lab trends", "${rows.size} parameters") }
-        if (rows.isEmpty()) {
-            item { EmptyCard("Tap Fetch Reports to generate lab trends. Results must include CBC, chemistry, or other numerical reports.") }
-        } else {
-            // Group by parameter category
-            val groups = rows.groupBy { row ->
-                when {
-                    row.parameter.uppercase().let { p ->
-                        p.contains("HB") || p.contains("HAEMOGLOBIN") || p.contains("PCV") ||
-                        p.contains("RBC") || p.contains("WBC") || p.contains("TLC") ||
-                        p.contains("DLC") || p.contains("PLATELET") || p.contains("MCV") ||
-                        p.contains("MCH") || p.contains("NEUTROPHIL") || p.contains("LYMPH")
-                    } -> "CBC / Haematology"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("CREATININE") || p.contains("UREA") || p.contains("SODIUM") ||
-                        p.contains("POTASSIUM") || p.contains("BILIRUBIN") || p.contains("ALT") ||
-                        p.contains("AST") || p.contains("SGOT") || p.contains("SGPT") ||
-                        p.contains("ALBUMIN") || p.contains("GLUCOSE")
-                    } -> "Metabolic / Chemistry"
-                    else -> "Other"
+    // Date range filter state
+    var filterFrom by remember { mutableStateOf("") }
+    var filterTo by remember { mutableStateOf("") }
+    val filtered = remember(rows, filterFrom, filterTo) {
+        if (filterFrom.isBlank() && filterTo.isBlank()) rows
+        else rows.filter { row ->
+            val epoch = DateNormalizer.normalize(row.latestDate).sortEpoch ?: return@filter true
+            val fromEpoch = if (filterFrom.isBlank()) null else DateNormalizer.normalize(filterFrom).sortEpoch
+            val toEpoch = if (filterTo.isBlank()) null else DateNormalizer.normalize(filterTo).sortEpoch
+            (fromEpoch == null || epoch >= fromEpoch) && (toEpoch == null || epoch <= toEpoch)
+        }
+    }
+
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { SectionTitle("Lab Trends", "${filtered.size} parameters") }
+
+        // Date range filter row
+        item {
+            Card(
+                Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F4F8))
+            ) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Filter by date range", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = filterFrom, onValueChange = { filterFrom = it },
+                            label = { Text("From (e.g. 01-Jan-2024)") },
+                            modifier = Modifier.weight(1f), singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = filterTo, onValueChange = { filterTo = it },
+                            label = { Text("To (e.g. 31-Dec-2024)") },
+                            modifier = Modifier.weight(1f), singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (filterFrom.isNotBlank() || filterTo.isNotBlank()) {
+                        TextButton(onClick = { filterFrom = ""; filterTo = "" }, Modifier.align(Alignment.End)) { Text("Clear filter") }
+                    }
                 }
             }
+        }
+
+        if (filtered.isEmpty()) {
+            item {
+                EmptyCard(
+                    if (rows.isEmpty()) "Tap Fetch Reports to generate lab trends."
+                    else "No trends match the selected date range."
+                )
+            }
+        } else {
+            // Group by category
+            val groups = filtered.groupBy { row ->
+                when {
+                    row.parameter.uppercase().let { p ->
+                        p.startsWith("HEM") || p.startsWith("HAEM") || p.startsWith("WBC") || p.startsWith("TLC") ||
+                        p.contains("PLATELET") || p.contains("MCV") || p.contains("MCH") || p.contains("MCHC") ||
+                        p.contains("NEUTRO") || p.contains("LYMPH") || p.contains("MONOCYTE") ||
+                        p.contains("EOSINOPHIL") || p.contains("RBC") || p.contains("HCT") || p.contains("PCV") ||
+                        p.contains("RDW") || p.contains("ESR") || p.contains("POLY") || p.contains("HB")
+                    } -> "🩸 CBC / Haematology"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("CREATININE") || p.contains("UREA") || p.contains("EGFR") ||
+                        p.contains("SODIUM") || p.contains("POTASSIUM") || p.contains("CHLORIDE") || p.contains("BICARBONATE")
+                    } -> "🫘 Renal / Electrolytes"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("BILIRUBIN") || p.contains("ALT") || p.contains("AST") || p.contains("SGOT") ||
+                        p.contains("SGPT") || p.contains("ALP") || p.contains("GGT") || p.contains("ALBUMIN") ||
+                        p.contains("TOTAL PROTEIN") || p.contains("LDH")
+                    } -> "🫀 Liver / LFT"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("CRP") || p.contains("PROCALCITONIN") || p.contains("PCT") || p.contains("FERRITIN")
+                    } -> "🔥 Inflammatory Markers"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("PT") || p.contains("INR") || p.contains("APTT") || p.contains("THROMBOPLASTIN")
+                    } -> "🩹 Coagulation"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("GLUCOSE") || p.contains("HBA1C")
+                    } -> "💉 Glucose / Diabetes"
+                    else -> "📋 Other"
+                }
+            }
+
             groups.entries.sortedBy { it.key }.forEach { (group, groupRows) ->
                 item {
-                    Text(
-                        group,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                    )
+                    Text(group, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
                 }
                 items(groupRows) { row ->
+                    val abnColor = abnormalityColor(row.abnormality)
                     ResultCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.Top) {
                             Column(Modifier.weight(1f)) {
                                 Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                if (!row.previousValue.isNullOrBlank()) {
+                                // History timeline
+                                if (row.history.size > 1) {
+                                    Spacer(Modifier.height(3.dp))
                                     Text(
-                                        "Prev: ${row.previousValue} (${row.previousDate ?: "?"})",
+                                        row.history.take(8).joinToString("  ·  ") { (d, v) ->
+                                            "${d.replace("-", "/")}: $v"
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF666666)
+                                        color = Color(0xFF555555)
+                                    )
+                                }
+                                // Trend direction
+                                if (row.trendText.isNotBlank() && row.trendText != "auto-parsed" && row.trendText != "insufficient data") {
+                                    Spacer(Modifier.height(3.dp))
+                                    Badge(
+                                        "↕ ${row.trendText}",
+                                        when {
+                                            row.trendText.contains("ris", true) || row.trendText.contains("increas", true) -> Color(0xFFFFE2E0)
+                                            row.trendText.contains("fall", true) || row.trendText.contains("decreas", true) -> Color(0xFFE6F4EA)
+                                            else -> Color(0xFFEEEEEE)
+                                        }
                                     )
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
+                                // Latest value prominently with abnormality colour
                                 Text(
                                     row.latestValue.ifBlank { "—" },
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = abnormalityColor(row.abnormality)
+                                    color = if (row.abnormality == Abnormality.NORMAL || row.abnormality == Abnormality.UNKNOWN) Color(0xFF222222) else abnColor
                                 )
-                                Text(row.latestDate.ifBlank { "" }, style = MaterialTheme.typography.bodySmall)
+                                Text(row.latestDate.ifBlank { "" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                                if (row.abnormality != Abnormality.NORMAL && row.abnormality != Abnormality.UNKNOWN) {
+                                    Badge(
+                                        when (row.abnormality) { Abnormality.HIGH -> "HIGH"; Abnormality.LOW -> "LOW"; Abnormality.CRITICAL -> "CRITICAL"; else -> "" },
+                                        abnColor
+                                    )
+                                }
+                                // Previous for comparison
+                                if (!row.previousValue.isNullOrBlank()) {
+                                    Text("prev: ${row.previousValue}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
+                                }
                             }
                         }
-                        if (row.history.size > 1) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "History: " + row.history.take(6).joinToString("  ·  ") { (d, v) -> "$d: $v" },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF444444)
-                            )
-                        }
-                        Badge(
-                            row.trendText,
-                            when {
-                                row.trendText.contains("rising", true) -> Color(0xFFFFE2E0)
-                                row.trendText.contains("falling", true) -> Color(0xFFE6F4EA)
-                                else -> Color(0xFFEEEEEE)
-                            }
-                        )
                     }
                 }
             }
@@ -1500,99 +1571,71 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
 @Composable
 private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Cultures", "${rows.size} rows") }
+        item { SectionTitle("Cultures", "${rows.size} results") }
         if (rows.isEmpty()) item { EmptyCard("No culture data parsed yet.") }
         items(rows) { row ->
-            var expanded by remember { mutableStateOf(false) }
-            val isPositive = row.status.contains("growth_detected", true) ||
-                             row.organism.isNotBlank() && !row.organism.contains("growth_detected").not()
+            val isPositive = row.status.contains("growth_detected", true)
             val growthColor = when {
                 row.status.contains("no_growth", true) -> Color(0xFFE6F4EA)
-                row.status.contains("growth_detected", true) -> Color(0xFFFFE8CC)
+                isPositive -> Color(0xFFFFE8CC)
                 else -> Color(0xFFEEEEEE)
             }
-            // Derive clean display organism name
             val displayOrganism = when {
                 row.organism.isNotBlank() &&
                 !row.organism.equals("growth_detected", true) &&
                 !row.organism.equals("no_growth", true) -> row.organism
+                isPositive -> "Growth detected"
                 row.status.equals("no_growth", true) -> "No growth"
-                row.status.equals("growth_detected", true) -> "Growth detected"
-                else -> row.status.ifBlank { "Culture" }
+                else -> row.status.replace("_", " ").replaceFirstChar { it.uppercase() }.ifBlank { "Culture" }
             }
-            // Specimen interpretation
-            val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { row.sourceReportName.ifBlank { null } }
+            val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { null }
 
-            ResultCard(
-                modifier = Modifier.clickable { expanded = !expanded }
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            // All details shown inline — no tap-to-expand per user request
+            ResultCard {
+                Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f)) {
                         Text(displayOrganism, fontWeight = FontWeight.Bold)
-                        Text(
-                            row.collectionDate.ifBlank { "No date" },
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF555555))
                         if (specimenDisplay != null) {
-                            Text(
-                                specimenDisplay,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF555555)
-                            )
+                            Text("Specimen: $specimenDisplay", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                     Badge(row.status.replace("_", " "), growthColor)
                 }
-                // Expanded detail — shown on tap
-                if (expanded) {
-                    Spacer(Modifier.height(8.dp))
-                    if (row.sourceReportName.isNotBlank()) {
-                        Text("Report: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall)
+                if (row.sourceReportName.isNotBlank() && !row.sourceReportName.equals(displayOrganism, true)) {
+                    Text("Source: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                }
+                if (row.sensitivitySummary.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Sensitivity / Antibiogram:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    // Parse and display each antibiotic result on its own line
+                    row.sensitivitySummary.split(";").map { it.trim() }.filter { it.isNotBlank() }.forEach { entry ->
+                        val color = when {
+                            entry.contains("Susceptible", true) || entry.contains("Sensitive", true) -> Color(0xFF1B5E20)
+                            entry.contains("Resistant", true) -> Color(0xFFB71C1C)
+                            entry.contains("Intermediate", true) -> Color(0xFFE65100)
+                            else -> Color(0xFF333333)
+                        }
+                        Text("  $entry", style = MaterialTheme.typography.bodySmall, color = color)
                     }
-                    if (row.cultureNo.isNotBlank()) {
-                        Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (row.sensitivitySummary.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Sensitivity:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                        Text(row.sensitivitySummary, style = MaterialTheme.typography.bodySmall)
-                    } else if (row.status.contains("growth_detected", true)) {
-                        Text(
-                            "Sensitivity data not parsed from this report.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF888888)
-                        )
-                    }
-                    if (row.comment.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall)
-                    }
+                } else if (isPositive) {
+                    Spacer(Modifier.height(4.dp))
                     Text(
-                        if (expanded) "▲ Tap to collapse" else "▼ Tap for details",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp)
+                        "Sensitivity data not available (image-based PDF or not yet reported).",
+                        style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888)
                     )
-                } else {
-                    if (row.sensitivitySummary.isNotBlank()) {
-                        Text(
-                            row.sensitivitySummary.take(80) + if (row.sensitivitySummary.length > 80) "…" else "",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF333333)
-                        )
-                    }
-                    Text(
-                        "▼ Tap for details",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
+                }
+                if (row.comment.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
+                }
+                if (row.cultureNo.isNotBlank()) {
+                    Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
                 }
             }
         }
     }
 }
-
 
 @Composable
 private fun SummaryScreen(
@@ -1611,7 +1654,10 @@ private fun SummaryScreen(
             ResultCard {
                 Text("Snapshot", fontWeight = FontWeight.Bold)
                 Text("Reports: ${summary?.sourceReports?.size ?: 0}")
-                Text("Failed: ${summary?.failedReportCount ?: 0}")
+                val parsed = summary?.parsedReportCount ?: 0
+                val failed = summary?.failedReportCount ?: 0
+                if (failed > 0) Text("Unsupported/failed: $failed (image PDFs or unrecognised format)", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text("Parsed successfully: $parsed")
                 Text("Cultures: ${summary?.cultures?.size ?: 0}")
             }
         }

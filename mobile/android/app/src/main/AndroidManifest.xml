@@ -4,7 +4,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="NIMS Fast Summary Mobile"
+        android:label="NIMS Results"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
         <activity
