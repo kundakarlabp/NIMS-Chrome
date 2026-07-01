@@ -1394,25 +1394,68 @@ private fun NimsWebViewScreen(
 
 @Composable
 private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
-    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Source reports", "${reports.size} reports") }
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            val parsed = reports.count { !it.hasError }
+            val failed = reports.count { it.hasError }
+            SectionTitle("Source reports", "${reports.size} total · $parsed parsed · $failed unsupported")
+        }
         if (reports.isEmpty()) item { EmptyCard("Tap Fetch Reports on the NIMS tab to load reports.") }
         items(reports) { report ->
+            // Decide which notes are worth showing and at what severity
+            val significantNotes = report.notes.split(";").map { it.trim() }.filter { note ->
+                note.isNotBlank() &&
+                !note.contains("Processed from PDF on-device", true) &&
+                !note.equals("Processed from PDF on-device.", true)
+            }
+            val hasMeaningfulWarning = significantNotes.isNotEmpty()
+
             ResultCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f)) {
-                        Text(report.reportName, fontWeight = FontWeight.Bold)
-                        Text(report.dateSent.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            report.reportName.ifBlank { "Unnamed report" },
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (report.dateSent.isNotBlank())
+                                Text(report.dateSent, style = MaterialTheme.typography.bodySmall, color = Color(0xFF555555))
+                            if (report.type.isNotBlank() && !report.type.equals("other", true))
+                                Text("· ${report.type.uppercase()}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF777777))
+                        }
                     }
-                    Badge(report.type.uppercase())
-                    Spacer(Modifier.width(6.dp))
-                    Badge(report.status, if (report.hasError) Color(0xFFFFE2E0) else Color(0xFFE6F4EA))
+                    Badge(
+                        report.status,
+                        when {
+                            report.hasError -> Color(0xFFFFE2E0)
+                            hasMeaningfulWarning -> Color(0xFFFFF3CD)
+                            else -> Color(0xFFE6F4EA)
+                        }
+                    )
                 }
-                if (report.notes.isNotBlank()) Text(
-                    report.notes,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                // Only show notes if they contain meaningful clinical information
+                if (hasMeaningfulWarning) {
+                    Spacer(Modifier.height(4.dp))
+                    significantNotes.forEach { note ->
+                        Text(note, color = Color(0xFFB36200), style = MaterialTheme.typography.bodySmall)
+                    }
+                } else if (report.hasError) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        report.notes.ifBlank { "Report format not supported." },
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                // Neutral processing note — no red, no alarm
+                if (!report.hasError && !hasMeaningfulWarning) {
+                    Text(
+                        "✓ Parsed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF388E3C)
+                    )
+                }
             }
         }
     }
@@ -1423,18 +1466,39 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
     // Date range filter state
     var filterFrom by remember { mutableStateOf("") }
     var filterTo by remember { mutableStateOf("") }
+
+    // Filter HISTORY ENTRIES within the date range, then recalculate latest/previous
+    // The old implementation only checked row.latestDate which meant filtering for "2026"
+    // would hide all parameters whose latest reading happened to be outside the range,
+    // even if they had readings within the range that should be visible.
     val filtered = remember(rows, filterFrom, filterTo) {
-        if (filterFrom.isBlank() && filterTo.isBlank()) rows
-        else rows.filter { row ->
-            val epoch = DateNormalizer.normalize(row.latestDate).sortEpoch ?: return@filter true
-            val fromEpoch = if (filterFrom.isBlank()) null else DateNormalizer.normalize(filterFrom).sortEpoch
-            val toEpoch = if (filterTo.isBlank()) null else DateNormalizer.normalize(filterTo).sortEpoch
-            (fromEpoch == null || epoch >= fromEpoch) && (toEpoch == null || epoch <= toEpoch)
+        val fromEpoch = if (filterFrom.isBlank()) null else DateNormalizer.normalize(filterFrom).sortEpoch
+        val toEpoch = if (filterTo.isBlank()) null else DateNormalizer.normalize(filterTo).sortEpoch
+
+        if (fromEpoch == null && toEpoch == null) {
+            rows
+        } else {
+            rows.mapNotNull { row ->
+                val filteredHistory = row.history.filter { (date, _) ->
+                    val epoch = DateNormalizer.normalize(date).sortEpoch ?: return@filter true
+                    (fromEpoch == null || epoch >= fromEpoch) && (toEpoch == null || epoch <= toEpoch)
+                }
+                if (filteredHistory.isEmpty()) return@mapNotNull null
+                val latestEntry = filteredHistory.first()
+                val previousEntry = filteredHistory.drop(1).firstOrNull()
+                row.copy(
+                    latestValue = latestEntry.second,
+                    latestDate = latestEntry.first,
+                    previousValue = previousEntry?.second,
+                    previousDate = previousEntry?.first,
+                    history = filteredHistory
+                )
+            }
         }
     }
 
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { SectionTitle("Lab Trends", "${filtered.size} parameters") }
+        item { SectionTitle("Lab Trends", "${filtered.size} parameters${if (filtered.size != rows.size) " (filtered from ${rows.size})" else ""}") }
 
         // Date range filter row
         item {

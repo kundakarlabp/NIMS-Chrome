@@ -38,6 +38,68 @@
       .sort((a, b) => b.rows.length - a.rows.length)[0] || { doc: doc || root.document, rows: [] };
   }
 
+  // NEW diagnostic (not previously present): walks every same-origin-reachable
+  // frame and reports, per frame, whether its <body> actually has content
+  // (childElementCount / text length), whether that body is visible (not
+  // display:none / zero-size), and whatever uncaught error window.onerror
+  // most recently captured for that specific window (see installErrorCapture
+  // below). diagnosePage() only ever surfaced 3 aggregate counters to the
+  // Android log; this exposes the per-frame detail needed to tell "frame
+  // never got content" apart from "frame has content but it is hidden" apart
+  // from "frame threw before it could render anything."
+  function frameRenderProbe(doc) {
+    const items = accessibleDocumentsRecursive(doc || root.document, 6);
+    const frames = items.map((item) => {
+      const d = item.doc;
+      const win = item.win;
+      const body = d && d.body ? d.body : null;
+      const text = body ? compactText(textOf(body)) : "";
+      const error = win && win.__nimsLastError ? win.__nimsLastError : null;
+      return {
+        depth: item.depth,
+        url: item.safeUrl || safeHostPath(safeDocumentHref(d)),
+        frameId: (item.frameElement && (item.frameElement.id || item.frameElement.name)) || (item.depth === 0 ? "(top)" : ""),
+        visibleThroughAncestors: Boolean(item.visibleThroughAncestors),
+        readyState: d ? d.readyState : "unreachable",
+        bodyChildCount: body ? body.childElementCount : -1,
+        bodyTextLength: text.length,
+        bodyTextSample: text.slice(0, 160),
+        elementVisible: body ? isElementVisible(body) : false,
+        injectionRan: Boolean(win && win.__nimsInjectedAt),
+        lastUncaughtError: error
+      };
+    });
+    return {
+      activeUrl: safeHostPath(root.location && root.location.href),
+      frameCount: frames.length,
+      frames
+    };
+  }
+
+  // NEW (not previously present): chains window.onerror in a given window so
+  // the FULL uncaught-error message + stack is captured, because Android's
+  // WebChromeClient.onConsoleMessage callback truncates console text to ~220
+  // chars before it ever reaches Kotlin (confirmed in MainActivity.onConsoleMessage).
+  // Never overwrites a page-defined onerror; always calls through to it.
+  function installErrorCapture(win) {
+    if (!win || win.__nimsErrorCaptureInstalled) return;
+    win.__nimsErrorCaptureInstalled = true;
+    const previous = win.onerror;
+    win.onerror = function (message, source, lineno, colno, error) {
+      win.__nimsLastError = {
+        message: String(message || ""),
+        source: String(source || ""),
+        line: lineno || 0,
+        column: colno || 0,
+        stack: error && error.stack ? String(error.stack).slice(0, 2000) : ""
+      };
+      if (typeof previous === "function") {
+        try { return previous.call(win, message, source, lineno, colno, error); } catch (e) { /* ignore */ }
+      }
+      return false;
+    };
+  }
+
   function collectFrames(doc) {
     return accessibleDocuments(doc || root.document).map((item) => frameDiagnostic(item.doc, item.safeUrl || item.url, item.depth, item.visibleThroughAncestors));
   }
@@ -330,6 +392,70 @@
     return navigateNimsContract(doc || root.document);
   }
 
+  // Open the CR-wise result page as a TOP-LEVEL document instead of an EasyUI
+  // tab. The tab path (callMenu -> addTab -> iframe + tabmenu.js positioning +
+  // ajaxCompleteTab) is the only place the live page crashes in the WebView
+  // (#menuStrip offset().left throw, date_time undefined, 0-arg ajaxCompleteTab)
+  // and leaves the content frame blank. The leaf page itself renders its own
+  // <body> fine. We still reuse the page's exact SSO-ticket handling by calling
+  // its real callMenu, but we transiently intercept addTab so the ticketed URL
+  // it produces drives a top-level navigation rather than a tab. The ticket
+  // never leaves the page (it is not returned to the host).
+  function openCrWiseResultsDirect(doc) {
+    const startDoc = doc || root.document;
+    const target = findCrWiseReportMenuTarget(startDoc);
+    if (!target.ok) return { ok: false, action: "none", errorCode: target.reason || "cr_wise_menu_not_found" };
+
+    const anchorOnclick = (target.element && target.element.getAttribute && target.element.getAttribute("onclick")) || "";
+    const parsedAnchor = parseFunctionArgs(anchorOnclick);
+    const menuUrl = parsedAnchor.args[0] || CR_WISE_ENDPOINT;
+    const menuName = parsedAnchor.args[1] || CR_WISE_MENU_ID;
+
+    const anchorWin = target.win || (target.doc && target.doc.defaultView) || null;
+    const topDoc = resolveTopDocument(startDoc);
+    const topWin = (topDoc && topDoc.defaultView) || (anchorWin && anchorWin.top) || root.window || root;
+
+    // callMenu lives on the menu frame (delegates to parent.callMenu) and/or the
+    // top window; addTab lives on the top window. Intercept top.addTab so the
+    // ticketed targetURL becomes a top-level navigation.
+    const callMenuWin =
+      (anchorWin && typeof anchorWin.callMenu === "function" && anchorWin) ||
+      (topWin && typeof topWin.callMenu === "function" && topWin) ||
+      null;
+    if (!callMenuWin || typeof topWin.addTab !== "function") {
+      // No usable page contract: fall back to clicking the anchor (normal path,
+      // now protected by the hardened shim), so behavior degrades gracefully.
+      try { target.element.click(); return { ok: true, action: "clicked_cr_wise_menu" }; }
+      catch (e) { return { ok: false, action: "callmenu_unavailable", errorCode: "cr_wise_callmenu_unavailable" }; }
+    }
+
+    const originalAddTab = topWin.addTab;
+    let navigatedUrlPresent = false;
+    try {
+      topWin.addTab = function (menu, targetURL) {
+        if (targetURL) {
+          navigatedUrlPresent = true;
+          try { topWin.location.href = targetURL; }
+          catch (e) { try { topWin.location.assign(targetURL); } catch (_) { /* keep silent: ticket must not be logged */ } }
+        }
+        // Intentionally do NOT call originalAddTab: we are bypassing EasyUI.
+      };
+      callMenuWin.callMenu(menuUrl, menuName);
+    } catch (e) {
+      // Restore immediately on synchronous failure and report.
+      topWin.addTab = originalAddTab;
+      return { ok: false, action: "callmenu_threw", errorCode: "cr_wise_callmenu_threw" };
+    } finally {
+      // Restore after the synchronous callMenu path completes.
+      try { topWin.setTimeout(function () { topWin.addTab = originalAddTab; }, 0); }
+      catch (e) { topWin.addTab = originalAddTab; }
+    }
+
+    return navigatedUrlPresent
+      ? { ok: true, action: "navigated_direct_leaf" }
+      : { ok: false, action: "addtab_not_invoked", errorCode: "cr_wise_addtab_not_invoked" };
+  }
+
   // Drive navigation through the real e-Sushrut contract:
   //   top menuSelected("Investigation", true)  -> refreshes #frmMainMenu
   //   #frmMainMenu anchor #Cr_No_Wise_Result_Report_Printing_New (callMenu)
@@ -604,6 +730,7 @@
         date_sent: guessDate(cells, rowText),
         report_name: guessReportName(cells, rowText),
         department: guessDepartment(cells),
+        lab_study_number: cells[2] && cells[2].length > 2 && !/view\s*report/i.test(cells[2]) ? cells[2].slice(0, 60) : "",
         report_tags: tags,
         report_type: tags[0] || "other",
         onclick_function_name: parsed.functionName,
@@ -618,6 +745,41 @@
   function discoverSetPdfTemplate(doc) {
     const best = bestReportDocument(doc || root.document);
     return getSafeSetPdfTemplate(best.doc);
+  }
+
+  // discoverSetPdfTemplate's caller (Android's discoverMapping) must click a
+  // real "View Report" row once to make NIMS run its own printReport() ->
+  // AddRowToTableAddMoreValues() -> popup("popUpDiv") chain, so the resulting
+  // #setPdf iframe src can be read as proof of the live request template
+  // (see section 13 of the technical dossier). NOTHING previously closed that
+  // popup afterward: it stayed open, empty, on top of the report list for the
+  // rest of the session (the blank "Patient Report" box seen live), sharing
+  // the WebView's render/script thread with every subsequent evaluateJavascript
+  // call from Test One/Fast/Cultures and contributing to perceived hangs.
+  // Close it the same way the page's own Cancel control does -- call its own
+  // popup()/toggle() so we match its exact show/hide contract -- with a
+  // direct style fallback if those aren't reachable.
+  function closeReportPopup(doc) {
+    const target = doc || root.document;
+    const win = target.defaultView || root;
+    const div = target.getElementById && target.getElementById("popUpDiv");
+    if (!div) return { ok: true, action: "not_present" };
+    const isOpen = win.getComputedStyle ? win.getComputedStyle(div).display !== "none" : true;
+    if (!isOpen) return { ok: true, action: "already_closed" };
+    if (typeof win.popup === "function") {
+      try { win.popup("popUpDiv"); return { ok: true, action: "closed_via_page_popup" }; } catch (e) { /* fall through */ }
+    }
+    if (typeof win.toggle === "function") {
+      try { win.toggle("popUpDiv"); return { ok: true, action: "closed_via_page_toggle" }; } catch (e) { /* fall through */ }
+    }
+    try {
+      div.style.display = "none";
+      const iframe = div.querySelector("iframe");
+      if (iframe) iframe.setAttribute("src", "about:blank");
+      return { ok: true, action: "closed_via_style_fallback" };
+    } catch (e) {
+      return { ok: false, action: "close_failed", errorCode: "popup_close_failed" };
+    }
   }
 
   function getSafeSetPdfTemplate(doc) {
@@ -650,6 +812,62 @@
     return bestReportDocument(doc || root.document).rows;
   }
 
+  // Combined helper: read rows from the best document AND select for mode in
+  // one JS-side call, so Kotlin never needs to interpolate a JSONArray of row
+  // data into JavaScript source code. Interpolating JSONArray.toString() into
+  // JS produces syntax errors when row values contain " characters (specifically
+  // the onclick attribute, e.g. "return printReport(\"x.pdf\");"), which broke
+  // the WebView renderer and caused the process crash reported live.
+  // ROOT CAUSE FIX (combining two real, independently-found defects):
+  // (1) row data must never be interpolated back into a second JS call --
+  //     JSONObject/JSONArray.toString() contains " chars (onclick attributes
+  //     do) which breaks the JS string literal and previously crashed the
+  //     WebView renderer process.
+  // (2) a row must never be re-located by row_index in a LATER, separate
+  //     call -- if anything mutated the DOM between selection and that later
+  //     call (most relevantly: NIMS's own printReport()/
+  //     AddRowToTableAddMoreValues() inserting a row for the #setPdf iframe,
+  //     which happens during Discover's template-discovery click), row_index
+  //     no longer reliably identifies the same row, and findReportRow's only
+  //     corroborating check ("does this row still say View Report") is true
+  //     of every report row, so it can silently resolve to the WRONG row.
+  // Fix for both: read the token from each row's own button HERE, in the
+  // same DOM snapshot used to select the rows, and attach it directly to the
+  // row object. Nothing downstream ever needs a second JS round-trip or a
+  // row_index re-lookup to get a token -- it is already on the row.
+  function selectRowsForModeFromDoc(mode, doc) {
+    const best = bestReportDocument(doc || root.document);
+    const selected = selectRowsForMode(best.rows, mode);
+    return selected.map((rowInfo) => {
+      const row = findReportRow(rowInfo, best.doc);
+      if (!row) return { ...rowInfo, transientPrintReportArg: "" };
+      const button = Array.from(row.querySelectorAll("[onclick]")).find((node) => {
+        const parsed = parseFunctionArgs(node.getAttribute("onclick") || "");
+        return parsed.functionName === "printReport" && parsed.args.length === 1;
+      });
+      const transientPrintReportArg = button ? (parseFunctionArgs(button.getAttribute("onclick") || "").args[0] || "") : "";
+      return { ...rowInfo, transientPrintReportArg };
+    });
+  }
+
+  // ROOT CAUSE FIX: this used to click the button and return ONLY rowInfo
+  // (a row_index-based positional descriptor), discarding the token it had
+  // just read off the button's own onclick attribute one line earlier. The
+  // caller (discoverMapping) would then wait for NIMS's printReport()/popup
+  // chain to run -- which mutates the DOM (AddRowToTableAddMoreValues inserts
+  // a new table row for the PDF iframe, per the live technical findings) --
+  // and only AFTERWARD try to re-find "the same row" by row_index via
+  // findReportRow/transientPayloadForRow. After a DOM mutation, row_index is
+  // not reliable: findReportRow's only corroborating check is that the row at
+  // that index still contains "View Report" text, which is true of EVERY
+  // report row, so it can silently return the WRONG row, or no row at all if
+  // indices shifted. This was the structural cause of "No View Report button
+  // found for row" on Test One after a successful Discover.
+  //
+  // Fix: capture the token (and the row's identifying fields) in THIS
+  // function, synchronously, in the same tick as finding the button and
+  // before the click can mutate anything. Nothing downstream needs to
+  // re-locate this row by position ever again for this click.
   function clickFirstReportForMode(mode, doc) {
     const best = bestReportDocument(doc || root.document);
     const rowInfo = selectRowsForMode(best.rows, mode || "test_direct")[0];
@@ -661,8 +879,11 @@
       return parsed.functionName === "printReport" && parsed.args.length === 1;
     });
     if (!button) return { ok: false, error: "No View Report button found for row" };
+    const transientPrintReportArg = parseFunctionArgs(button.getAttribute("onclick") || "").args[0] || "";
+    if (!transientPrintReportArg) return { ok: false, error: "No View Report button found for row" };
+    const clickedRow = { ...rowInfo, transientPrintReportArg };
     button.click();
-    return { ok: true, row: rowInfo };
+    return { ok: true, row: clickedRow };
   }
 
   function transientPayloadForRow(rowInfo, doc) {
@@ -778,22 +999,54 @@
     return match ? Date.UTC(Number(match[3]) < 100 ? 2000 + Number(match[3]) : Number(match[3]), month[match[2].toLowerCase()], Number(match[1])) : 0;
   }
 
+  // Was rows[index] with NO corroborating check at all -- the weakest of the
+  // (at least two) duplicate copies of this logic in this codebase. Brought
+  // up to the same minimum bar as contentUtils.js's version: the row at that
+  // index must still actually look like a report row. This is still
+  // positional and can be wrong after a DOM mutation, which is exactly why
+  // selectRowsForModeFromDoc below now captures the token in the SAME pass
+  // that selects the row, rather than ever calling this function again later
+  // for a row that was selected in an earlier, separate JS round-trip.
   function findReportRow(rowInfo, doc) {
     const rows = Array.from((doc || root.document).querySelectorAll("tr"));
     const index = Number(rowInfo && rowInfo.row_index);
-    return Number.isFinite(index) ? rows[index] : null;
+    if (Number.isFinite(index) && rows[index] && /view\s*report/i.test(compactText(textOf(rows[index])))) return rows[index];
+    return null;
   }
 
+  // NIMS CR-wise result table column order (confirmed from live inspection):
+  // [0] LabName/Department  [1] TestName/Investigation  [2] Sample No/Lab No
+  // [3] Collection Date     [4] Report NO.               [5] Report (View Report)
+  // Previous implementation used a keyword search across ALL cells which could
+  // return the Sample No or "1 View Repo" text. Now we use column position
+  // with a fallback chain that excludes obvious non-name cells.
   function guessReportName(cells, text) {
-    return cells.find((cell) => /cbc|blood|renal|rft|liver|lft|culture|electrolyte|crp|procalcitonin/i.test(cell)) || text.slice(0, 80);
+    // Column 1 is TestName in the NIMS result table.
+    const col1 = cells[1] && cells[1].length > 2 && !/^[\d\s/-]+$/.test(cells[1]) && !/view\s*report/i.test(cells[1]) ? cells[1] : null;
+    if (col1) return col1.slice(0, 120);
+    // Fallback: first cell that looks like an investigation name (not a date, not a number, not "View Report").
+    const candidate = cells.find((cell) =>
+      cell.length > 3 &&
+      !/view\s*report/i.test(cell) &&
+      !/^\d+$/.test(cell) &&
+      !/^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(cell) &&
+      !/^[A-Z0-9]{6,}\/[A-Z0-9]{6,}$/.test(cell)
+    );
+    return candidate ? candidate.slice(0, 120) : text.replace(/view\s*report.*/i, "").trim().slice(0, 80);
   }
 
   function guessDate(cells, text) {
-    return cells.find((cell) => /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cell)) || (text.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0];
+    // Column 3 is Collection Date in the NIMS result table.
+    const col3 = cells[3] && /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cells[3]) ? (cells[3].match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0] : null;
+    if (col3) return col3;
+    return cells.find((cell) => /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cell))?.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/)?.[0] || (text.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0];
   }
 
   function guessDepartment(cells) {
-    return cells.find((cell) => /pathology|microbiology|biochemistry|hematology|radiology/i.test(cell)) || "";
+    // Column 0 is LabName/Department in the NIMS result table.
+    const col0 = cells[0] && cells[0].length > 2 && !/view\s*report/i.test(cells[0]) && !/^\d+$/.test(cells[0]) ? cells[0] : null;
+    if (col0) return col0.slice(0, 60);
+    return cells.find((cell) => /pathology|microbiology|biochemistry|hematology|haematology|radiology|serology|clinical|bacteriology|coagulation|urine|fluid|special/i.test(cell)) || "";
   }
 
   function resolveUrl(value, baseUrl) {
@@ -812,7 +1065,7 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  const api = { diagnosePage, collectFrames, rowsFromBestFrame, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports };
+  const api = { diagnosePage, frameRenderProbe, installErrorCapture, collectFrames, rowsFromBestFrame, selectRowsForModeFromDoc, extractReportRows, frameReachReport, discoverSetPdfTemplate, getTransientReportPayload, transientPayloadForRow, clickFirstReportForMode, buildReportUrl, selectRowsForMode, parseFunctionArgs, safeHostPath, NIMS_PAGE_STAGE, accessibleDocumentsRecursive, detectNimsPageStage, detectCurrentDocumentStage, getCurrentDocumentNavigationDiagnostic, navigateCurrentDocumentStep, findInvestigationModuleTarget, findCrWiseReportMenuTarget, navigateToCrWiseReports, openCrWiseResultsDirect, closeReportPopup };
   root.NimsReportCore = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : window);

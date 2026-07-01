@@ -8,30 +8,102 @@ class LocalSummaryBuilder {
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
         val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() }
+        val parsedCount = reports.size - unsupportedCount
         val lowConfidenceLabCount = reports.sumOf { report -> report.labs.count { it.confidence == ParseConfidence.LOW } }
-        val lines = mutableListOf("Auto-parsed summary. Verify with source NIMS reports before clinical decisions.")
-        if (unsupportedCount > 0) lines += "Failed or unsupported reports: $unsupportedCount."
         if (lowConfidenceLabCount > 0) warnings += "Some low-confidence laboratory values were excluded; review source reports."
+
         val sortedReports = reports.withIndex().sortedWith(compareBy<IndexedValue<ParsedReport>>(
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch == null },
             { DateNormalizer.normalize(it.value.dateSent).sortEpoch ?: 0L },
             { it.index }
         )).map { it.value }
-        if (reports.any { it.dateSent.isNotBlank() && DateNormalizer.normalize(it.dateSent).sortEpoch == null }) warnings += "Some report dates could not be normalized; trend ordering may be uncertain."
+
+        if (reports.any { it.dateSent.isNotBlank() && DateNormalizer.normalize(it.dateSent).sortEpoch == null })
+            warnings += "Some report dates could not be normalized; trend ordering may be uncertain."
+
+        val lines = mutableListOf<String>()
+        // Always include disclaimer for clinical safety (tests depend on this)
+        lines += "Auto-parsed summary. Verify with source NIMS reports before clinical decisions."
+        dateRange(sortedReports)?.let { lines += "Date range: $it." }
+
         when (mode) {
-            SummaryMode.FAST -> addLabTrends(lines, sortedReports, keyOnly = true, warnings = warnings).also { addCultures(lines, sortedReports, concise = true) }
+            SummaryMode.FAST -> {
+                addAbnormalLabHighlights(lines, sortedReports, warnings)
+                addLabTrends(lines, sortedReports, keyOnly = true, warnings = warnings)
+                addCultures(lines, sortedReports, concise = true)
+            }
             SummaryMode.CULTURES_ONLY -> addCultures(lines, sortedReports, concise = false)
             SummaryMode.FULL -> {
+                // Backward-compatible summary counts (tests check for "Reports processed")
                 lines += "Reports processed: ${reports.size}; failed/unsupported: $unsupportedCount."
-                dateRange(sortedReports)?.let { lines += "Date range: $it." }
+                addAbnormalLabHighlights(lines, sortedReports, warnings)
                 addLabTrends(lines, sortedReports, keyOnly = false, warnings = warnings)
                 addCultures(lines, sortedReports, concise = false)
-                (reports.flatMap { it.warnings } + warnings).distinct().forEach { lines += "Warning: $it" }
+                val allWarnings = (reports.flatMap { it.warnings } + warnings).distinct()
+                    .filter { it.isNotBlank() && !it.contains("Processed from PDF", true) }
+                if (allWarnings.isNotEmpty()) allWarnings.forEach { lines += "Warning: $it" }
             }
         }
+
         val helperJson = toSummaryJson(sortedReports, lines, warnings)
         return ProcessingSummary(lines.joinToString("\n"), reports.size, warnings.distinct(), helperJson)
     }
+
+    // NEW: Lead with abnormal findings, grouped by system — the clinically useful part
+    private fun addAbnormalLabHighlights(lines: MutableList<String>, reports: List<ParsedReport>, warnings: MutableList<String>) {
+        val allLabs = reports.flatMap { report ->
+            report.labs
+                .filter { it.confidence != ParseConfidence.LOW }
+                .map { report to it }
+        }
+        // Group by canonical code, get latest dated value
+        val latestByCode = allLabs
+            .groupBy { CanonicalLabCodes.normalize(it.second.canonicalCode) }
+            .mapValues { (_, rows) ->
+                rows.maxByOrNull { DateNormalizer.normalize(it.first.dateSent).sortEpoch ?: 0L }?.second
+            }
+            .filterValues { it != null }
+            .mapValues { it.value!! }
+
+        // Split by abnormality category
+        val critical = latestByCode.values.filter { it.abnormality == Abnormality.CRITICAL }
+        val high = latestByCode.values.filter { it.abnormality == Abnormality.HIGH }
+        val low = latestByCode.values.filter { it.abnormality == Abnormality.LOW }
+
+        if (critical.isNotEmpty()) {
+            lines += "🔴 Critical values:"
+            critical.sortedBy { it.displayName }.forEach { lab ->
+                lines += "  · ${lab.displayName}: ${lab.valueText()} (ref: ${lab.referenceRangeDisplay()})"
+            }
+            lines += ""
+        }
+        if (high.isNotEmpty()) {
+            lines += "🟠 Elevated:"
+            high.sortedBy { it.displayName }.forEach { lab ->
+                lines += "  · ${lab.displayName}: ${lab.valueText()} [HIGH] (ref: ${lab.referenceRangeDisplay()})"
+            }
+            lines += ""
+        }
+        if (low.isNotEmpty()) {
+            lines += "🟡 Low:"
+            low.sortedBy { it.displayName }.forEach { lab ->
+                lines += "  · ${lab.displayName}: ${lab.valueText()} [LOW] (ref: ${lab.referenceRangeDisplay()})"
+            }
+            lines += ""
+        }
+        if (critical.isEmpty() && high.isEmpty() && low.isEmpty()) {
+            lines += "✅ No critical or abnormal values in parsed reports."
+            lines += ""
+        }
+    }
+
+    private fun ParsedLabValue.referenceRangeDisplay(): String = when {
+        referenceRangeText != null -> referenceRangeText
+        referenceLow != null && referenceHigh != null -> "${referenceLow}-${referenceHigh} ${unit.orEmpty()}"
+        referenceLow != null -> ">${referenceLow} ${unit.orEmpty()}"
+        referenceHigh != null -> "<${referenceHigh} ${unit.orEmpty()}"
+        else -> "—"
+    }.trim()
 
     private fun addLabTrends(lines: MutableList<String>, reports: List<ParsedReport>, keyOnly: Boolean, warnings: MutableList<String>) {
         val keyCodes = setOf("HB", "WBC", "PLT", "CREAT", "NA", "K", "TBIL", "CRP", "PCT", "INR", "NEUT", "LYMPH", "ALT", "AST", "ALB")

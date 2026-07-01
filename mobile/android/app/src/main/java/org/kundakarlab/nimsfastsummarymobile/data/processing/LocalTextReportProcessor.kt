@@ -44,17 +44,26 @@ class LocalTextReportProcessor(
         else -> null
     }
     private fun looksLikeReport(text: String): Boolean = listOf(
-        // Chemistry / labs
-        "hemoglobin", "haemoglobin", "platelet", "creatinine", "sodium", "bilirubin",
-        "culture", "specimen", "organism", "crp", "procalcitonin", "potassium", "wbc", "urea",
-        // Broader lab terms
-        "tlc", "dlc", "neutrophil", "lymphocyte", "hematocrit", "pcv", "mcv", "mchc",
-        "sgot", "sgpt", "albumin", "alkaline phosphatase", "troponin", "ferritin", "glucose",
-        // Bacteriology/microbiology
-        "no growth", "growth detected", "sensitive", "resistant", "aerobic culture",
-        // Pathology / other
-        "biopsy", "cytology", "smear", "staining", "gram", "acid fast", "tb",
-        "fluid", "pus", "sputum", "blood culture"
+        // Haematology / CBC
+        "hemoglobin", "haemoglobin", "platelet", "wbc", "tlc", "dlc",
+        "neutrophil", "lymphocyte", "hematocrit", "pcv", "mcv", "mchc", "mch",
+        // Coagulation — previously missing, causing APTT/PT reports to be Unsupported
+        "prothrombin", "thromboplastin", "aptt", "coagulation", "fibrinogen", "d-dimer",
+        "inr", "pt/inr",
+        // Chemistry / LFT / RFT
+        "creatinine", "urea", "sodium", "potassium", "bilirubin",
+        "sgot", "sgpt", "albumin", "alkaline phosphatase", "troponin",
+        "ferritin", "glucose", "crp", "procalcitonin",
+        // Urinalysis — previously missing
+        "urine routine", "urinalysis", "urine analysis", "specific gravity",
+        "urine protein", "pus cells", "epithelial cells", "urine glucose",
+        // Microbiology / Culture
+        "culture", "specimen", "organism", "no growth", "growth detected",
+        "sensitive", "resistant", "aerobic culture",
+        "gram staining", "gram stain", "gram smear", "acid fast",
+        // Fluid analysis / other
+        "fluid", "pus", "sputum", "blood culture", "biopsy", "cytology",
+        "smear", "staining", "tb"
     ).any { text.contains(it, true) }
 }
 
@@ -210,14 +219,128 @@ object CultureTextParser {
         return if (blocks.isEmpty()) listOf(text) else blocks
     }
     private fun parseSusceptibility(block: String): List<AntibioticResult> {
-        val wordRows = Regex("([A-Za-z][A-Za-z /-]{2,30})\\s+((?:Sensitive|Susceptible|Intermediate|Resistant))", RegexOption.IGNORE_CASE)
-            .findAll(block).map { AntibioticResult(it.groupValues[1].trim(), it.groupValues[2].trim(), ParseConfidence.MEDIUM) }
-        val sirRows = Regex("([A-Za-z][A-Za-z /-]{2,30})\\s+(S|I|R)\\b", RegexOption.IGNORE_CASE)
-            .findAll(block).map { match ->
-                val interpretation = when (match.groupValues[2].uppercase()) { "S" -> "Susceptible"; "I" -> "Intermediate"; else -> "Resistant" }
-                AntibioticResult(match.groupValues[1].trim(), interpretation, ParseConfidence.MEDIUM)
+        // ROOT CAUSE of "Neurology Unit Intermediate": the previous implementation
+        // used a broad regex ([A-Za-z][A-Za-z /-]{2,30})\s+(Sensitive|Intermediate|Resistant)
+        // with no section gating. This matched ANY English phrase preceding those words,
+        // including "Neurology Unit Intermediate" (ward name + section heading that happened
+        // to follow a culture card). The spec (Phase 10) requires a section-state machine.
+        //
+        // State machine:
+        //   NONE → triggered by a recognised sensitivity-section heading
+        //   SUSCEPTIBLE / INTERMEDIATE / RESISTANT → maintained until a stop heading
+        //
+        // Only tokens that appear in the known-antibiotic dictionary are accepted.
+        // Everything else (ward names, comments, organism names, report footers) is ignored.
+
+        val results = mutableListOf<AntibioticResult>()
+
+        // Section headings that start a S/I/R block
+        val sectionStart = Regex(
+            """^(?:SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|INTERMEDIATE\s+REPORT|RESISTANCE\s+REPORT|RESISTANT\s+REPORT|SUSCEPTIBLE|SENSITIVE|INTERMEDIATE|RESISTANT)$""",
+            RegexOption.IGNORE_CASE
+        )
+        // Stop headings that end all AST parsing for this block
+        val sectionStop = Regex(
+            """^(?:ISOLATE\s*[:.]|CULTURE\s+REPORT|Fan\s+Blood\s+Culture|COLLECTION\s*[:.]|Comments?\s*[:.]|END\s+OF\s+THE\s+REPORT|Department\s+of|Antimicrobial\s+Stewardship|BMD\s+FOR|NOTE\s*[:.])""",
+            RegexOption.IGNORE_CASE
+        )
+
+        // Known antibiotic token dictionary (longest-match; covers common NIMS reportings)
+        val ANTIBIOTICS = listOf(
+            "PIPERACILLIN/TAZOBACTAM", "PIPERACILLIN-TAZOBACTAM", "CEFOPERAZONE/SULBACTAM",
+            "CEFOPERAZONE+SULBACTAM", "CEFOPERAZONE-SULBACTAM", "CEFTAZIDIME-AVIBACTAM",
+            "CEFTAZIDIME AVIBACTAM", "CEFTOLOZANE-TAZOBACTAM", "AMOXICILLIN/CLAVULANATE",
+            "AMOXICILLIN-CLAVULANATE", "AMPICILLIN-SULBACTAM", "AMPICILLIN/SULBACTAM",
+            "TRIMETHOPRIM-SULFAMETHOXAZOLE", "TRIMETHOPRIM/SULFAMETHOXAZOLE", "COTRIMOXAZOLE",
+            "CO-TRIMOXAZOLE", "POLYMYXIN B", "POLYMYXIN E", "COLISTIN",
+            "PIPERACILLIN", "CEFOPERAZONE", "CEFTAZIDIME", "CEFTRIAXONE", "CEFUROXIME",
+            "CEFOTAXIME", "CEPHALEXIN", "CEFAZOLIN", "CEFIXIME", "CEFPODOXIME",
+            "CEFTAROLINE", "MEROPENEM", "IMIPENEM", "ERTAPENEM", "DORIPENEM",
+            "AMPICILLIN", "AMOXICILLIN", "CLOXACILLIN", "OXACILLIN", "METHICILLIN",
+            "AZITHROMYCIN", "CLARITHROMYCIN", "ERYTHROMYCIN", "AZTREONAM",
+            "GENTAMICIN", "AMIKACIN", "TOBRAMYCIN", "NETILMICIN",
+            "CIPROFLOXACIN", "LEVOFLOXACIN", "MOXIFLOXACIN", "NORFLOXACIN",
+            "TETRACYCLINE", "DOXYCYCLINE", "MINOCYCLINE", "TIGECYCLINE",
+            "CLINDAMYCIN", "LINEZOLID", "VANCOMYCIN", "TEICOPLANIN", "DAPTOMYCIN",
+            "METRONIDAZOLE", "NITROFURANTOIN", "FOSFOMYCIN", "RIFAMPICIN", "RIFAMPIN",
+            "CHLORAMPHENICOL", "NALIDIXIC ACID", "FUSIDIC ACID", "MUPIROCIN",
+            "HIGH LEVEL GENTAMICIN", "HIGH LEVEL STREPTOMYCIN"
+        ).sortedByDescending { it.length }  // longest match first
+
+        var currentSection: String? = null
+
+        for (rawLine in block.lines()) {
+            val line = rawLine.trim()
+                .replace('\u00A0', ' ')  // non-breaking space
+                .replace('\u2013', '-')  // en-dash
+                .replace('\u2014', '-')  // em-dash
+                .replace(Regex("\\s{2,}"), " ")
+
+            if (line.isBlank()) continue
+
+            // Check for stop heading — exit all AST parsing
+            if (sectionStop.containsMatchIn(line)) { currentSection = null; continue }
+
+            // Check for section heading
+            val sectionMatch = sectionStart.find(line)
+            if (sectionMatch != null) {
+                currentSection = when {
+                    line.contains("resist", true) -> "RESISTANT"
+                    line.contains("intermediate", true) -> "INTERMEDIATE"
+                    else -> "SUSCEPTIBLE"
+                }
+                continue
             }
-        return (wordRows + sirRows).distinctBy { it.antibiotic.lowercase() to it.interpretation.lowercase() }.toList()
+
+            if (currentSection == null) {
+                // Not in a section-state, but check for explicit inline Drug+S/I/R format.
+                // This handles "Ceftriaxone R" / "Meropenem Susceptible" placed directly
+                // after organism lines, without a preceding sensitivity heading.
+                // Requires a known antibiotic name so ward names/comments are rejected.
+                val inlineMatch = Regex(
+                    """^(${ANTIBIOTICS.joinToString("|") { Regex.escape(it) }})\s+(Sensitive|Susceptible|Intermediate|Resistant|S|I|R)\b""",
+                    RegexOption.IGNORE_CASE
+                ).find(line)
+                if (inlineMatch != null) {
+                    val drug = inlineMatch.groupValues[1].lowercase().split(" ").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+                    val rawInterp = inlineMatch.groupValues[2].uppercase()
+                    val interp = when (rawInterp) { "R", "RESISTANT" -> "Resistant"; "I", "INTERMEDIATE" -> "Intermediate"; else -> "Susceptible" }
+                    results += AntibioticResult(drug, interp, ParseConfidence.MEDIUM)
+                }
+                continue  // still not in section for upper-only drug names
+            }
+
+            // IMPORTANT: check inline Drug+Interpretation FIRST (before bare-name section match).
+            // Without this ordering, "Ceftriaxone Resistant" inside a SENSITIVITY REPORT section
+            // would be matched as bare "Ceftriaxone" and marked Susceptible (the section heading),
+            // then `continue` would skip the inline check, giving the wrong interpretation.
+            val inlineInSection = Regex(
+                """^(${ANTIBIOTICS.joinToString("|") { Regex.escape(it) }})\s+(Sensitive|Susceptible|Intermediate|Resistant|S|I|R)\b""",
+                RegexOption.IGNORE_CASE
+            ).find(line)
+            if (inlineInSection != null) {
+                val drug = inlineInSection.groupValues[1].lowercase().split(" ").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+                val rawInterp = inlineInSection.groupValues[2].uppercase()
+                val interp = when (rawInterp) { "R", "RESISTANT" -> "Resistant"; "I", "INTERMEDIATE" -> "Intermediate"; else -> "Susceptible" }
+                results += AntibioticResult(drug, interp, ParseConfidence.HIGH)
+                continue
+            }
+
+            // Bare drug name on its own line — interpretation comes from the section heading
+            val upperLine = line.uppercase().replace(Regex("[^A-Z0-9/+\\-\\s]"), " ").trim()
+            val matched = ANTIBIOTICS.firstOrNull { drug ->
+                upperLine == drug || upperLine.startsWith("$drug ") || upperLine.startsWith("$drug\t")
+            }
+            if (matched != null) {
+                val interp = when (currentSection) {
+                    "RESISTANT" -> "Resistant"
+                    "INTERMEDIATE" -> "Intermediate"
+                    else -> "Susceptible"
+                }
+                results += AntibioticResult(matched.lowercase().split(" ").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }, interp, ParseConfidence.HIGH)
+            }
+        }
+        return results.distinctBy { it.antibiotic.lowercase() to it.interpretation.lowercase() }
     }
 
     private fun parseBlock(block: String, date: String?): ParsedCultureValue? {

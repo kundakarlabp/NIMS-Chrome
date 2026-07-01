@@ -61,6 +61,64 @@ class LocalTextReportProcessorTest {
     }
     private fun success(text: String): ParsedReport = (runSuspend { LocalTextReportProcessor().parseReport(input(text)) } as ProcessingResult.Success).value
     private fun input(text: String, type: String = "text/plain") = ReportInput("r1", "Test", "2026-01-01", "lab", type, text.toByteArray())
+    @Test fun astParserRejectsWardNamesAndNonAntibioticPhrases() {
+        val block = "Blood Culture\nOrganism: Klebsiella pneumoniae\nNeurology Unit Intermediate\nSurgical Ward Resistant\nICU Sensitive"
+        val results = CultureTextParser.parse(block, "01-Jan-2026")
+        val antibiotics = results.flatMap { it.susceptibility }.map { it.antibiotic }
+        // Ward names must never appear in the antibiotic list
+        assertFalse("Ward name appeared as antibiotic", antibiotics.any { it.contains("Neurology", true) })
+        assertFalse("Ward name appeared as antibiotic", antibiotics.any { it.contains("Surgical", true) })
+        assertFalse("Ward name appeared as antibiotic", antibiotics.any { it.contains("ICU", true) })
+    }
+
+    @Test fun astParserAcceptsAntibioticsUnderCorrectSectionHeadings() {
+        val block = """
+            Blood Culture
+            Organism: Klebsiella pneumoniae
+            SENSITIVITY REPORT
+            MEROPENEM
+            PIPERACILLIN/TAZOBACTAM
+            INTERMEDIATE REPORT
+            CEFUROXIME
+            RESISTANCE REPORT
+            CEFTRIAXONE
+        """.trimIndent()
+        val results = CultureTextParser.parse(block, "01-Jan-2026")
+        val susceptibility = results.flatMap { it.susceptibility }
+        assertTrue("Expected Meropenem Susceptible", susceptibility.any { it.antibiotic.contains("Meropenem", true) && it.interpretation == "Susceptible" })
+        assertTrue("Expected Cefuroxime Intermediate", susceptibility.any { it.antibiotic.contains("Cefuroxime", true) && it.interpretation == "Intermediate" })
+        assertTrue("Expected Ceftriaxone Resistant", susceptibility.any { it.antibiotic.contains("Ceftriaxone", true) && it.interpretation == "Resistant" })
+    }
+
+    @Test fun astParserHandlesInlineFormatInsideSection() {
+        val block = """
+            Urine Culture
+            Organism: Escherichia coli
+            SENSITIVITY REPORT
+            Meropenem Susceptible
+            Ceftriaxone Resistant
+            Ciprofloxacin Intermediate
+        """.trimIndent()
+        val results = CultureTextParser.parse(block, "01-Jan-2026")
+        val susceptibility = results.flatMap { it.susceptibility }
+        assertTrue("Expected Meropenem Susceptible", susceptibility.any { it.antibiotic.contains("Meropenem", true) && it.interpretation == "Susceptible" })
+        assertTrue("Expected Ceftriaxone Resistant", susceptibility.any { it.antibiotic.contains("Ceftriaxone", true) && it.interpretation == "Resistant" })
+    }
+
+    @Test fun looksLikeReportAcceptsCoagulationReport() {
+        // REGRESSION: APTT/PT reports were returning Unsupported because "thromboplastin"
+        // and "prothrombin" were not in the looksLikeReport keyword list.
+        val aptText = "Activated Partial Thromboplastin Time (APTT) 32 sec\nProthrombin Time 12 sec\nINR 1.1"
+        val result = success(aptText)
+        assertTrue("APTT should be parsed", result.labs.any { it.canonicalCode == "APTT" })
+        assertTrue("INR should be parsed", result.labs.any { it.canonicalCode == "INR" })
+    }
+
 }
 
 private fun <T> runSuspend(block: suspend () -> T): T { var value: Result<T>? = null; block.startCoroutine(object : Continuation<T> { override val context = EmptyCoroutineContext; override fun resumeWith(result: Result<T>) { value = result } }); return value!!.getOrThrow() }
+
+    // REGRESSION: "Neurology Unit Intermediate" was being returned as an AST result
+    // because the old broad regex matched any English words before S/I/R keywords.
+    // The new section-state parser requires an explicit sensitivity heading before
+    // accepting any tokens, and then only accepts known antibiotic names.
