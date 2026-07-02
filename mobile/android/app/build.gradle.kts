@@ -7,7 +7,6 @@ plugins {
 android {
     namespace = "org.kundakarlab.nimsfastsummarymobile"
     compileSdk = 35
-
     defaultConfig {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
@@ -16,12 +15,10 @@ android {
         versionName = "0.9.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-
     buildFeatures {
         buildConfig = true
         compose = true
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -33,41 +30,27 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 }
 
 val generatedNimsAssetsDir = layout.buildDirectory.dir("generated/nimsRuntimeAssets")
-
 val syncNimsRuntimeAssets = tasks.register<org.gradle.api.tasks.Sync>("syncNimsRuntimeAssets") {
     from(rootProject.file("../../shared/nims-web")) {
-        include(
-            "nimsReportCore.js",
-            "contentUtils.js",
-            "nimsAndroidFrameBridge.js",
-            "nimsWebviewShim.js"
-        )
+        include("nimsReportCore.js", "contentUtils.js", "nimsAndroidFrameBridge.js", "nimsWebviewShim.js")
     }
     into(generatedNimsAssetsDir)
 }
 
-android.sourceSets.getByName("main").assets.srcDir(generatedNimsAssetsDir)
+android.sourceSets.getByName("main").assets.setSrcDirs(listOf(generatedNimsAssetsDir.get().asFile))
 
 tasks.register("verifyNimsRuntimeAssets") {
     dependsOn(syncNimsRuntimeAssets)
     doLast {
         val generated = generatedNimsAssetsDir.get().asFile
-        val required = listOf(
-            "nimsReportCore.js",
-            "contentUtils.js",
-            "nimsAndroidFrameBridge.js",
-            "nimsWebviewShim.js"
-        )
-        required.forEach { name ->
+        listOf("nimsReportCore.js", "contentUtils.js", "nimsAndroidFrameBridge.js", "nimsWebviewShim.js").forEach { name ->
             check(generated.resolve(name).isFile) { "Missing generated NIMS runtime asset: $name" }
         }
-        check(!generated.resolve("test").exists()) { "Shared JavaScript tests must not be packaged in the APK" }
+        check(!generated.resolve("test").exists())
     }
 }
 
-tasks.named("preBuild") {
-    dependsOn("verifyNimsRuntimeAssets")
-}
+tasks.named("preBuild") { dependsOn("verifyNimsRuntimeAssets") }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
