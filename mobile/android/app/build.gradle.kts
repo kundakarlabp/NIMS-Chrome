@@ -12,13 +12,9 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.9.5"
+        versionCode = 35
+        versionName = "0.9.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    sourceSets {
-        getByName("main").assets.srcDirs("src/main/assets", "../../../shared/nims-web")
     }
 
     buildFeatures {
@@ -36,17 +32,41 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     kotlinOptions.jvmTarget = "17"
 }
 
-tasks.register("verifyNimsCoreAsset") {
+val generatedNimsAssetsDir = layout.buildDirectory.dir("generated/nimsRuntimeAssets")
+
+val syncNimsRuntimeAssets = tasks.register<org.gradle.api.tasks.Sync>("syncNimsRuntimeAssets") {
+    from(rootProject.file("../../shared/nims-web")) {
+        include(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        )
+    }
+    into(generatedNimsAssetsDir)
+}
+
+android.sourceSets.getByName("main").assets.srcDir(generatedNimsAssetsDir)
+
+tasks.register("verifyNimsRuntimeAssets") {
+    dependsOn(syncNimsRuntimeAssets)
     doLast {
-        val core = rootProject.file("../../shared/nims-web/nimsReportCore.js")
-        check(core.exists()) {
-            "Missing shared/nims-web/nimsReportCore.js"
+        val generated = generatedNimsAssetsDir.get().asFile
+        val required = listOf(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        )
+        required.forEach { name ->
+            check(generated.resolve(name).isFile) { "Missing generated NIMS runtime asset: $name" }
         }
+        check(!generated.resolve("test").exists()) { "Shared JavaScript tests must not be packaged in the APK" }
     }
 }
 
 tasks.named("preBuild") {
-    dependsOn("verifyNimsCoreAsset")
+    dependsOn("verifyNimsRuntimeAssets")
 }
 
 dependencies {
