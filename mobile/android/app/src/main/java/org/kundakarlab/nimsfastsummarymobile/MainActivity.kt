@@ -19,7 +19,8 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
-import androidx.webkit.ScriptHandler
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +57,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -62,7 +66,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -94,6 +97,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -110,17 +114,26 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var settings: SecureSettings
     private var mapping: ReportTemplate? = null
     private var mappingValidated = false
-    private var crossFrameReport: JSONObject? = null
+    // ROOT CAUSE FIX: holds the exact row (with its transientPrintReportArg
+    // token already attached) that discoverMapping's clickFirstReportForMode
+    // just clicked. Test One must use THIS row directly, never re-derive a
+    // "test_direct" row from the live document afterward -- NIMS's own
+    // printReport()/AddRowToTableAddMoreValues() mutates the DOM as a side
+    // effect of that exact click (inserts a row for the #setPdf iframe), so a
+    // position-based re-lookup after the click is not reliable. See
+    // clickFirstReportForMode's comment in nimsReportCore.js for the full
+    // explanation. Cleared whenever mapping/mappingValidated are cleared.
+    private var discoveredTestRow: JSONObject? = null
+    // Token identity for runModeInternal's evaluateJavascript watchdog.
+    private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
-    private var documentStartScriptHandler: ScriptHandler? = null
-    private var webRuntimeSupported = false
-    private var webRuntimeError = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
     private var statusMessage by mutableStateOf("Open NIMS and login manually.")
@@ -137,6 +150,7 @@ class MainActivity : ComponentActivity() {
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private var navigationJob: Job? = null
+    private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
@@ -162,14 +176,16 @@ class MainActivity : ComponentActivity() {
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
+        clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
         webViewUserAgent = webView.settings.userAgentString
-        if (webRuntimeSupported) {
-            clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
-            val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
-            setState(initial.state, initial.message)
-        } else {
-            setState(AppState.ERROR, webRuntimeError.ifBlank { "NIMS WebView runtime could not be installed." })
-        }
+        // Logged unmistakably, first thing, every launch: which exact build is
+        // actually running. Several rounds of "still crashes after the fix"
+        // turned out to be testing a stale install rather than the new build --
+        // this line removes that ambiguity from any future log, instead of it
+        // having to be argued about after the fact.
+        log("BUILD: versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
+        val initial = InitialStatePolicy.derive(processingMode, settings.helperUrl().isNotBlank(), settings.hasApiKey())
+        setState(initial.state, initial.message)
         setContent {
             NimsTheme {
                 NimsFastSummaryApp(
@@ -192,34 +208,15 @@ class MainActivity : ComponentActivity() {
                     onClearHelper = { clearHelperSettings() },
                     processingMode = processingMode,
                     onProcessingModeChange = { updateProcessingMode(it) },
-                    onNimsLogin = {
-                        if (webRuntimeSupported) webView.loadUrl(NIMS_LOGIN_URL)
-                        else setState(AppState.ERROR, webRuntimeError.ifBlank { "Update Chrome and Android System WebView." })
-                    },
+                    onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
                     onClearNimsSession = { clearNimsSession() },
-                    onBack = { if (webView.canGoBack()) webView.goBack() },
-                    onForward = { if (webView.canGoForward()) webView.goForward() },
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
                     onZoomOut = { webView.zoomOut() },
-                    onOpenCrReports = {
-                        val visibleRows = crossFrameReport?.optJSONArray("rows")?.length() ?: 0
-                        if (visibleRows > 0) {
-                            runMode("bulk_fast")
-                        } else {
-                            setState(
-                                AppState.HELPER_READY,
-                                "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New, submit the CR number, then tap Analyze Results."
-                            )
-                        }
-                    },
+                    onOpenCrSearchDirect = { openCrSearchDirect() },
+                    onCopyFullLog = { copyFullLog() },
                     navigationInProgress = navigationInProgress,
-                    onDiagnose = { diagnosePage() },
-                    onDiscover = { discoverMapping() },
-                    onTestOne = { runMode("test_direct") },
-                    onFast = { runMode("bulk_fast") },
-                    onCulturesOnly = { runMode("bulk_cultures_only") },
-                    onFull = { runMode("bulk_full") },
+                    onFetchReports = { log("Fetch Reports tapped"); runMode("bulk_full") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
@@ -240,7 +237,13 @@ class MainActivity : ComponentActivity() {
         // Let a desktop Chrome (chrome://inspect over USB) attach to this WebView,
         // and let the WebView report its own console/network errors (wired below).
         runCatching { WebView.setWebContentsDebuggingEnabled(true) }
-        // NimsWebViewRuntime loads and registers the bundled runtime assets below.
+        val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
+        val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
+        val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
+        // Runtime compatibility shim: neutralizes NIMS's confirmed crashes
+        // (missing date_time global, and the $("#menuStrip").offset().left throw
+        // in tabmenu.js) so the menu/content render isn't aborted in the WebView.
+        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             // Identify as the desktop Chrome the extension actually works in.
@@ -334,19 +337,70 @@ class MainActivity : ComponentActivity() {
                 }
             }
             webViewClient = NimsWebViewClient(
-                onPageChanged = { safeUrl -> currentPage = safeUrl.ifBlank { "NIMS" } },
+                onPageChanged = { safeUrl ->
+                    currentPage = safeUrl.ifBlank { "NIMS" }
+                    // Navigating away from the CR-wise report list (e.g. a
+                    // session-expired redirect to the NIMS login page, or back/
+                    // forward navigation) used to leave mapping/mappingValidated
+                    // pointing at the OLD page's now-dead template and tokens. A
+                    // subsequent Test One/Fast tap would then try to fetch with
+                    // state from a page that's no longer there, which looks like
+                    // a generic failure rather than what it actually is. Clear it
+                    // whenever the WebView leaves the known report-list path, so
+                    // the next action correctly asks to re-discover.
+                    if (!safeUrl.contains("viewcrnowisereportprocess.cnt", ignoreCase = true) &&
+                        !safeUrl.contains("invresultreportprintingcrnowise.cnt", ignoreCase = true)
+                    ) {
+                        if (mapping != null || mappingValidated) {
+                            log("Left the CR result list ($safeUrl); clearing stale mapping state")
+                        }
+                        mapping = null
+                        mappingValidated = false
+                        discoveredTestRow = null
+                    }
+                },
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
                 onResourceError = { detail -> log(detail) }
             )
-            val runtime = NimsWebViewRuntime.install(
-                webView = this,
-                onMessage = { data -> post { onFrameReport(data) } },
-                onLog = { detail -> log(detail) }
-            )
-            documentStartScriptHandler = runtime.scriptHandler
-            webRuntimeSupported = runtime.supported
-            webRuntimeError = runtime.error
-            if (!runtime.supported) log(runtime.error)
+            // All-frames bridge (mirrors the extension's all_frames model). The
+            // top frame cannot read a cross-origin result iframe, so inject the
+            // core + bridge into every frame and let the frame that owns the rows
+            // post them back via nimsAndroidBridge. Feature-gated; if unsupported,
+            // the existing same-origin top-frame path still runs.
+            val webMessageSupported = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+            log("DIAG: WEB_MESSAGE_LISTENER supported=$webMessageSupported")
+            if (webMessageSupported) {
+                val listenerResult = runCatching {
+                    WebViewCompat.addWebMessageListener(this, "nimsAndroidBridge", setOf("*")) { _, message, _, _, _ ->
+                        message.data?.let { data -> post { onFrameReport(data) } }
+                    }
+                }
+                log("DIAG: addWebMessageListener installed=${listenerResult.isSuccess} error=${listenerResult.exceptionOrNull()?.message}")
+            }
+            val documentStartSupported = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+            log("DIAG: DOCUMENT_START_SCRIPT supported=$documentStartSupported")
+            if (documentStartSupported) {
+                // The shim is the render fix and must run first, before NIMS's
+                // own scripts, and even if the reader assets failed to load.
+                val readerJs = if (coreJs != null && utilsJs != null && bridgeJs != null) {
+                    "\n$coreJs\n$utilsJs\n$bridgeJs"
+                } else {
+                    ""
+                }
+                log("DIAG: asset load coreJs=${coreJs != null} utilsJs=${utilsJs != null} bridgeJs=${bridgeJs != null} shimJs=${shimJs != null}")
+                val payload = (shimJs ?: "") + readerJs
+                if (payload.isNotBlank()) {
+                    val injectResult = runCatching {
+                        val injected = "try{\nwindow.__nimsInjectedAt=Date.now();\n$payload\n}catch(e){if(window.console&&console.error)console.error('NIMS inject failed',e);}"
+                        WebViewCompat.addDocumentStartJavaScript(this, injected, setOf("*"))
+                    }
+                    log("DIAG: addDocumentStartJavaScript installed=${injectResult.isSuccess} error=${injectResult.exceptionOrNull()?.message}")
+                } else {
+                    log("DIAG: injection payload was BLANK (no shim/core text available)")
+                }
+            } else {
+                log("DIAG: DOCUMENT_START_SCRIPT NOT supported on this WebView provider — shim/reader never run")
+            }
         }
     }
 
@@ -381,6 +435,7 @@ class MainActivity : ComponentActivity() {
         cancelNavigation()
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         clearWebViewSession(coldStartOnly = false) {
             webView.loadUrl(NIMS_LOGIN_URL)
             setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
@@ -416,7 +471,33 @@ class MainActivity : ComponentActivity() {
     }
 
 
+    // Reach the CR-wise result page WITHOUT the EasyUI tab that blanks in the
+    // WebView. Prefer the page-faithful ticketed top-level nav; if the menu
+    // anchor is not present, load the leaf endpoint directly. Either way the
+    // page renders top-level and the existing reader picks up the rows.
+    private fun openCrSearchDirect() {
+        cancelNavigation()
+        mapping = null
+        mappingValidated = false
+        discoveredTestRow = null
+        setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
+        evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
+            when {
+                result.optBoolean("ok") -> {
+                    val action = result.optString("action")
+                    setState(AppState.HELPER_READY, "CR-wise page opening ($action). Enter the CR number, then tap Go.")
+                }
+                else -> {
+                    log("Direct CR menu not found (${result.optString("errorCode")}); loading leaf endpoint")
+                    webView.loadUrl(CR_SEARCH_URL)
+                    setState(AppState.HELPER_READY, "Loading CR-wise result page… If a login screen appears, sign in and retry.")
+                }
+            }
+        }
+    }
+
     private fun cancelNavigation() {
+        navigationGeneration += 1
         navigationJob?.cancel()
         navigationJob = null
         navigationInProgress = false
@@ -427,25 +508,64 @@ class MainActivity : ComponentActivity() {
             val rows = DiagnosePageContract.viewReportRows(json)
             val blocked = DiagnosePageContract.blockedFrames(json)
             val reachable = DiagnosePageContract.reachableDocuments(json)
-            if (rows > 0 && appStateValue in PRE_REPORT_STATES) {
+            if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             } else if (rows == 0 && blocked > 0) {
-                setState(AppState.ERROR, "Advanced top-frame diagnostics cannot inspect the owning report frame ($blocked blocked, $reachable reachable). Keep the result list visible and use Analyze Results.")
+                setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
             }
             log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
+        }
+        probeFrameRendering()
+    }
+
+    // Diagnostic-only: no clicks, no navigation, no form submission. Reports,
+    // per reachable frame, whether script injection actually ran in that
+    // window (window.__nimsInjectedAt), whether the body has any content,
+    // whether that content is visible, and the full uncaught-error text for
+    // that window (untruncated, unlike the 220-char console callback).
+    private fun probeFrameRendering() {
+        evaluateCore("JSON.stringify(NimsReportCore.frameRenderProbe(document))") { json ->
+            val frames = json.optJSONArray("frames") ?: JSONArray()
+            log("PROBE: ${frames.length()} frame(s) reachable from top")
+            for (i in 0 until frames.length()) {
+                val f = frames.optJSONObject(i) ?: continue
+                val err = f.optJSONObject("lastUncaughtError")
+                val errText = if (err != null) " ERROR=\"${err.optString("message")}\" @${err.optString("source").substringAfterLast('/')}:${err.optInt("line")}" else ""
+                log(
+                    "PROBE[${f.optInt("depth")}] id=${f.optString("frameId").ifBlank { "?" }} " +
+                        "url=${f.optString("url")} ready=${f.optString("readyState")} " +
+                        "visible=${f.optBoolean("visibleThroughAncestors")}/${f.optBoolean("elementVisible")} " +
+                        "children=${f.optInt("bodyChildCount")} textLen=${f.optInt("bodyTextLength")} " +
+                        "injected=${f.optBoolean("injectionRan")}$errText"
+                )
+                val sample = f.optString("bodyTextSample")
+                if (sample.isNotBlank()) log("PROBE[${f.optInt("depth")}] sample: ${sample.take(120)}")
+            }
         }
     }
 
     private fun discoverMapping() {
         mappingValidated = false
+        discoveredTestRow = null
         evaluateCore("JSON.stringify(NimsReportCore.clickFirstReportForMode('test_direct', document))") { click ->
             if (!click.optBoolean("ok")) {
                 setState(AppState.ERROR, click.optString("error", "No View Report button found for row"))
                 return@evaluateCore
             }
+            // Capture the exact row NOW, with its token already attached by
+            // clickFirstReportForMode -- before NIMS's popup/DOM-mutation
+            // chain runs. This is what makes Test One reliable: it uses this
+            // row directly instead of trying to re-find "the test row" by
+            // position in a document that the click is about to change.
+            discoveredTestRow = click.optJSONObject("row")
             log("Waiting for report mapping")
             Handler(Looper.getMainLooper()).postDelayed({
                 evaluateCore("JSON.stringify(NimsReportCore.discoverSetPdfTemplate(document))") { template ->
+                    // Always close the popup discoverSetPdfTemplate's click just opened,
+                    // success or failure, before anything else touches the WebView.
+                    evaluateCore("JSON.stringify(NimsReportCore.closeReportPopup(document))") { closeResult ->
+                        log("Closed report-discovery popup: ${closeResult.optString("action")}")
+                    }
                     if (!template.optBoolean("discovered")) {
                         setState(AppState.ERROR, "Mapping not discovered. Open the report page and retry.")
                         return@evaluateCore
@@ -464,154 +584,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Receives passive page-state and report-row announcements from the frame
-    // that actually owns the rendered NIMS content, including cross-origin frames.
+    // SIMPLIFIED: nimsAndroidFrameBridge.js still runs and posts messages (it
+    // remains useful diagnostic signal, and removing the JS layer is a larger,
+    // separate change), but the Kotlin side no longer ACTS on nims_report_frame
+    // announcements -- no crossFrameReport state, no auto REPORT_PAGE_READY,
+    // no normalizer call (FrameReportNormalizer.kt was removed along with the
+    // rest of the dual-path architecture it only served). That decision-making
+    // moved entirely to runMode/discoverMapping/runModeInternal reading the
+    // top document directly (see runMode's comment for why). This function is
+    // now pure logging, so a flaky bridge poll can never again silently steer
+    // which code path a button tap takes.
     private fun onFrameReport(data: String) {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (json.optString("type")) {
-            "nims_page_state" -> {
-                if (activeProcessingJob?.isActive == true) return
-                val pageKind = json.optString("pageKind")
-                val reportCount = json.optInt("reportCount")
-                when (pageKind) {
-                    "login" -> setState(AppState.HELPER_READY, "Login to NIMS manually.")
-                    "portal" -> if (appStateValue in PRE_REPORT_STATES) {
-                        setState(
-                            AppState.HELPER_READY,
-                            "Navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
-                        )
-                    }
-                    "cr_search" -> {
-                        crossFrameReport = null
-                        mapping = null
-                        mappingValidated = false
-                        setState(AppState.REPORT_PAGE_READY, "CR search ready. Enter the CR number and submit it in NIMS.")
-                    }
-                    "cr_results" -> setState(
-                        AppState.REPORT_PAGE_READY,
-                        "Report list detected ($reportCount visible). Tap Analyze Results."
-                    )
-                }
-                return
+            "nims_frame_debug" -> {
+                val errs = json.optJSONArray("errors")
+                val errStr = if (errs != null && errs.length() > 0) {
+                    " err=" + (0 until errs.length()).joinToString("; ") { errs.optString(it) }
+                } else ""
+                log(
+                    "FRAME ${json.optString("url")}: children=${json.optInt("children")} " +
+                        "text=${json.optInt("textLen")} h=${json.optInt("height")}$errStr"
+                )
             }
-            "nims_report_frame" -> { /* fall through to handling below */ }
-            else -> return
-        }
-        if (FrameReportNormalizer.normalize(json, webView.url ?: NIMS_LOGIN_URL) { log(it) } == null) return
-        crossFrameReport = json
-        val rowCount = json.optJSONArray("rows")?.length() ?: 0
-        val hasTemplate = json.optJSONObject("template") != null
-        log("Frame bridge: rows=$rowCount template=$hasTemplate from=${json.optString("href")}")
-        if (rowCount > 0 && !navigationInProgress && activeProcessingJob?.isActive != true &&
-            appStateValue in PRE_REPORT_STATES) {
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible). Tap Analyze Results.")
-        }
-    }
-
-    // Single-mode run using only the cross-frame announcement (rows already carry
-    // their printReport argument; the template is already discovered). No
-    // top-frame DOM access, so it is origin-independent. selectRowsForMode is a
-    // pure function evaluated on the announced rows.
-    private fun runFrameBridgeMode(mode: String, report: JSONObject, template: ReportTemplate) {
-        mapping = template
-        val rowsArr = report.optJSONArray("rows") ?: JSONArray()
-        if (rowsArr.length() == 0) {
-            setState(AppState.ERROR, "No usable report rows from the visible frame. Keep the result list visible and retry.")
-            return
-        }
-        evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rowsArr}, '$mode'))") { selectedText ->
-            val selectedAll = runCatching { JSONArray(selectedText) }.getOrDefault(JSONArray())
-            val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
-            } else {
-                selectedAll
-            }
-            if (selected.length() == 0) {
-                setState(AppState.ERROR, "No matching report rows for this mode in the visible frame.")
-                return@evaluateJson
-            }
-            val prepared = mutableListOf<PreparedReportRequest>()
-            for (i in 0 until selected.length()) {
-                val row = selected.optJSONObject(i) ?: continue
-                val transient = row.optString("transientPrintReportArg")
-                if (transient.isBlank()) {
-                    log("Skipping ${row.optString("report_name", "report")}: report argument missing")
-                    continue
-                }
-                prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
-            }
-            if (prepared.isEmpty()) {
-                setState(AppState.ERROR, "Visible report rows had no usable print argument.")
-                return@evaluateJson
-            }
-            log("Frame-bridge selected ${prepared.size} reports for $mode")
-            startFetchParseSummarize(mode, prepared)
-        }
-    }
-
-    // Cross-frame entry: validate one report (if needed) then run the bulk mode.
-    private fun runModeViaFrameBridge(mode: String, report: JSONObject) {
-        val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
-        val tpl = report.optJSONObject("template")
-        if (tpl == null) {
-            val rowCount = report.optJSONArray("rows")?.length() ?: 0
-            setState(AppState.REPORT_PAGE_READY, "Report list detected ($rowCount visible) using the extension's reader. Fetch and summarize wiring is the next step.")
-            return
-        }
-        val template = ReportTemplate(
-            origin = tpl.optString("origin"),
-            pathname = tpl.optString("pathname"),
-            modeParamName = tpl.optString("modeParamName", "hmode"),
-            modeParamValue = tpl.optString("modeParamValue", "PRINTREPORT"),
-            argumentParameterName = tpl.optString("argumentParameterName", "fileName")
-        )
-        if (mode !in bulkModes || mappingValidated) {
-            runFrameBridgeMode(mode, report, template)
-            return
-        }
-        if (navigationInProgress) {
-            setState(AppState.HELPER_READY, "Analysis startup is already running.")
-            return
-        }
-        cancelNavigation()
-        cancelActiveProcessing()
-        navigationInProgress = true
-        setState(AppState.FETCHING, "Testing one visible report before bulk analysis…")
-        runFrameBridgeMode("test_direct", report, template)
-        navigationJob = lifecycleScope.launch {
-            try {
-                var checks = 0
-                while (!mappingValidated && checks < 90) {
-                    delay(500)
-                    checks += 1
-                }
-                if (!mappingValidated) {
-                    setState(AppState.ERROR, "One-report validation did not succeed. Keep the result list visible and retry.")
-                    return@launch
-                }
-                setState(AppState.FETCHING, "Mapping validated. Starting analysis…")
-                runFrameBridgeMode(mode, report, template)
-            } finally {
-                navigationInProgress = false
+            "nims_report_frame" -> {
+                val rowCount = json.optJSONArray("rows")?.length() ?: 0
+                log("Frame bridge (diagnostic only): rows=$rowCount from=${json.optString("href")}")
             }
         }
     }
 
-    // MANUAL_RESULTS_ONE_CLICK
-    // The user navigates to the submitted CR result list manually. Any bulk
-    // action now performs discovery -> one-report validation -> requested run.
-    // No NIMS menu or frame navigation is attempted here.
+    // SIMPLIFIED (single path): now that "Open CR Results" always navigates the
+    // CR-wise list to the TOP-LEVEL document (no EasyUI tab, no iframe), there
+    // is no cross-origin boundary left to cross, and the old cross-frame-
+    // bridge path (which raced this one, selected by whichever happened to
+    // have fresher data) has been removed entirely. One reader
+    // (rowsFromBestFrame(document)), one template (discoverMapping), one
+    // validation flag (mappingValidated).
     private fun runMode(mode: String) {
         val bulkModes = setOf("bulk_fast", "bulk_cultures_only", "bulk_full")
-        // Prefer the all-frames bridge: if the frame that owns the rows has
-        // announced them, use that (works even when the result iframe is a
-        // different origin the top frame cannot read).
-        val report = crossFrameReport
-        if (report != null && (report.optJSONArray("rows")?.length() ?: 0) > 0) {
-            runModeViaFrameBridge(mode, report)
-            return
-        }
-        if (mode !in bulkModes || mappingValidated) {
+        // Already discovered and (for bulk modes) already validated with one
+        // report: run directly, no re-discovery, no re-validation.
+        if (mapping != null && (mode !in bulkModes || mappingValidated)) {
             runModeInternal(mode)
             return
         }
@@ -619,11 +633,11 @@ class MainActivity : ComponentActivity() {
             setState(AppState.HELPER_READY, "Analysis startup is already running.")
             return
         }
-
         cancelNavigation()
         cancelActiveProcessing()
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         navigationInProgress = true
         setState(AppState.HELPER_READY, "Checking the visible NIMS report-result list…")
 
@@ -637,6 +651,12 @@ class MainActivity : ComponentActivity() {
                 }
                 if (mapping == null) {
                     setState(AppState.ERROR, "No usable visible report rows were found. Navigate manually to the submitted CR report list and retry.")
+                    return@launch
+                }
+
+                if (mode !in bulkModes) {
+                    setState(AppState.FETCHING, "Running Test One Report…")
+                    runModeInternal(mode)
                     return@launch
                 }
 
@@ -670,46 +690,115 @@ class MainActivity : ComponentActivity() {
             setState(AppState.ERROR, "Run Test One Report successfully before bulk summary.")
             return
         }
-        evaluateJson("JSON.stringify(NimsReportCore.rowsFromBestFrame(document))") { rowsText ->
-            val rows = JSONArray(rowsText)
-            evaluateJson("JSON.stringify(NimsReportCore.selectRowsForMode(${rows}, '$mode'))") { selectedText ->
-                val selectedAll = JSONArray(selectedText)
-                val selected = if (mode == "test_direct" && selectedAll.length() > 1) {
-                    JSONArray().apply { selectedAll.optJSONObject(0)?.let { put(it) } }
-                } else {
-                    selectedAll
-                }
-                log("Selected ${selected.length()} reports")
-                prepareReportRequests(selected, currentMapping) { prepared ->
-                    startFetchParseSummarize(mode, prepared)
-                }
+        // ROOT CAUSE FIX: for test_direct specifically, use the EXACT row
+        // discoverMapping's clickFirstReportForMode already clicked and
+        // captured the token for, instead of re-deriving "a test_direct row"
+        // from the live document. The whole point of capturing it at
+        // click-time is that NIMS's own printReport()/AddRowToTableAddMoreValues()
+        // mutates the DOM as a side effect of that exact click, so a fresh
+        // selectRowsForModeFromDoc('test_direct', document) call afterward is
+        // not guaranteed to even select the SAME row, let alone find its
+        // button. No JS round-trip needed at all for this case.
+        if (mode == "test_direct") {
+            val capturedRow = discoveredTestRow
+            val token = capturedRow?.optString("transientPrintReportArg").orEmpty()
+            if (capturedRow == null || token.isBlank()) {
+                setState(AppState.ERROR, "No View Report button found for row. Tap Discover again with the result list visible.")
+                return
+            }
+            log("Using the exact row captured at Discover time (no re-lookup)")
+            prepareReportRequests(JSONArray().put(capturedRow), currentMapping) { prepared ->
+                startFetchParseSummarize(mode, prepared)
+            }
+            return
+        }
+        // Watchdog (ported from the removed cross-frame-bridge path): a NIMS
+        // popup/modal left open from an earlier template-discovery click can
+        // occupy the WebView's render/script thread for a long time, and a
+        // killed renderer process drops evaluateJavascript's callback
+        // entirely. Without this, the screen can sit on stale "Next action"
+        // text indefinitely with no error. Surface a clear, retryable error
+        // instead of silence.
+        val watchdogToken = Any()
+        activeEvaluateWatchdog = watchdogToken
+        val watchdogMs = 60_000L
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (activeEvaluateWatchdog === watchdogToken) {
+                activeEvaluateWatchdog = null
+                setState(AppState.ERROR, "Timed out waiting for the WebView to respond. A leftover NIMS popup or a slow page can cause this — close any open report popup, keep the result list visible, and retry.")
+            }
+        }, watchdogMs)
+        // selectRowsForModeFromDoc reads rows AND attaches each row's token
+        // in one JS-side pass (see its comment in nimsReportCore.js), so no
+        // row data ever needs to cross back into a second JS call.
+        evaluateJsonArray("JSON.stringify(NimsReportCore.selectRowsForModeFromDoc('$mode', document))") { selected ->
+            if (activeEvaluateWatchdog === watchdogToken) activeEvaluateWatchdog = null
+            if (selected.length() == 0) {
+                setState(AppState.ERROR, "No matching report rows found for this mode. Keep the result list visible and retry.")
+                return@evaluateJsonArray
+            }
+            log("Selected ${selected.length()} reports")
+            prepareReportRequests(selected, currentMapping) { prepared ->
+                startFetchParseSummarize(mode, prepared)
             }
         }
     }
 
+    // ROOT CAUSE FIX (supersedes two prior, individually-incomplete attempts):
+    // this used to make a SECOND JS round-trip per row, re-locating each row
+    // by row_index via transientPayloadForRow/findReportRow. Two real,
+    // independent problems with that, now both fixed at the source instead
+    // of patched here:
+    //   1. Re-locating a row by position in a LATER call is unreliable if
+    //      anything mutated the DOM in between (e.g. Discover's own
+    //      template-discovery click, which inserts a row for NIMS's #setPdf
+    //      iframe) -- findReportRow's only check was "is there still a row
+    //      at this index", which a totally different row can satisfy.
+    //   2. An earlier attempt to fix a JS-injection crash by passing the row
+    //      data into that second call as interpolated JSON text was itself
+    //      unsafe (onclick attributes contain " chars that break JS source).
+    // selectRowsForModeFromDoc (nimsReportCore.js) now reads each row's token
+    // in the SAME DOM pass that selects the row, before anything downstream
+    // can mutate the page, and attaches it directly to the row object. There
+    // is nothing left to re-derive here -- just read it.
     private fun prepareReportRequests(selected: JSONArray, template: ReportTemplate, callback: (List<PreparedReportRequest>) -> Unit) {
         val prepared = mutableListOf<PreparedReportRequest>()
-        fun step(index: Int) {
-            if (index >= selected.length()) {
-                callback(prepared)
-                return
+        var skipped = 0
+        for (i in 0 until selected.length()) {
+            val row = selected.optJSONObject(i) ?: continue
+            val transient = row.optString("transientPrintReportArg")
+            if (transient.isBlank()) {
+                log("Skipping row ${i + 1}: report argument missing")
+                skipped += 1
+                continue
             }
-            val row = selected.optJSONObject(index)
-            if (row == null) {
-                step(index + 1)
-                return
+            // CRASH FIX: was NimsReportTemplate.directReportUrl() which throws
+            // IllegalArgumentException via require() when the token doesn't
+            // satisfy its validator. An uncaught exception on the main thread
+            // is a process crash (confirmed from Vivo crash logs: 14 instances,
+            // "Invalid transient NIMS report token"). Now uses the null-returning
+            // variant so a rejected token skips the row cleanly.
+            val directUrl = NimsReportTemplate.directReportUrlOrNull(template, transient)
+            if (directUrl == null) {
+                // Log only safe, non-identifying metadata — never the token itself.
+                log("Skipping row ${i + 1}: token rejected " +
+                    "(len=${transient.length} hasPdf=${transient.endsWith(".pdf", ignoreCase = true)} " +
+                    "hasSlash=${transient.contains('/') || transient.contains('\\')} " +
+                    "hasControl=${transient.any { it.code < 0x20 }})")
+                skipped += 1
+                continue
             }
-            evaluateCore("JSON.stringify(NimsReportCore.transientPayloadForRow(${row}, document))") { payload ->
-                val transient = payload.optString("transientPrintReportArg")
-                if (transient.isBlank()) {
-                    log("Skipping ${row.optString("report_name", "report")}: Required report argument missing")
-                } else {
-                    prepared.add(PreparedReportRequest(row, transient, NimsReportTemplate.directReportUrl(template, transient)))
-                }
-                step(index + 1)
-            }
+            prepared.add(PreparedReportRequest(row, transient, directUrl))
         }
-        step(0)
+        if (skipped > 0 && prepared.isEmpty()) {
+            setState(AppState.ERROR, "NIMS report rows were detected but their identifiers were not accepted. " +
+                "Tap Discover again or check that the result list is fully loaded.")
+            return
+        }
+        if (skipped > 0) {
+            log("Prepared ${prepared.size} reports; skipped $skipped with unsupported identifiers")
+        }
+        callback(prepared)
     }
 
     private fun startFetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
@@ -889,6 +978,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ROOT CAUSE FIX: runModeInternal used to call evaluateJson directly and
+    // do JSONArray(rowsText) with no guard. evaluateJson's own internals are
+    // defensive (decodeJsString is wrapped in runCatching and falls back to
+    // an EMPTY STRING on any failure) -- but an empty string is not valid
+    // JSON, so JSONArray("") throws org.json.JSONException, uncaught, on the
+    // main thread. An uncaught exception on the main thread is a process
+    // crash on Android, not a catchable in-app error -- which is exactly
+    // what was reported live: the app died and logged out, with no chance to
+    // even tap Copy Log. This happened specifically after Test One because
+    // it is the only path that does two CHAINED evaluateJson calls, each one
+    // a fresh chance for the page (often disturbed by the popup NIMS just
+    // opened/closed during template discovery) to return something that
+    // doesn't parse as JSON. evaluateCore already had this exact guard for
+    // JSONObject; this is the missing JSONArray equivalent, used everywhere
+    // an array is expected so a malformed/empty response degrades to a clear
+    // error message instead of killing the process.
+    private fun evaluateJsonArray(expression: String, callback: (JSONArray) -> Unit) {
+        evaluateJson(expression) { raw -> callback(SafeJsonArrayDecoder.decode(raw)) }
+    }
+
     private fun evaluateJson(expression: String, callback: (String) -> Unit) {
         val core = assets.open("nimsReportCore.js").bufferedReader().use { it.readText() }
         webView.evaluateJavascript("$core\n(function(){ try { return $expression; } catch (error) { return JSON.stringify({ ok: false, stage: 'unknown', action: 'none', done: false, errorCode: 'navigation_js_exception' }); } })();") { value ->
@@ -957,6 +1066,21 @@ class MainActivity : ComponentActivity() {
         copyText("NIMS Fast Summary", cleanSummaryText())
     }
 
+    // The on-screen log panel only shows the last 1200 chars for layout
+    // reasons, which routinely cuts off exactly the part that matters (a JS
+    // exception's message, which often comes at the END of a log line). This
+    // copies the COMPLETE retained log buffer to the clipboard so it can be
+    // pasted in full, instead of relying on a screenshot of a panel that may
+    // be showing a truncated view of a truncated entry.
+    private fun copyFullLog() {
+        val text = safeLogBuffer.fullText()
+        if (text.isBlank()) {
+            log("Nothing to copy yet.")
+            return
+        }
+        copyText("NIMS Fast Summary Mobile log", text)
+    }
+
     private fun copyText(label: String, text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
@@ -981,9 +1105,9 @@ class MainActivity : ComponentActivity() {
         sanitizedSummaryText = ""
         uiSummary = null
         physicianNote = ""
-        crossFrameReport = null
         mapping = null
         mappingValidated = false
+        discoveredTestRow = null
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 
@@ -1008,8 +1132,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         cancelNavigation()
         activeProcessingJob?.cancel()
-        runCatching { documentStartScriptHandler?.remove() }
-        documentStartScriptHandler = null
         runCatching {
             if (::webView.isInitialized) {
                 webView.stopLoading()
@@ -1025,16 +1147,13 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
+        // Leaf endpoint for the CR-wise result page (rendered top-level, no EasyUI tab).
+        private const val CR_SEARCH_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
         // Match a current desktop Chrome so NIMS serves the same desktop assets
         // and code paths the working browser extension relies on.
         private const val DESKTOP_CHROME_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
-        private val PRE_REPORT_STATES = setOf(
-            AppState.NEED_HELPER_SETTINGS,
-            AppState.HELPER_READY,
-            AppState.NIMS_LOGIN
-        )
     }
 }
 
@@ -1074,19 +1193,13 @@ private fun NimsFastSummaryApp(
     onClearHelper: () -> Unit,
     onNimsLogin: () -> Unit,
     onClearNimsSession: () -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onOpenCrReports: () -> Unit,
+    onOpenCrSearchDirect: () -> Unit,
+    onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
-    onDiagnose: () -> Unit,
-    onDiscover: () -> Unit,
-    onTestOne: () -> Unit,
-    onFast: () -> Unit,
-    onCulturesOnly: () -> Unit,
-    onFull: () -> Unit,
+    onFetchReports: () -> Unit,
     onCancelProcessing: () -> Unit,
     summary: UiSummary?,
     physicianNote: String,
@@ -1124,19 +1237,13 @@ private fun NimsFastSummaryApp(
                 state = state,
                 onNimsLogin = onNimsLogin,
                 onClearNimsSession = onClearNimsSession,
-                onBack = onBack,
-                onForward = onForward,
                 onReload = onReload,
                 onZoomIn = onZoomIn,
                 onZoomOut = onZoomOut,
-                onOpenCrReports = onOpenCrReports,
+                onOpenCrSearchDirect = onOpenCrSearchDirect,
+                onCopyFullLog = onCopyFullLog,
                 navigationInProgress = navigationInProgress,
-                onDiagnose = onDiagnose,
-                onDiscover = onDiscover,
-                onTestOne = onTestOne,
-                onFast = onFast,
-                onCulturesOnly = onCulturesOnly,
-                onFull = onFull,
+                onFetchReports = onFetchReports,
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
@@ -1181,7 +1288,7 @@ private fun AppHeader(state: AppState, message: String, currentPage: String, pro
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("NIMS Fast Summary", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("NIMS Results", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(currentPage, color = Color(0xFFD7E8FF), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onSettings) { Text("Settings", color = Color.White) }
@@ -1199,75 +1306,88 @@ private fun NimsWebViewScreen(
     state: AppState,
     onNimsLogin: () -> Unit,
     onClearNimsSession: () -> Unit,
-    onBack: () -> Unit,
-    onForward: () -> Unit,
     onReload: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
-    onOpenCrReports: () -> Unit,
+    onOpenCrSearchDirect: () -> Unit,
+    onCopyFullLog: () -> Unit,
     navigationInProgress: Boolean,
-    onDiagnose: () -> Unit,
-    onDiscover: () -> Unit,
-    onTestOne: () -> Unit,
-    onFast: () -> Unit,
-    onCulturesOnly: () -> Unit,
-    onFull: () -> Unit,
+    onFetchReports: () -> Unit,
     onCancelProcessing: () -> Unit,
     logText: String
 ) {
-    var showAdvanced by remember { mutableStateOf(false) }
+    var logExpanded by remember { mutableStateOf(false) }
     Column(modifier) {
-        StatusCard(state)
+        // Single action row — only the controls that are genuinely useful
         LazyRow(
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item { OutlinedButton(onClick = onBack) { Text("Back") } }
-            item { OutlinedButton(onClick = onForward) { Text("Forward") } }
             item { OutlinedButton(onClick = onReload) { Text("Reload") } }
-            item { OutlinedButton(onClick = onNimsLogin) { Text("NIMS Login") } }
+            item { OutlinedButton(onClick = onZoomOut) { Text("Zoom −") } }
+            item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
+            item { OutlinedButton(onClick = onNimsLogin) { Text("Login") } }
+            item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear Session") } }
             item {
                 Button(
-                    onClick = onOpenCrReports,
-                    enabled = !navigationInProgress && state != AppState.FETCHING
-                ) { Text("Analyze Results") }
+                    onClick = onOpenCrSearchDirect,
+                    enabled = !navigationInProgress
+                ) { Text("Open CR Results") }
             }
             item {
-                OutlinedButton(onClick = { showAdvanced = !showAdvanced }) {
-                    Text(if (showAdvanced) "Hide tools" else "Advanced tools")
-                }
+                Button(
+                    onClick = onFetchReports,
+                    enabled = !navigationInProgress
+                ) { Text(if (navigationInProgress) "Fetching…" else "Fetch Reports") }
             }
             if (state == AppState.FETCHING) {
                 item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
             }
-        }
-        if (showAdvanced) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item { OutlinedButton(onClick = onClearNimsSession) { Text("Clear session") } }
-                item { OutlinedButton(onClick = onZoomOut) { Text("Zoom -") } }
-                item { OutlinedButton(onClick = onZoomIn) { Text("Zoom +") } }
-                item { OutlinedButton(onClick = onDiagnose) { Text("Diagnose") } }
-                item { OutlinedButton(onClick = onDiscover) { Text("Discover") } }
-                item { OutlinedButton(onClick = onTestOne) { Text("Test one") } }
-                item { OutlinedButton(onClick = onFast) { Text("Fast") } }
-                item { OutlinedButton(onClick = onCulturesOnly) { Text("Cultures") } }
-                item { OutlinedButton(onClick = onFull) { Text("Full") } }
-            }
+            item { OutlinedButton(onClick = onCopyFullLog) { Text("Copy Log") } }
         }
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
-        if (showAdvanced && logText.isNotBlank()) {
-            Text(
-                logText.takeLast(1200),
+        // Collapsible log — tap header to expand/collapse
+        if (logText.isNotBlank()) {
+            Column(
                 Modifier
                     .fillMaxWidth()
-                    .height(96.dp)
-                    .background(Color(0xFFF7F9FC))
-                    .padding(8.dp),
-                style = MaterialTheme.typography.bodySmall
-            )
+                    .background(Color(0xFFF0F4F8))
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { logExpanded = !logExpanded }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (logExpanded) "▾ Log" else "▸ Log",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // Show last status line as inline preview when collapsed
+                    if (!logExpanded) {
+                        Text(
+                            logText.trimEnd().substringAfterLast('\n').take(60),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF555555),
+                            maxLines = 1
+                        )
+                    }
+                }
+                if (logExpanded) {
+                    Text(
+                        logText.takeLast(4000),
+                        Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
         }
     }
 }
@@ -1276,7 +1396,7 @@ private fun NimsWebViewScreen(
 private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Source reports", "${reports.size} reports") }
-        if (reports.isEmpty()) item { EmptyCard("No reports parsed yet.") }
+        if (reports.isEmpty()) item { EmptyCard("Tap Fetch Reports on the NIMS tab to load reports.") }
         items(reports) { report ->
             ResultCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1288,7 +1408,11 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
                     Spacer(Modifier.width(6.dp))
                     Badge(report.status, if (report.hasError) Color(0xFFFFE2E0) else Color(0xFFE6F4EA))
                 }
-                if (report.notes.isNotBlank()) Text(report.notes, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (report.notes.isNotBlank()) Text(
+                    report.notes,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -1296,24 +1420,149 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
 
 @Composable
 private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
-    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Lab trends", "${rows.size} parameters") }
-        if (rows.isEmpty()) item { EmptyCard("Run Fast Summary to view lab trends.") }
-        items(rows) { row ->
-            ResultCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(row.parameter, fontWeight = FontWeight.Bold)
-                        Text(row.latestDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+    // Date range filter state
+    var filterFrom by remember { mutableStateOf("") }
+    var filterTo by remember { mutableStateOf("") }
+    val filtered = remember(rows, filterFrom, filterTo) {
+        if (filterFrom.isBlank() && filterTo.isBlank()) rows
+        else rows.filter { row ->
+            val epoch = DateNormalizer.normalize(row.latestDate).sortEpoch ?: return@filter true
+            val fromEpoch = if (filterFrom.isBlank()) null else DateNormalizer.normalize(filterFrom).sortEpoch
+            val toEpoch = if (filterTo.isBlank()) null else DateNormalizer.normalize(filterTo).sortEpoch
+            (fromEpoch == null || epoch >= fromEpoch) && (toEpoch == null || epoch <= toEpoch)
+        }
+    }
+
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { SectionTitle("Lab Trends", "${filtered.size} parameters") }
+
+        // Date range filter row
+        item {
+            Card(
+                Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F4F8))
+            ) {
+                Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Filter by date range", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = filterFrom, onValueChange = { filterFrom = it },
+                            label = { Text("From (e.g. 01-Jan-2024)") },
+                            modifier = Modifier.weight(1f), singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = filterTo, onValueChange = { filterTo = it },
+                            label = { Text("To (e.g. 31-Dec-2024)") },
+                            modifier = Modifier.weight(1f), singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
                     }
-                    Text(row.latestValue.ifBlank { "-" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    if (filterFrom.isNotBlank() || filterTo.isNotBlank()) {
+                        TextButton(onClick = { filterFrom = ""; filterTo = "" }, Modifier.align(Alignment.End)) { Text("Clear filter") }
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Badge(row.trendText)
-                    Badge(row.abnormality.name, abnormalityColor(row.abnormality))
-                    if (!row.previousValue.isNullOrBlank()) Badge("Prev ${row.previousValue}")
+            }
+        }
+
+        if (filtered.isEmpty()) {
+            item {
+                EmptyCard(
+                    if (rows.isEmpty()) "Tap Fetch Reports to generate lab trends."
+                    else "No trends match the selected date range."
+                )
+            }
+        } else {
+            // Group by category
+            val groups = filtered.groupBy { row ->
+                when {
+                    row.parameter.uppercase().let { p ->
+                        p.startsWith("HEM") || p.startsWith("HAEM") || p.startsWith("WBC") || p.startsWith("TLC") ||
+                        p.contains("PLATELET") || p.contains("MCV") || p.contains("MCH") || p.contains("MCHC") ||
+                        p.contains("NEUTRO") || p.contains("LYMPH") || p.contains("MONOCYTE") ||
+                        p.contains("EOSINOPHIL") || p.contains("RBC") || p.contains("HCT") || p.contains("PCV") ||
+                        p.contains("RDW") || p.contains("ESR") || p.contains("POLY") || p.contains("HB")
+                    } -> "🩸 CBC / Haematology"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("CREATININE") || p.contains("UREA") || p.contains("EGFR") ||
+                        p.contains("SODIUM") || p.contains("POTASSIUM") || p.contains("CHLORIDE") || p.contains("BICARBONATE")
+                    } -> "🫘 Renal / Electrolytes"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("BILIRUBIN") || p.contains("ALT") || p.contains("AST") || p.contains("SGOT") ||
+                        p.contains("SGPT") || p.contains("ALP") || p.contains("GGT") || p.contains("ALBUMIN") ||
+                        p.contains("TOTAL PROTEIN") || p.contains("LDH")
+                    } -> "🫀 Liver / LFT"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("CRP") || p.contains("PROCALCITONIN") || p.contains("PCT") || p.contains("FERRITIN")
+                    } -> "🔥 Inflammatory Markers"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("PT") || p.contains("INR") || p.contains("APTT") || p.contains("THROMBOPLASTIN")
+                    } -> "🩹 Coagulation"
+                    row.parameter.uppercase().let { p ->
+                        p.contains("GLUCOSE") || p.contains("HBA1C")
+                    } -> "💉 Glucose / Diabetes"
+                    else -> "📋 Other"
                 }
-                Text(row.history.take(5).joinToString(" | ") { "${it.first}: ${it.second}" }, style = MaterialTheme.typography.bodySmall)
+            }
+
+            groups.entries.sortedBy { it.key }.forEach { (group, groupRows) ->
+                item {
+                    Text(group, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+                }
+                items(groupRows) { row ->
+                    val abnColor = abnormalityColor(row.abnormality)
+                    ResultCard {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Column(Modifier.weight(1f)) {
+                                Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                // History timeline
+                                if (row.history.size > 1) {
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(
+                                        row.history.take(8).joinToString("  ·  ") { (d, v) ->
+                                            "${d.replace("-", "/")}: $v"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF555555)
+                                    )
+                                }
+                                // Trend direction
+                                if (row.trendText.isNotBlank() && row.trendText != "auto-parsed" && row.trendText != "insufficient data") {
+                                    Spacer(Modifier.height(3.dp))
+                                    Badge(
+                                        "↕ ${row.trendText}",
+                                        when {
+                                            row.trendText.contains("ris", true) || row.trendText.contains("increas", true) -> Color(0xFFFFE2E0)
+                                            row.trendText.contains("fall", true) || row.trendText.contains("decreas", true) -> Color(0xFFE6F4EA)
+                                            else -> Color(0xFFEEEEEE)
+                                        }
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                // Latest value prominently with abnormality colour
+                                Text(
+                                    row.latestValue.ifBlank { "—" },
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (row.abnormality == Abnormality.NORMAL || row.abnormality == Abnormality.UNKNOWN) Color(0xFF222222) else abnColor
+                                )
+                                Text(row.latestDate.ifBlank { "" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                                if (row.abnormality != Abnormality.NORMAL && row.abnormality != Abnormality.UNKNOWN) {
+                                    Badge(
+                                        when (row.abnormality) { Abnormality.HIGH -> "HIGH"; Abnormality.LOW -> "LOW"; Abnormality.CRITICAL -> "CRITICAL"; else -> "" },
+                                        abnColor
+                                    )
+                                }
+                                // Previous for comparison
+                                if (!row.previousValue.isNullOrBlank()) {
+                                    Text("prev: ${row.previousValue}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1322,20 +1571,67 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
 @Composable
 private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Cultures", "${rows.size} rows") }
+        item { SectionTitle("Cultures", "${rows.size} results") }
         if (rows.isEmpty()) item { EmptyCard("No culture data parsed yet.") }
         items(rows) { row ->
+            val isPositive = row.status.contains("growth_detected", true)
+            val growthColor = when {
+                row.status.contains("no_growth", true) -> Color(0xFFE6F4EA)
+                isPositive -> Color(0xFFFFE8CC)
+                else -> Color(0xFFEEEEEE)
+            }
+            val displayOrganism = when {
+                row.organism.isNotBlank() &&
+                !row.organism.equals("growth_detected", true) &&
+                !row.organism.equals("no_growth", true) -> row.organism
+                isPositive -> "Growth detected"
+                row.status.equals("no_growth", true) -> "No growth"
+                else -> row.status.replace("_", " ").replaceFirstChar { it.uppercase() }.ifBlank { "Culture" }
+            }
+            val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { null }
+
+            // All details shown inline — no tap-to-expand per user request
             ResultCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f)) {
-                        Text(row.organism.ifBlank { row.status.ifBlank { "Culture" } }, fontWeight = FontWeight.Bold)
-                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
+                        Text(displayOrganism, fontWeight = FontWeight.Bold)
+                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF555555))
+                        if (specimenDisplay != null) {
+                            Text("Specimen: $specimenDisplay", style = MaterialTheme.typography.bodySmall)
+                        }
                     }
-                    Badge(row.status, if (row.status.contains("positive", true)) Color(0xFFFFE8CC) else Color(0xFFE6F4EA))
+                    Badge(row.status.replace("_", " "), growthColor)
                 }
-                Text(row.site.ifBlank { row.specimen }.ifBlank { "Site/specimen not parsed" })
-                if (row.sensitivitySummary.isNotBlank()) Text(row.sensitivitySummary, style = MaterialTheme.typography.bodySmall)
-                if (row.comment.isNotBlank()) Text(row.comment, style = MaterialTheme.typography.bodySmall)
+                if (row.sourceReportName.isNotBlank() && !row.sourceReportName.equals(displayOrganism, true)) {
+                    Text("Source: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                }
+                if (row.sensitivitySummary.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Sensitivity / Antibiogram:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    // Parse and display each antibiotic result on its own line
+                    row.sensitivitySummary.split(";").map { it.trim() }.filter { it.isNotBlank() }.forEach { entry ->
+                        val color = when {
+                            entry.contains("Susceptible", true) || entry.contains("Sensitive", true) -> Color(0xFF1B5E20)
+                            entry.contains("Resistant", true) -> Color(0xFFB71C1C)
+                            entry.contains("Intermediate", true) -> Color(0xFFE65100)
+                            else -> Color(0xFF333333)
+                        }
+                        Text("  $entry", style = MaterialTheme.typography.bodySmall, color = color)
+                    }
+                } else if (isPositive) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Sensitivity data not available (image-based PDF or not yet reported).",
+                        style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888)
+                    )
+                }
+                if (row.comment.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
+                }
+                if (row.cultureNo.isNotBlank()) {
+                    Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
+                }
             }
         }
     }
@@ -1358,7 +1654,10 @@ private fun SummaryScreen(
             ResultCard {
                 Text("Snapshot", fontWeight = FontWeight.Bold)
                 Text("Reports: ${summary?.sourceReports?.size ?: 0}")
-                Text("Failed: ${summary?.failedReportCount ?: 0}")
+                val parsed = summary?.parsedReportCount ?: 0
+                val failed = summary?.failedReportCount ?: 0
+                if (failed > 0) Text("Unsupported/failed: $failed (image PDFs or unrecognised format)", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Text("Parsed successfully: $parsed")
                 Text("Cultures: ${summary?.cultures?.size ?: 0}")
             }
         }
@@ -1458,10 +1757,10 @@ private fun StatusCard(state: AppState) {
         Text(
             when (state) {
                 AppState.NEED_HELPER_SETTINGS -> "Configure Railway helper URL and API key for Railway-only mode."
-                AppState.HELPER_READY -> "Login, then navigate in NIMS to Investigation → CR No Wise Result Report Printing New."
-                AppState.NIMS_LOGIN -> "Use the normal NIMS menu to open the CR-wise report page."
-                AppState.REPORT_PAGE_READY -> "Enter and submit the CR number in NIMS. When View Report rows appear, tap Analyze Results."
-                AppState.MAPPING_DISCOVERED -> "Report request validated. Analysis can continue."
+                AppState.HELPER_READY -> "Login to NIMS manually."
+                AppState.NIMS_LOGIN -> "Open the report page after login."
+                AppState.REPORT_PAGE_READY -> "Report list detected. Tap Test One, Fast, Cultures, or Full."
+                AppState.MAPPING_DISCOVERED -> "Mapping ready. Run Test One Report."
                 AppState.FETCHING -> "Fetching and parsing reports..."
                 AppState.SUMMARY_READY -> "Summary ready."
                 AppState.ERROR -> "Review error and retry the relevant step."
@@ -1479,9 +1778,9 @@ private fun SectionTitle(title: String, subtitle: String) {
 }
 
 @Composable
-private fun ResultCard(content: @Composable () -> Unit) {
+private fun ResultCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(modifier),
         shape = RoundedCornerShape(10.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
