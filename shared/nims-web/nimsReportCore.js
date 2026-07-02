@@ -730,6 +730,7 @@
         date_sent: guessDate(cells, rowText),
         report_name: guessReportName(cells, rowText),
         department: guessDepartment(cells),
+        lab_study_number: cells[2] && cells[2].length > 2 && !/view\s*report/i.test(cells[2]) ? cells[2].slice(0, 60) : "",
         report_tags: tags,
         report_type: tags[0] || "other",
         onclick_function_name: parsed.functionName,
@@ -1013,16 +1014,39 @@
     return null;
   }
 
+  // NIMS CR-wise result table column order (confirmed from live inspection):
+  // [0] LabName/Department  [1] TestName/Investigation  [2] Sample No/Lab No
+  // [3] Collection Date     [4] Report NO.               [5] Report (View Report)
+  // Previous implementation used a keyword search across ALL cells which could
+  // return the Sample No or "1 View Repo" text. Now we use column position
+  // with a fallback chain that excludes obvious non-name cells.
   function guessReportName(cells, text) {
-    return cells.find((cell) => /cbc|blood|renal|rft|liver|lft|culture|electrolyte|crp|procalcitonin/i.test(cell)) || text.slice(0, 80);
+    // Column 1 is TestName in the NIMS result table.
+    const col1 = cells[1] && cells[1].length > 2 && !/^[\d\s/-]+$/.test(cells[1]) && !/view\s*report/i.test(cells[1]) ? cells[1] : null;
+    if (col1) return col1.slice(0, 120);
+    // Fallback: first cell that looks like an investigation name (not a date, not a number, not "View Report").
+    const candidate = cells.find((cell) =>
+      cell.length > 3 &&
+      !/view\s*report/i.test(cell) &&
+      !/^\d+$/.test(cell) &&
+      !/^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(cell) &&
+      !/^[A-Z0-9]{6,}\/[A-Z0-9]{6,}$/.test(cell)
+    );
+    return candidate ? candidate.slice(0, 120) : text.replace(/view\s*report.*/i, "").trim().slice(0, 80);
   }
 
   function guessDate(cells, text) {
-    return cells.find((cell) => /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cell)) || (text.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0];
+    // Column 3 is Collection Date in the NIMS result table.
+    const col3 = cells[3] && /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cells[3]) ? (cells[3].match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0] : null;
+    if (col3) return col3;
+    return cells.find((cell) => /\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/.test(cell))?.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/)?.[0] || (text.match(/\b\d{1,2}-[A-Za-z]{3}-\d{2,4}\b/) || [""])[0];
   }
 
   function guessDepartment(cells) {
-    return cells.find((cell) => /pathology|microbiology|biochemistry|hematology|radiology/i.test(cell)) || "";
+    // Column 0 is LabName/Department in the NIMS result table.
+    const col0 = cells[0] && cells[0].length > 2 && !/view\s*report/i.test(cells[0]) && !/^\d+$/.test(cells[0]) ? cells[0] : null;
+    if (col0) return col0.slice(0, 60);
+    return cells.find((cell) => /pathology|microbiology|biochemistry|hematology|haematology|radiology|serology|clinical|bacteriology|coagulation|urine|fluid|special/i.test(cell)) || "";
   }
 
   function resolveUrl(value, baseUrl) {
