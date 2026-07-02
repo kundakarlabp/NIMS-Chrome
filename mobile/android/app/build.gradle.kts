@@ -37,6 +37,8 @@ val syncNimsRuntimeAssets = tasks.register<org.gradle.api.tasks.Sync>("syncNimsR
     into(generatedNimsAssetsDir)
 }
 
+apply(from = "runtime-normalize.txt")
+
 android.sourceSets.getByName("main").assets.setSrcDirs(listOf(generatedNimsAssetsDir.get().asFile))
 
 tasks.register("verifyNimsRuntimeAssets") {
