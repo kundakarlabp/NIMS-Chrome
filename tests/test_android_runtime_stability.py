@@ -39,10 +39,10 @@ def test_android_bulk_workers_do_not_evaluate_webview_javascript() -> None:
     fetch_body = source.split("private suspend fun fetchAndParseOne", 1)[1].split(
         "private fun fetchWithWebViewCookies", 1
     )[0]
-    assert "evaluateCore" not in fetch_body
-    assert "evaluateJson" not in fetch_body
-    assert "transientArgFor" not in source
-    assert "PreparedReportRequest" in source
+    assert "evaluateJavascript" not in fetch_body
+    assert "extractor.extract" not in fetch_body
+    assert "OnDemandReportRequest" in source
+    assert "catch (cancelled: CancellationException)" in source
 
 
 def test_android_request_preparation_does_not_throw_on_rejected_tokens() -> None:
@@ -84,3 +84,4 @@ def test_android_app_does_not_store_nims_credentials_or_automate_login() -> None
     assert "nims_user" not in combined
     assert "captcha_value" not in combined
     assert "autologin" not in combined
+    assert "captcha_value" not in combined

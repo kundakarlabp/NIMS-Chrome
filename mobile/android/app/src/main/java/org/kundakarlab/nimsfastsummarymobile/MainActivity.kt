@@ -19,8 +19,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebStorage
 import android.webkit.WebViewClient
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
+import androidx.webkit.ScriptHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -97,7 +96,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.lifecycle.lifecycleScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -114,7 +112,6 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
-import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -134,6 +131,9 @@ class MainActivity : ComponentActivity() {
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
+    private var documentStartScriptHandler: ScriptHandler? = null
+    private var webRuntimeSupported = false
+    private var webRuntimeError = ""
 
     private var appStateValue by mutableStateOf(AppState.HELPER_READY)
     private var statusMessage by mutableStateOf("Open NIMS and login manually.")
@@ -150,7 +150,6 @@ class MainActivity : ComponentActivity() {
     private var processingMode by mutableStateOf(ProcessingMode.LOCAL_ONLY)
     private var activeProcessingJob: Job? = null
     private var navigationJob: Job? = null
-    private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
@@ -176,7 +175,6 @@ class MainActivity : ComponentActivity() {
         loadPersistedSummary()
         CookieManager.getInstance().setAcceptCookie(true)
         webView = createWebView()
-        clearWebViewSession(coldStartOnly = true) { webView.loadUrl(NIMS_LOGIN_URL) }
         webViewUserAgent = webView.settings.userAgentString
         // Logged unmistakably, first thing, every launch: which exact build is
         // actually running. Several rounds of "still crashes after the fix"
@@ -208,7 +206,10 @@ class MainActivity : ComponentActivity() {
                     onClearHelper = { clearHelperSettings() },
                     processingMode = processingMode,
                     onProcessingModeChange = { updateProcessingMode(it) },
-                    onNimsLogin = { webView.loadUrl(NIMS_LOGIN_URL) },
+                    onNimsLogin = {
+                        if (webRuntimeSupported) webView.loadUrl(NIMS_LOGIN_URL)
+                        else setState(AppState.ERROR, webRuntimeError.ifBlank { "Update Chrome and Android System WebView." })
+                    },
                     onClearNimsSession = { clearNimsSession() },
                     onReload = { webView.reload() },
                     onZoomIn = { webView.zoomIn() },
@@ -237,13 +238,7 @@ class MainActivity : ComponentActivity() {
         // Let a desktop Chrome (chrome://inspect over USB) attach to this WebView,
         // and let the WebView report its own console/network errors (wired below).
         runCatching { WebView.setWebContentsDebuggingEnabled(true) }
-        val coreJs = runCatching { assets.open("nimsReportCore.js").bufferedReader().use { it.readText() } }.getOrNull()
-        val utilsJs = runCatching { assets.open("contentUtils.js").bufferedReader().use { it.readText() } }.getOrNull()
-        val bridgeJs = runCatching { assets.open("nimsAndroidFrameBridge.js").bufferedReader().use { it.readText() } }.getOrNull()
-        // Runtime compatibility shim: neutralizes NIMS's confirmed crashes
-        // (missing date_time global, and the $("#menuStrip").offset().left throw
-        // in tabmenu.js) so the menu/content render isn't aborted in the WebView.
-        val shimJs = runCatching { assets.open("nimsWebviewShim.js").bufferedReader().use { it.readText() } }.getOrNull()
+        // NimsWebViewRuntime loads and registers the bundled runtime assets below.
         return WebView(this).apply {
             settings.javaScriptEnabled = true
             // Identify as the desktop Chrome the extension actually works in.
@@ -497,7 +492,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cancelNavigation() {
-        navigationGeneration += 1
         navigationJob?.cancel()
         navigationJob = null
         navigationInProgress = false
@@ -508,10 +502,10 @@ class MainActivity : ComponentActivity() {
             val rows = DiagnosePageContract.viewReportRows(json)
             val blocked = DiagnosePageContract.blockedFrames(json)
             val reachable = DiagnosePageContract.reachableDocuments(json)
-            if (rows > 0 && appStateValue.ordinal < AppState.REPORT_PAGE_READY.ordinal) {
+            if (rows > 0 && appStateValue in PRE_REPORT_STATES) {
                 setState(AppState.REPORT_PAGE_READY, "Report list detected. Discover mapping.")
             } else if (rows == 0 && blocked > 0) {
-                setState(AppState.ERROR, "Report rows are inside a different-origin frame this app cannot read from the top frame ($blocked blocked, $reachable reachable). This needs the all-frames build, not a navigation retry.")
+                setState(AppState.ERROR, "Advanced top-frame diagnostics cannot inspect the owning report frame ($blocked blocked, $reachable reachable). Keep the result list visible and use Analyze Results.")
             }
             log("Page diagnostics rows=$rows reachable=$reachable blockedFrames=$blocked mappingReady=${rows > 0}")
         }
@@ -1132,6 +1126,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         cancelNavigation()
         activeProcessingJob?.cancel()
+        runCatching { documentStartScriptHandler?.remove() }
+        documentStartScriptHandler = null
         runCatching {
             if (::webView.isInitialized) {
                 webView.stopLoading()
@@ -1154,6 +1150,11 @@ class MainActivity : ComponentActivity() {
         private const val DESKTOP_CHROME_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_FETCHED_REPORT_BYTES = 25 * 1024 * 1024
+        private val PRE_REPORT_STATES = setOf(
+            AppState.NEED_HELPER_SETTINGS,
+            AppState.HELPER_READY,
+            AppState.NIMS_LOGIN
+        )
     }
 }
 

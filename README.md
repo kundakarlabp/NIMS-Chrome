@@ -98,20 +98,21 @@ The extension still performs direct NIMS report fetching in the browser session.
 
 ### Android WebView Mobile Mode
 
-The Android app lives under `mobile/android/`. It is a single-activity Kotlin WebView app that loads NIMS, requires manual login, injects controlled shared JavaScript from `shared/nims-web/nimsReportCore.js`, fetches reports with the active WebView cookie session, and processes supported reports locally on the device.
+Android version 0.10.0 uses a browser-first WebView. NIMS loads normally during login and navigation with no document-start JavaScript, no persistent JavaScript bridge, no polling observer, and no injected jQuery or compatibility layer.
 
-Default workflow:
+Normal workflow:
 
-1. Install the debug-signed APK on the phone.
-2. Open NIMS in the in-app WebView.
-3. Login manually.
-4. Tap `Open CR Reports`.
-5. Wait for `CR-wise report page ready. Enter the CR number.`
-6. Enter the CR number manually in NIMS.
-7. Submit the NIMS search form manually and wait for the report list.
-8. Run `Diagnose Page` → `Discover Mapping` → `Test One` → `Fast`, `Cultures`, or `Full`.
+1. Install the debug-signed APK.
+2. Log in to NIMS manually.
+3. Navigate in NIMS to **Investigation → CR No Wise Result Report Printing New**.
+4. Enter and submit the CR number manually.
+5. Keep the result table with visible **View Report** rows on screen.
+6. Tap **Analyze**.
+7. Review the native Reports, Trends, Cultures, and Summary tabs and verify values against source reports.
 
-Android defaults to **On-device only**. No Railway URL or API key is required. Text/HTML reports and text-based PDFs are processed locally; image-only PDFs are unsupported because OCR is not included. Raw reports, raw HTML, raw PDF bytes, cookies, full report URLs, query strings, hidden form values, and transient report filenames are not persisted or uploaded. Summary JSON and physician notes are encrypted locally with Android Keystore AES/GCM. Railway modes remain optional legacy/advanced functionality only.
+Only after Analyze is tapped does the app run one read-only extraction script against the currently rendered approved NIMS page. It validates safe report references, fetches supported reports using the authenticated WebView session, processes text/HTML and text-based PDFs on-device, and presents native results. Image-only PDFs remain unsupported because OCR is not enabled.
+
+The Android app does not automate login, captcha or OTP, menu navigation, CR entry, form submission, or report opening. Raw report bytes, cookies, full URLs, query values, and transient report filenames are not persisted.
 
 Android build steps:
 
@@ -221,5 +222,3 @@ If direct mapping fails, use `Copy Direct Fetch Diagnostics`. The copied text in
 ## Security
 
 See `SECURITY.md`. Do not commit real PDFs, screenshots, patient identifiers, credentials, API keys, logs, or cache files.
-
-

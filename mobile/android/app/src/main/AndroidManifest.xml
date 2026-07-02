@@ -8,7 +8,7 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
         <activity
-            android:name=".MainActivity"
+            android:name=".ChromeModeActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

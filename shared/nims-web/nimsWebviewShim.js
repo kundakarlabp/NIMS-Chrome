@@ -155,9 +155,13 @@
         try {
           return fn.call(receiver, frame);
         } catch (error) {
-          if (!isContentDocumentRace(error) || attempts >= 3) return undefined;
-          w.setTimeout(invoke, attempts * 100);
-          return undefined;
+          if (isContentDocumentRace(error) && attempts < 3) {
+            w.setTimeout(invoke, attempts * 100);
+            return undefined;
+          }
+          postRuntime("nims_runtime_error", "ajaxCompleteTab: " + String(error && error.message || error));
+          if (w.console && w.console.error) w.console.error("NIMS ajaxCompleteTab compatibility failure", error);
+          throw error;
         }
       }
       return invoke();
@@ -173,7 +177,10 @@
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
         w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
       }
-    } catch (e) { /* page may be replacing globals while loading */ }
+    } catch (error) {
+      postRuntime("nims_runtime_error", "ajaxCompleteTab patch: " + String(error && error.message || error));
+    }
+    reportReady(phase || "check");
   }
 
   [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
