@@ -59,7 +59,7 @@ function run(extra = {}) {
   return win;
 }
 
-function jqueryWithOffset(result) {
+test('installs date_time and safe offset without changing navigation', () => {
   const jq = () => {};
   jq.fn = { offset: () => result };
   return jq;
@@ -73,9 +73,9 @@ test('installs only the confirmed date_time and offset compatibility guards', ()
   win.flush();
   assert.equal(typeof win.date_time, 'function');
   assert.equal(win.date_time(), '');
-  const offset = win.jQuery.fn.offset();
-  assert.equal(offset.left, 0);
-  assert.equal(offset.top, 0);
+  const off = win.jQuery.fn.offset();
+  assert.equal(off.top, 0);
+  assert.equal(off.left, 0);
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
 });
 

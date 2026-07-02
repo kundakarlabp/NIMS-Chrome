@@ -33,7 +33,9 @@ class LocalSummaryBuilderTest {
 
     @Test fun allUnknownDatesUseNeutralRecordedWording() {
         val text = LocalSummaryBuilder().build(listOf(report("unknown", 10.2, GrowthStatus.NO_GROWTH)), SummaryMode.FULL).text
-        assertTrue(text.contains("Recorded Creatinine value: 10.2 mg/dL; report date unavailable."))
+        assertTrue("Expected 'Recorded Creatinine' in: $text", text.contains("Recorded Creatinine"))
+        assertTrue("Expected '10.2' in: $text", text.contains("10.2"))
+        assertTrue("Expected 'report date unavailable' in: $text", text.contains("report date unavailable"))
         assertFalse(text.contains("Latest Creatinine"))
     }
 

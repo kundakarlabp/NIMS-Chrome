@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.10.0"
+        versionCode = 35
+        versionName = "0.9.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -32,11 +32,36 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     kotlinOptions.jvmTarget = "17"
 }
 
+val generatedNimsAssetsDir = layout.buildDirectory.dir("generated/nimsRuntimeAssets")
+
+val syncNimsRuntimeAssets = tasks.register<org.gradle.api.tasks.Sync>("syncNimsRuntimeAssets") {
+    from(rootProject.file("../../shared/nims-web")) {
+        include(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        )
+    }
+    into(generatedNimsAssetsDir)
+}
+
+android.sourceSets.getByName("main").assets.srcDir(generatedNimsAssetsDir)
+
 tasks.register("verifyNimsRuntimeAssets") {
+    dependsOn(syncNimsRuntimeAssets)
     doLast {
-        check(project.file("src/main/assets/nimsOnDemandExtractor.js").isFile) {
-            "Missing on-demand NIMS extractor asset"
+        val generated = generatedNimsAssetsDir.get().asFile
+        val required = listOf(
+            "nimsReportCore.js",
+            "contentUtils.js",
+            "nimsAndroidFrameBridge.js",
+            "nimsWebviewShim.js"
+        )
+        required.forEach { name ->
+            check(generated.resolve(name).isFile) { "Missing generated NIMS runtime asset: $name" }
         }
+        check(!generated.resolve("test").exists()) { "Shared JavaScript tests must not be packaged in the APK" }
     }
 }
 

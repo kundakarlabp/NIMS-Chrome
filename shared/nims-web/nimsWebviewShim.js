@@ -1,12 +1,12 @@
 // Android-only compatibility adapter for the live NIMS WebView runtime.
 //
-// Repairs only the three failures confirmed on-device:
+// The NIMS pages currently expose three WebView-only failures seen on-device:
 // 1. date_time is referenced before its defining asset is available;
-// 2. tabmenu.js reads .offset().left when the selected element is absent;
+// 2. tabmenu.js reads .offset().left even when the selected element is absent;
 // 3. dynamically-created iframes call ajaxCompleteTab() without the iframe arg.
 //
-// This adapter never clicks menus, submits forms, reads credentials, or changes
-// the report extraction workflow.
+// This adapter fixes only those runtime contracts. It does not click menus,
+// submit forms, read credentials, or alter the report-extraction workflow.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
@@ -18,58 +18,38 @@
     return;
   }
 
-  var lastRuntimeKey = "";
-
-  function safePath() {
-    try { return String(w.location.pathname || "").slice(0, 180); }
-    catch (e) { return ""; }
+  if (typeof w.date_time !== "function") {
+    w.date_time = function () { return ""; };
   }
 
-  function postRuntime(type, detail) {
-    var bridge = w.nimsAndroidBridge;
-    if (!bridge || typeof bridge.postMessage !== "function") return;
-    try {
-      bridge.postMessage(JSON.stringify({
-        type: type,
-        path: safePath(),
-        detail: String(detail || "").slice(0, 160),
-        jqueryPresent: typeof w.jQuery === "function",
-        jqueryVersion: w.jQuery && w.jQuery.fn ? String(w.jQuery.fn.jquery || "") : "",
-        jqueryFallbackUsed: Boolean(w.__nimsBundledJqueryVersion),
-        dateTimeReady: typeof w.date_time === "function",
-        offsetPatched: Boolean(w.jQuery && w.jQuery.fn && w.jQuery.fn.offset && w.jQuery.fn.offset.__nimsSafeOffset),
-        ajaxCompleteTabPatched: Boolean(w.ajaxCompleteTab && w.ajaxCompleteTab.__nimsFrameArgumentAdapter)
-      }));
-    } catch (e) { /* telemetry is best effort and contains no page values */ }
-  }
-
-  function reportReady(phase) {
-    var key = [
-      safePath(),
-      phase,
-      typeof w.jQuery === "function",
-      w.jQuery && w.jQuery.fn ? String(w.jQuery.fn.jquery || "") : "",
-      typeof w.date_time === "function",
-      Boolean(w.jQuery && w.jQuery.fn && w.jQuery.fn.offset && w.jQuery.fn.offset.__nimsSafeOffset),
-      Boolean(w.ajaxCompleteTab && w.ajaxCompleteTab.__nimsFrameArgumentAdapter)
-    ].join("|");
-    if (key === lastRuntimeKey) return;
-    lastRuntimeKey = key;
-    postRuntime("nims_runtime_ready", phase);
-  }
-
-  function ensureDateTime() {
-    if (typeof w.date_time !== "function") {
-      w.date_time = function () { return ""; };
-      w.date_time.__nimsCompatibilityFallback = true;
-    }
+  // NEW (not previously present anywhere): mark that injection actually ran
+  // in THIS window, and capture the full uncaught-error message+stack before
+  // Android's onConsoleMessage truncates it to ~220 chars. Self-contained
+  // (does not depend on NimsReportCore having loaded) so it works even if the
+  // core/utils/bridge payload failed to concatenate or parse.
+  w.__nimsInjectedAt = Date.now();
+  if (!w.__nimsErrorCaptureInstalled) {
+    w.__nimsErrorCaptureInstalled = true;
+    var previousOnError = w.onerror;
+    w.onerror = function (message, source, lineno, colno, error) {
+      w.__nimsLastError = {
+        message: String(message || ""),
+        source: String(source || ""),
+        line: lineno || 0,
+        column: colno || 0,
+        stack: error && error.stack ? String(error.stack).slice(0, 2000) : ""
+      };
+      if (typeof previousOnError === "function") {
+        try { return previousOnError.call(w, message, source, lineno, colno, error); } catch (e) { /* ignore */ }
+      }
+      return false;
+    };
   }
 
   function patchOffset(jq) {
-    if (!jq || !jq.fn || typeof jq.fn.offset !== "function") return false;
-    if (jq.fn.offset.__nimsSafeOffset) return true;
+    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.__nimsSafeOffset) return false;
     var original = jq.fn.offset;
-    var wrapped = function () {
+    jq.fn.offset = function () {
       var value;
       try {
         value = original.apply(this, arguments);
@@ -79,16 +59,16 @@
       }
       return value == null && arguments.length === 0 ? { top: 0, left: 0 } : value;
     };
-    wrapped.__nimsSafeOffset = true;
-    wrapped.__nimsOriginal = original;
-    jq.fn.offset = wrapped;
+    jq.fn.__nimsSafeOffset = true;
     return true;
   }
 
-  function armNextJqueryAssignment() {
+  // Patch the bundled fallback immediately. Then patch one subsequent jQuery
+  // assignment, which covers the page replacing the fallback with its own copy.
+  patchOffset(w.jQuery || w.$);
+  (function armNextJqueryAssignment() {
     var descriptor;
-    try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); }
-    catch (e) { descriptor = null; }
+    try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); } catch (e) { descriptor = null; }
     if (descriptor && descriptor.configurable === false) return;
     var current = w.jQuery;
     try {
@@ -106,16 +86,11 @@
               writable: true,
               value: value
             });
-          } catch (e) { /* polling below still verifies the active copy */ }
-          reportReady("jquery_assigned");
+          } catch (e) { /* keep the accessor if the page prevents replacement */ }
         }
       });
-    } catch (e) { /* polling below remains available */ }
-  }
-
-  ensureDateTime();
-  patchOffset(w.jQuery || w.$);
-  armNextJqueryAssignment();
+    } catch (e) { /* bounded polling below still patches later copies */ }
+  })();
 
   var lastLoadedFrame = null;
   var lastLoadedAt = 0;
@@ -173,10 +148,7 @@
     var wrapped = function (obj) {
       var receiver = this;
       var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
-      if (!frame) {
-        postRuntime("nims_runtime_error", "ajaxCompleteTab called without a matching iframe");
-        return undefined;
-      }
+      if (!frame) return undefined;
       var attempts = 0;
       function invoke() {
         attempts += 1;
@@ -199,8 +171,7 @@
     return wrapped;
   }
 
-  function patchAvailableFunctions(phase) {
-    ensureDateTime();
+  function patchAvailableFunctions() {
     try { patchOffset(w.jQuery || w.$); } catch (e) { /* page still loading */ }
     try {
       if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
@@ -212,9 +183,9 @@
     reportReady(phase || "check");
   }
 
-  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(function (delay) {
-    w.setTimeout(function () { patchAvailableFunctions("timer_" + delay); }, delay);
+  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
+    w.setTimeout(patchAvailableFunctions, delay);
   });
-  w.addEventListener("DOMContentLoaded", function () { patchAvailableFunctions("dom_content_loaded"); }, { once: true });
-  w.addEventListener("load", function () { patchAvailableFunctions("window_load"); }, { once: true });
+  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
+  w.addEventListener("load", patchAvailableFunctions, { once: true });
 })(typeof window !== "undefined" ? window : null);

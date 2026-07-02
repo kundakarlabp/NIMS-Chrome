@@ -10,9 +10,16 @@ data class NormalizedDate(val original: String, val instantOrLocalDateTime: Loca
 object DateNormalizer {
     private val locale = Locale.US
     private val formatters = listOf(
-        "dd-MM-yyyy HH:mm", "dd/MM/yyyy HH:mm", "dd-MM-yyyy hh:mm a", "dd/MM/yyyy hh:mm a", "yyyy-MM-dd HH:mm"
+        "dd-MM-yyyy HH:mm", "dd/MM/yyyy HH:mm", "dd-MM-yyyy hh:mm a", "dd/MM/yyyy hh:mm a", "yyyy-MM-dd HH:mm",
+        // NIMS uses 3-letter month names: 08-Jun-2026, 26-Sep-2024. Without these
+        // every date from NIMS failed normalisation → sortEpoch=null → Trends shows
+        // 0 parameters and every lab shows "report date unavailable".
+        "dd-MMM-yyyy HH:mm", "dd-MMM-yyyy hh:mm a", "dd/MMM/yyyy HH:mm"
     ).map { DateTimeFormatter.ofPattern(it, locale) }
-    private val dateFormatters = listOf("dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd").map { DateTimeFormatter.ofPattern(it, locale) }
+    private val dateFormatters = listOf(
+        "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd",
+        "dd-MMM-yyyy", "dd-MMM-yy", "dd/MMM/yyyy", "dd/MMM/yy"
+    ).map { DateTimeFormatter.ofPattern(it, locale) }
 
     fun normalize(value: String): NormalizedDate {
         val raw = value.trim()

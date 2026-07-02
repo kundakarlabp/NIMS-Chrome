@@ -34,23 +34,27 @@ class LocalSummaryBuilder {
     }
 
     private fun addLabTrends(lines: MutableList<String>, reports: List<ParsedReport>, keyOnly: Boolean, warnings: MutableList<String>) {
-        val keyCodes = setOf("HB", "WBC", "PLT", "CREAT", "NA", "K", "TBIL", "CRP", "PCT", "INR")
+        val keyCodes = setOf("HB", "WBC", "PLT", "CREAT", "NA", "K", "TBIL", "CRP", "PCT", "INR", "NEUT", "LYMPH", "ALT", "AST", "ALB")
         reports.flatMap { report -> report.labs.filter { it.confidence != ParseConfidence.LOW && (!keyOnly || CanonicalLabCodes.normalize(it.canonicalCode) in keyCodes) }.map { report to it } }
             .groupBy { CanonicalLabCodes.normalize(it.second.canonicalCode) }.values.forEach { rows ->
                 val datedRows = rows.mapNotNull { row -> DateNormalizer.normalize(row.first.dateSent).sortEpoch?.let { Triple(it, row.first, row.second) } }.sortedBy { it.first }
                 val undatedRows = rows.filter { DateNormalizer.normalize(it.first.dateSent).sortEpoch == null }
                 if (datedRows.isEmpty()) {
-                    rows.lastOrNull()?.second?.let { lines += "Recorded ${it.displayName} value: ${it.valueText()}; report date unavailable." }
+                    rows.lastOrNull()?.second?.let { lab ->
+                        val flag = when (lab.abnormality) { Abnormality.HIGH -> " [HIGH]"; Abnormality.LOW -> " [LOW]"; Abnormality.CRITICAL -> " [CRITICAL]"; else -> "" }
+                        lines += "Recorded ${lab.displayName}: ${lab.valueText()}$flag; report date unavailable."
+                    }
                     if (undatedRows.isNotEmpty()) warnings += "Undated ${rows.first().second.displayName} value(s) were not used for trend calculation."
                     return@forEach
                 }
                 val latest = datedRows.last().third
                 val previous = datedRows.dropLast(1).lastOrNull()?.third
                 val latestValue = latest.valueText()
+                val flag = when (latest.abnormality) { Abnormality.HIGH -> " [HIGH]"; Abnormality.LOW -> " [LOW]"; Abnormality.CRITICAL -> " [CRITICAL ⚠]"; else -> "" }
                 if (previous?.numericValue != null && latest.numericValue != null) {
-                    val direction = when { latest.numericValue > previous.numericValue -> "increased"; latest.numericValue < previous.numericValue -> "decreased"; else -> "was unchanged" }
-                    lines += "${latest.displayName} $direction from ${previous.valueText()} to $latestValue."
-                } else if (latestValue.isNotBlank()) lines += "Latest ${latest.displayName}: $latestValue."
+                    val direction = when { latest.numericValue > previous.numericValue -> "increased"; latest.numericValue < previous.numericValue -> "decreased"; else -> "unchanged" }
+                    lines += "${latest.displayName} $direction from ${previous.valueText()} to $latestValue$flag."
+                } else if (latestValue.isNotBlank()) lines += "Latest ${latest.displayName}: $latestValue$flag."
                 if (undatedRows.isNotEmpty()) warnings += "Additional undated ${latest.displayName} value(s) were not used for trend calculation."
             }
     }
