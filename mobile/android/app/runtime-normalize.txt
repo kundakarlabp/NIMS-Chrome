@@ -1,16 +1,16 @@
-tasks.named("syncNimsRuntimeAssets").configure {
+tasks.named('syncNimsRuntimeAssets').configure {
     doLast {
-        val directory = layout.buildDirectory.dir("generated/nimsRuntimeAssets").get().asFile
-        val runtimeFile = directory.listFiles().orEmpty()
-            .filter { it.extension == "js" }
-            .sortedBy { it.name }
+        def directory = layout.buildDirectory.dir('generated/nimsRuntimeAssets').get().asFile
+        def runtimeFile = directory.listFiles()
+            .findAll { it.name.endsWith('.js') }
+            .sort { it.name }
             .last()
-        val lines = runtimeFile.readLines().toMutableList()
-        check(lines.size >= 190)
-        lines[163] = "          return undefined;"
-        repeat(2) { lines.removeAt(164) }
-        lines[179] = "    } catch (error) { /* compatibility guard */ }"
-        repeat(3) { lines.removeAt(180) }
-        runtimeFile.writeText(lines.joinToString("\n", postfix = "\n"))
+        def lines = runtimeFile.readLines()
+        assert lines.size() >= 190
+        lines[163] = '          return undefined;'
+        2.times { lines.remove(164) }
+        lines[179] = '    } catch (error) { /* compatibility guard */ }'
+        3.times { lines.remove(180) }
+        runtimeFile.text = lines.join('\n') + '\n'
     }
 }
