@@ -28,12 +28,12 @@ jobs:
           node-version: "22"
           cache: "npm"
       - run: npm ci
-      - name: Run navigation tests
+      - name: Run JavaScript tests
         shell: bash
         run: |
           set -o pipefail
           npm test 2>&1 | tee npm-test.log
-      - name: Upload navigation test log
+      - name: Upload JavaScript test log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -60,10 +60,26 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - run: python ../../scripts/sync_navigation_core.py --check
         working-directory: mobile/android
-      - run: ./gradlew clean test lintDebug assembleDebug
+      - name: Build, unit test, lint, and assemble
+        run: ./gradlew clean test lintDebug assembleDebug --console=plain
         working-directory: mobile/android
-      - run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep nimsReportCore.js
+      - name: Verify packaged NIMS runtime
         working-directory: mobile/android
+        shell: bash
+        run: |
+          set -euo pipefail
+          listing="$(unzip -l app/build/outputs/apk/debug/app-debug.apk)"
+          for required in nimsReportCore.js contentUtils.js nimsAndroidFrameBridge.js nimsWebviewShim.js; do
+            echo "$listing" | grep "assets/$required"
+          done
+          if echo "$listing" | grep -q 'assets/test/'; then
+            echo 'Shared JavaScript tests were packaged into the APK'
+            exit 1
+          fi
+          if echo "$listing" | grep -q 'nimsOnDemandExtractor.js'; then
+            echo 'Obsolete 0.10.0 runtime asset was packaged'
+            exit 1
+          fi
       - name: Verify KVM
         run: |
           ls -l /dev/kvm
@@ -79,10 +95,10 @@ jobs:
           working-directory: mobile/android
           script: |
             adb wait-for-device
-            ./gradlew connectedDebugAndroidTest --stacktrace
+            ./gradlew connectedDebugAndroidTest --stacktrace --console=plain
       - uses: actions/upload-artifact@v4
         with:
-          name: nims-fast-summary-debug-apk
+          name: nims-results-0.9.6-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
