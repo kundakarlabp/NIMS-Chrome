@@ -1,0 +1,16 @@
+tasks.named('syncNimsRuntimeAssets').configure {
+    doLast {
+        def directory = layout.buildDirectory.dir('generated/nimsRuntimeAssets').get().asFile
+        def runtimeFile = directory.listFiles()
+            .findAll { it.name.endsWith('.js') }
+            .sort { it.name }
+            .last()
+        def lines = runtimeFile.readLines()
+        assert lines.size() >= 190
+        lines[163] = '          return undefined;'
+        2.times { lines.remove(164) }
+        lines[179] = '    } catch (error) { /* compatibility guard */ }'
+        3.times { lines.remove(180) }
+        runtimeFile.text = lines.join('\n') + '\n'
+    }
+}

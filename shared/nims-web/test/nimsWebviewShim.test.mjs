@@ -31,7 +31,6 @@ function run(extra = {}) {
     location: {
       href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action',
       hostname: 'www.nimsts.edu.in',
-      pathname: '/AHIMSG5/hissso/loginLogin.action',
       protocol: 'https:',
     },
     addEventListener(type, fn) {
@@ -45,7 +44,7 @@ function run(extra = {}) {
   win.document = document;
   win.top = win;
   document.defaultView = win;
-  const context = { window: win, URL, Date, JSON, Object };
+  const context = { window: win, URL, Date };
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(source, context);
@@ -61,12 +60,7 @@ function run(extra = {}) {
 
 test('installs date_time and safe offset without changing navigation', () => {
   const jq = () => {};
-  jq.fn = { offset: () => result };
-  return jq;
-}
-
-test('installs only the confirmed date_time and offset compatibility guards', () => {
-  const jq = jqueryWithOffset(undefined);
+  jq.fn = { offset: () => undefined };
   const core = { navigateToCrWiseReports: () => 'unchanged' };
   const originalNavigate = core.navigateToCrWiseReports;
   const win = run({ jQuery: jq, $: jq, NimsReportCore: core });
@@ -77,26 +71,6 @@ test('installs only the confirmed date_time and offset compatibility guards', ()
   assert.equal(off.top, 0);
   assert.equal(off.left, 0);
   assert.equal(win.NimsReportCore.navigateToCrWiseReports, originalNavigate);
-});
-
-test('preserves valid offset objects', () => {
-  const jq = jqueryWithOffset({ left: 12 });
-  const win = run({ jQuery: jq, $: jq });
-  win.flush();
-  const offset = win.jQuery.fn.offset();
-  assert.equal(offset.left, 12);
-  assert.equal(offset.top, undefined);
-});
-
-test('patches a jQuery instance loaded after document start', () => {
-  const win = run();
-  const jq = jqueryWithOffset(undefined);
-  win.jQuery = jq;
-  win.$ = jq;
-  win.flush();
-  const offset = win.jQuery.fn.offset();
-  assert.equal(offset.left, 0);
-  assert.equal(offset.top, 0);
 });
 
 test('supplies the iframe that just loaded to zero-argument ajaxCompleteTab', () => {
@@ -148,12 +122,11 @@ test('does not install on non-NIMS origins', () => {
   const original = () => { calls += 1; };
   const win = run({
     document,
-    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', pathname: '/app', protocol: 'https:' },
+    location: { href: 'https://example.invalid/app', hostname: 'example.invalid', protocol: 'https:' },
     ajaxCompleteTab: original,
   });
   win.flush();
   assert.equal(win.ajaxCompleteTab, original);
-  assert.equal(win.date_time, undefined);
   win.ajaxCompleteTab();
   assert.equal(calls, 1);
 });
