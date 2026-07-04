@@ -96,10 +96,33 @@ class LocalSummaryBuilder {
             .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
                 val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
-                a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType).put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes).put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "").put("processor", r.processorName))
+                a.put(
+                    JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
+                        .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
+                        .put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "")
+                        .put("processor", r.processorName)
+                        // Full original report text, so a physician can tap a report
+                        // and see every word from the source document without
+                        // re-fetching it from NIMS.
+                        .put("raw_text", r.rawText)
+                )
             } })
             .put("interpretation", JSONArray(lines))
-            .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c -> a.put(JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty()).put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase()).put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" }).put("comment", c.explicitResistanceMarkers.joinToString(", "))) } })
+            .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c ->
+                // Combine explicit resistance markers with any free-text comments
+                // extracted from the report (e.g. "Comment: repeat culture advised")
+                // so both surface in the Cultures tab instead of only the markers.
+                val commentParts = buildList {
+                    if (c.explicitResistanceMarkers.isNotEmpty()) add("Markers: " + c.explicitResistanceMarkers.joinToString(", "))
+                    addAll(c.comments)
+                }
+                a.put(
+                    JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty())
+                        .put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase())
+                        .put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" })
+                        .put("comment", commentParts.joinToString(" | "))
+                )
+            } })
             .put("lab_trend_table", JSONObject().put("columns", JSONArray(dateColumns)).put("rows", JSONArray().also { rows ->
                 rowsByCode.toSortedMap().forEach { (_, labsByDate) ->
                     val firstLab = labsByDate.values.first().lab

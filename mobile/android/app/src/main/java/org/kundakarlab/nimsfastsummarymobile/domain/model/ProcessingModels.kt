@@ -63,7 +63,10 @@ data class ParsedReport(
     val labs: List<ParsedLabValue> = emptyList(),
     val cultures: List<ParsedCultureValue> = emptyList(),
     val warnings: List<String> = emptyList(),
-    val processorName: String
+    val processorName: String,
+    // Full original report text (post HTML-strip/normalize), so the UI can show
+    // "expand and see every word from the original report" without re-fetching.
+    val rawText: String = ""
 ) {
     fun toHelperJson(): JSONObject = JSONObject()
         .put("report_id", reportId)
@@ -75,6 +78,7 @@ data class ParsedReport(
         .put("culture_results", JSONArray().also { array -> cultures.forEach { culture -> array.put(culture.toJson()) } })
         .put("errors", JSONArray())
         .put("processing", JSONObject().put("processor", processorName))
+        .put("raw_text", rawText)
 }
 
 data class ProcessingSummary(

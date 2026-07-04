@@ -16,7 +16,10 @@ data class UiSourceReport(
     val type: String,
     val status: String,
     val notes: String,
-    val hasError: Boolean
+    val hasError: Boolean,
+    // Full original report text, so tapping a report can show every word from the
+    // source document (copied verbatim) without re-fetching it from NIMS.
+    val rawText: String = ""
 )
 
 data class UiLabTrendRow(

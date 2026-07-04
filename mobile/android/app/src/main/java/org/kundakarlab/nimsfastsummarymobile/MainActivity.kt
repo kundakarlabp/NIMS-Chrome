@@ -917,7 +917,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", if (report.labs.isEmpty() && report.cultures.isEmpty()) "Open source report in NIMS" else "")) } })
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", if (report.labs.isEmpty() && report.cultures.isEmpty()) "Open source report in NIMS" else "").put("raw_text", report.rawText)) } })
         .put("interpretation", JSONArray(text.lines()))
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
