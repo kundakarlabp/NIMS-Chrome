@@ -2,6 +2,7 @@ package org.kundakarlab.nimsfastsummarymobile
 
 import android.webkit.WebView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -26,6 +29,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -210,22 +217,55 @@ private fun PortalScreen(
 
 @Composable
 private fun SourceReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
+    // Tracks which single report card is expanded (index into `reports`, -1 = none).
+    // Tapping a card toggles it; tapping another collapses the previous one so
+    // only one full report is shown at a time, keeping the list fast to scroll.
+    var expandedIndex by remember { mutableStateOf(-1) }
     LazyColumn(modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { ScreenTitle("Source reports", reports.size) }
         if (reports.isEmpty()) item { ResultCard("No reports parsed yet.") }
-        items(reports) { report ->
+        itemsIndexed(reports) { index, report ->
+            val expanded = expandedIndex == index
+            val expandable = report.rawText.isNotBlank()
             ResultCard {
-                Text(report.reportName.ifBlank { "Report" }, fontWeight = FontWeight.Bold)
-                Text(
-                    "${report.dateSent.ifBlank { "No date" }} · ${report.type}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    report.status,
-                    color = if (report.hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
-                )
-                if (report.notes.isNotBlank()) {
-                    Text(report.notes, style = MaterialTheme.typography.bodySmall)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = expandable) { expandedIndex = if (expanded) -1 else index }
+                ) {
+                    Text(report.reportName.ifBlank { "Report" }, fontWeight = FontWeight.Bold)
+                    Text(
+                        "${report.dateSent.ifBlank { "No date" }} · ${report.type}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        report.status,
+                        color = if (report.hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary
+                    )
+                    if (report.notes.isNotBlank()) {
+                        Text(report.notes, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (expandable) {
+                        Text(
+                            if (expanded) "Tap to collapse" else "Tap to view the full original report",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                // Full original report text, copied verbatim from the source
+                // document, exactly as requested — every word, selectable/copyable.
+                if (expanded && expandable) {
+                    SelectionContainer {
+                        Text(
+                            report.rawText,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
+                                .padding(8.dp)
+                        )
+                    }
                 }
             }
         }

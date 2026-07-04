@@ -25,7 +25,7 @@ class LocalTextReportProcessor(
         val cultures = CultureTextParser.parse(text, effectiveDate)
         if (labs.isEmpty() && cultures.isEmpty()) return ProcessingResult.Failure("No high-confidence lab or culture rows were found.", "LOCAL_PARSE_INCOMPLETE", true)
         val warnings = buildList { if (input.contentType.contains("html", true)) add("HTML report text was auto-extracted on-device.") }
-        return ProcessingResult.Success(ParsedReport(input.reportId, input.reportName, effectiveDate, input.reportType, labs, cultures, warnings, name), name, warnings)
+        return ProcessingResult.Success(ParsedReport(input.reportId, input.reportName, effectiveDate, input.reportType, labs, cultures, warnings, name, rawText = text), name, warnings)
     }
 
     override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = ProcessingResult.Success(summaryBuilder.build(reports, mode), name)
@@ -186,9 +186,98 @@ object CultureTextParser {
         "ESBL" to Regex("""\bESBL\b""", RegexOption.IGNORE_CASE), "MRSA" to Regex("""\bMRSA\b""", RegexOption.IGNORE_CASE),
         "VRE" to Regex("""\bVRE\b""", RegexOption.IGNORE_CASE), "CRE" to Regex("""\bCRE\b""", RegexOption.IGNORE_CASE),
         "CRAB" to Regex("""\bCRAB\b""", RegexOption.IGNORE_CASE),
+        "MDR" to Regex("""\bMDR\b|\bmulti[-\s]?drug[-\s]?resistant\b""", RegexOption.IGNORE_CASE),
+        "XDR" to Regex("""\bXDR\b|\bextensively[-\s]drug[-\s]resistant\b""", RegexOption.IGNORE_CASE),
+        "PDR" to Regex("""\bPDR\b|\bpan[-\s]drug[-\s]resistant\b""", RegexOption.IGNORE_CASE),
+        "AmpC" to Regex("""\bAmpC\b""", RegexOption.IGNORE_CASE),
         "Carbapenem resistant" to Regex("""\bcarbapenem(?:[-\s]+)resistant\b""", RegexOption.IGNORE_CASE),
         "Colistin resistant" to Regex("""\bcolistin(?:[-\s]+)resistant\b""", RegexOption.IGNORE_CASE)
     )
+
+    // Clinically common isolates seen on NIMS microbiology reports. Species-level
+    // entries are listed before their bare genus so a specific match wins when the
+    // report names the species; the genus-only fallback still catches reports that
+    // only print the genus (e.g. "Candida sp.", "Klebsiella spp."). This directly
+    // answers "should be able to interpret what organism is typed in the report"
+    // for reports that don't use an explicit "Organism:" label at all.
+    private val organismPatterns: List<Pair<Regex, String>> = listOf(
+        "Escherichia coli" to "E\\.?\\s*coli|Escherichia\\s+coli",
+        "Klebsiella pneumoniae" to "Klebsiella\\s+pneumoniae",
+        "Klebsiella oxytoca" to "Klebsiella\\s+oxytoca",
+        "Klebsiella species" to "Klebsiella\\s+(?:sp\\.?|spp\\.?|species)\\b|\\bKlebsiella\\b",
+        "Pseudomonas aeruginosa" to "Pseudomonas\\s+aeruginosa",
+        "Pseudomonas species" to "Pseudomonas\\s+(?:sp\\.?|spp\\.?|species)\\b|\\bPseudomonas\\b",
+        "Acinetobacter baumannii" to "Acinetobacter\\s+baumannii",
+        "Acinetobacter species" to "Acinetobacter\\s+(?:sp\\.?|spp\\.?|species)\\b|\\bAcinetobacter\\b",
+        "Proteus mirabilis" to "Proteus\\s+mirabilis",
+        "Proteus vulgaris" to "Proteus\\s+vulgaris",
+        "Proteus species" to "\\bProteus\\b",
+        "Enterobacter cloacae" to "Enterobacter\\s+cloacae",
+        "Enterobacter aerogenes" to "Enterobacter\\s+aerogenes",
+        "Enterobacter species" to "\\bEnterobacter\\b",
+        "Citrobacter freundii" to "Citrobacter\\s+freundii",
+        "Citrobacter koseri" to "Citrobacter\\s+koseri",
+        "Citrobacter species" to "\\bCitrobacter\\b",
+        "Morganella morganii" to "Morganella\\s+morganii",
+        "Providencia stuartii" to "Providencia\\s+stuartii",
+        "Providencia species" to "\\bProvidencia\\b",
+        "Serratia marcescens" to "Serratia\\s+marcescens",
+        "Serratia species" to "\\bSerratia\\b",
+        "Salmonella typhi" to "Salmonella\\s+(?:enterica\\s+serovar\\s+)?[Tt]yphi\\b",
+        "Salmonella paratyphi" to "Salmonella\\s+(?:enterica\\s+serovar\\s+)?[Pp]aratyphi\\b",
+        "Salmonella species" to "\\bSalmonella\\b",
+        "Shigella species" to "\\bShigella\\b",
+        "Vibrio cholerae" to "Vibrio\\s+cholerae",
+        "Stenotrophomonas maltophilia" to "Stenotrophomonas\\s+maltophilia",
+        "Burkholderia cepacia" to "Burkholderia\\s+cepacia",
+        "Haemophilus influenzae" to "Ha?emophilus\\s+influenzae",
+        "Neisseria gonorrhoeae" to "Neisseria\\s+gonorrhoeae",
+        "Neisseria meningitidis" to "Neisseria\\s+meningitidis",
+        "Staphylococcus aureus" to "Staph(?:ylococcus)?\\s+aureus",
+        "Coagulase-negative Staphylococcus" to "coagulase[-\\s]negative\\s+staph(?:ylococcus)?|\\bCoNS\\b",
+        "Staphylococcus epidermidis" to "Staph(?:ylococcus)?\\s+epidermidis",
+        "Staphylococcus saprophyticus" to "Staph(?:ylococcus)?\\s+saprophyticus",
+        "Staphylococcus species" to "\\bStaphylococcus\\b",
+        "Streptococcus pneumoniae" to "Strep(?:tococcus)?\\s+pneumoniae|\\bpneumococcus\\b",
+        "Streptococcus pyogenes" to "Strep(?:tococcus)?\\s+pyogenes|group\\s+A\\s+strep(?:tococcus)?",
+        "Streptococcus agalactiae" to "Strep(?:tococcus)?\\s+agalactiae|group\\s+B\\s+strep(?:tococcus)?",
+        "Viridans streptococci" to "viridans\\s+strep(?:tococci|tococcus)?",
+        "Streptococcus species" to "\\bStreptococcus\\b",
+        "Enterococcus faecalis" to "Enterococcus\\s+faecalis",
+        "Enterococcus faecium" to "Enterococcus\\s+faecium",
+        "Enterococcus species" to "\\bEnterococcus\\b",
+        "Listeria monocytogenes" to "Listeria\\s+monocytogenes",
+        "Bacillus species" to "\\bBacillus\\b",
+        "Corynebacterium species" to "\\bCorynebacterium\\b",
+        "Candida albicans" to "Candida\\s+albicans",
+        "Candida glabrata" to "Candida\\s+glabrata",
+        "Candida tropicalis" to "Candida\\s+tropicalis",
+        "Candida krusei" to "Candida\\s+krusei",
+        "Candida parapsilosis" to "Candida\\s+parapsilosis",
+        "Candida auris" to "Candida\\s+auris",
+        "Candida species" to "Candida\\s+(?:sp\\.?|spp\\.?|species)\\b|\\bCandida\\b",
+        "Aspergillus species" to "\\bAspergillus\\b",
+        "Cryptococcus neoformans" to "Cryptococcus\\s+neoformans",
+        "Mycobacterium tuberculosis" to "Mycobacterium\\s+tuberculosis|\\bMTB\\b|AFB\\s+(?:positive|detected|seen)",
+        "Bacteroides fragilis" to "Bacteroides\\s+fragilis",
+        "Clostridioides difficile" to "Clostridi(?:oides|um)\\s+difficile|\\bC\\.\\s*diff(?:icile)?\\b"
+    ).map { (name, pattern) -> Regex(pattern, RegexOption.IGNORE_CASE) to name }
+
+    private val commentLabelPattern = Regex(
+        "(?:comment|note|remark|remarks|interpretation|advice|clinical\\s+correlation)\\s*[:\\-]\\s*([^\\n]+)",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Same trigger words used at the whole-text gate in parse(); re-used per block
+    // so a block that survives splitBlocks but carries genuine culture signal is
+    // never silently dropped, while stray non-culture fragments still are.
+    private val cultureSignalWords = listOf(
+        "culture", "specimen", "organism", "isolate", "no growth", "growth detected",
+        "growth of", "sensitive", "resistant", "susceptible", "intermediate",
+        "aerobic culture", "gram staining", "colony", "cfu"
+    )
+    private fun hasCultureSignal(block: String): Boolean =
+        cultureSignalWords.any { block.contains(it, true) } || resistanceMarkerPatterns.values.any { it.containsMatchIn(block) }
 
     fun extractDateFromText(text: String): String? = LabTextParser.extractDateFromText(text)
 
@@ -197,37 +286,99 @@ object CultureTextParser {
             !text.contains("no growth", true) && !text.contains("growth detected", true) &&
             !text.contains("gram staining", true) && !text.contains("aerobic", true) &&
             resistanceMarkerPatterns.values.none { it.containsMatchIn(text) }) return emptyList()
-        return splitBlocks(text).mapNotNull { parseBlock(it, date) }.distinctBy { listOf(it.specimen, it.organism, it.growthStatus, it.collectionDate).joinToString("|") }
+        return splitBlocks(text).mapNotNull { parseBlock(it, date) }
+            .distinctBy { culture ->
+                listOf(
+                    culture.specimen, culture.site, culture.organism, culture.growthStatus.name, culture.collectionDate,
+                    culture.susceptibility.joinToString("|") { "${it.antibiotic.lowercase()}=${it.interpretation.lowercase()}" }
+                ).joinToString("||")
+            }
     }
+    // Recognizes the start of a real culture/microbiology section. Used both to
+    // split the report into blocks and to gate the "never discard" fallback below
+    // (only a block that genuinely BEGINS a culture section is eligible for the
+    // fallback — this is what stops a preceding lab-panel block that merely ends
+    // with a "Blood Culture" header from being surfaced as a spurious culture row).
+    private val blockStartPattern = Regex(
+        "^(specimen|sample|(?:blood|urine|aerobic|anaerobic|fungal)?\\s*culture|organism|isolate|result|" +
+            "bacteriology|microbiology|(?:antibiotic\\s+)?sensitivity|susceptibility|c/s)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
     private fun splitBlocks(text: String): List<String> {
         val blocks = mutableListOf<String>(); val current = StringBuilder()
         text.lines().forEach { line ->
-            val starts = Regex("^(specimen|sample|(?:blood|urine)?\\s*culture|organism|isolate|result)\\b", RegexOption.IGNORE_CASE).containsMatchIn(line.trim())
+            val starts = blockStartPattern.containsMatchIn(line.trim())
             if (starts && current.isNotBlank()) { blocks += current.toString(); current.clear() }
             current.appendLine(line)
         }
         if (current.isNotBlank()) blocks += current.toString()
         return if (blocks.isEmpty()) listOf(text) else blocks
     }
+
+    // Matches "Antibiotic-name  Sensitive/Resistant/Intermediate", "Antibiotic  S/I/R",
+    // and MIC-table rows like "Amikacin  <=2  S" or "Ampicillin  32 ug/mL  R" — the
+    // three layouts NIMS antibiogram tables actually use. Antibiotic names are
+    // allowed to contain "/", "+", "." and digits so combinations like
+    // "Piperacillin/Tazobactam" and "Amoxicillin-Clavulanic Acid" are captured whole.
     private fun parseSusceptibility(block: String): List<AntibioticResult> {
-        val wordRows = Regex("([A-Za-z][A-Za-z /-]{2,30})\\s+((?:Sensitive|Susceptible|Intermediate|Resistant))", RegexOption.IGNORE_CASE)
-            .findAll(block).map { AntibioticResult(it.groupValues[1].trim(), it.groupValues[2].trim(), ParseConfidence.MEDIUM) }
-        val sirRows = Regex("([A-Za-z][A-Za-z /-]{2,30})\\s+(S|I|R)\\b", RegexOption.IGNORE_CASE)
-            .findAll(block).map { match ->
+        val nameChars = "[A-Za-z][A-Za-z0-9 /+.\\-]{1,45}?"
+        val wordRows = Regex("($nameChars)\\s+(Sensitive|Susceptible|Intermediate|Resistant)\\b", RegexOption.IGNORE_CASE)
+            .findAll(block).map { AntibioticResult(cleanAntibioticName(it.groupValues[1]), it.groupValues[2].replaceFirstChar { c -> c.uppercase() }, ParseConfidence.MEDIUM) }
+        val micRows = Regex("($nameChars)\\s+(?:(?:<=|>=|≤|≥|<|>|=)?\\s*[0-9]+(?:\\.[0-9]+)?\\s*(?:µg/mL|ug/mL|mg/L)?\\s+)?\\b(S|I|R)\\b(?!\\w)", RegexOption.IGNORE_CASE)
+            .findAll(block).mapNotNull { match ->
+                val name = cleanAntibioticName(match.groupValues[1])
+                if (name.length < 3 || KNOWN_ANTIBIOTICS.none { name.contains(it, true) }) return@mapNotNull null
                 val interpretation = when (match.groupValues[2].uppercase()) { "S" -> "Susceptible"; "I" -> "Intermediate"; else -> "Resistant" }
-                AntibioticResult(match.groupValues[1].trim(), interpretation, ParseConfidence.MEDIUM)
+                AntibioticResult(name, interpretation, ParseConfidence.MEDIUM)
             }
-        return (wordRows + sirRows).distinctBy { it.antibiotic.lowercase() to it.interpretation.lowercase() }.toList()
+        // A susceptible/resistant word-row for an antibiotic is more explicit than a
+        // bare-letter SIR match; prefer it when both regexes matched the same drug.
+        return (wordRows + micRows)
+            .distinctBy { it.antibiotic.lowercase() }
+            .toList()
     }
+
+    private fun cleanAntibioticName(raw: String): String = raw.trim().trim(':', '-', '.').replace(Regex("\\s{2,}"), " ")
+
+    // Guards the loose MIC-row regex above (bare "Name  R" is otherwise too generic
+    // and would match unrelated report lines) to real antibiotic names/classes.
+    private val KNOWN_ANTIBIOTICS = listOf(
+        "penicillin", "ampicillin", "amoxicillin", "amoxicillin/clavulanic", "amoxiclav", "piperacillin",
+        "tazobactam", "cefazolin", "cefuroxime", "cefotaxime", "ceftriaxone", "ceftazidime", "cefepime",
+        "cefoperazone", "sulbactam", "aztreonam", "imipenem", "meropenem", "ertapenem", "doripenem",
+        "gentamicin", "amikacin", "tobramycin", "netilmicin", "ciprofloxacin", "levofloxacin", "moxifloxacin",
+        "ofloxacin", "norfloxacin", "nalidixic", "tetracycline", "doxycycline", "minocycline", "tigecycline",
+        "erythromycin", "azithromycin", "clarithromycin", "clindamycin", "vancomycin", "teicoplanin",
+        "linezolid", "daptomycin", "colistin", "polymyxin", "trimethoprim", "sulfamethoxazole", "cotrimoxazole",
+        "nitrofurantoin", "fosfomycin", "chloramphenicol", "rifampicin", "metronidazole", "fluconazole",
+        "voriconazole", "amphotericin", "caspofungin", "micafungin", "isoniazid", "ethambutol", "pyrazinamide",
+        "streptomycin", "oxacillin", "methicillin", "cefixime", "cefpodoxime", "aztreonam", "amoxycillin"
+    )
+
+    private fun findOrganism(block: String): String? = organismPatterns.firstNotNullOfOrNull { (pattern, name) -> if (pattern.containsMatchIn(block)) name else null }
+
+    private fun findComments(block: String): List<String> =
+        commentLabelPattern.findAll(block).map { it.groupValues[1].trim() }.filter { it.isNotBlank() && it.length < 300 }.distinct().toList()
 
     private fun parseBlock(block: String, date: String?): ParsedCultureValue? {
         val noGrowth = Regex("\\bno\\s+(?:growth|organisms?|bacteria)\\b", RegexOption.IGNORE_CASE).containsMatchIn(block)
-        // Extract organism from multiple NIMS patterns
+        // Extract organism: prefer an explicit label first (most precise wording),
+        // then fall back to recognizing any known organism named directly in the
+        // block, which is the common NIMS layout that doesn't use an "Organism:"
+        // label at all (e.g. "Escherichia coli grown; sensitivity as follows").
         val organism = listOf(
             Regex("(?:organism|isolate|identified)\\s*[:=]\\s*([^\\n]+)", RegexOption.IGNORE_CASE),
             Regex("growth\\s+of\\s+([^\\n]+)", RegexOption.IGNORE_CASE),
             Regex("(?:culture\\s+shows?|showed?)\\s+([^\\n]+)", RegexOption.IGNORE_CASE)
         ).firstNotNullOfOrNull { it.find(block)?.groupValues?.get(1)?.trim()?.takeIf { v -> v.isNotBlank() && v.length < 80 } }
+            // The labeled capture is often the whole rest of the line (e.g. "growth
+            // of Candida albicans noted, no organism label used"). If a known
+            // organism appears inside that capture, prefer the clean canonical
+            // name over the raw trailing prose; only fall back to the raw capture
+            // for organism names our dictionary doesn't recognize.
+            ?.let { captured -> findOrganism(captured) ?: captured }
+            ?: findOrganism(block)
         // Extract specimen from multiple NIMS patterns
         val specimen = listOf(
             Regex("(?:specimen|sample|sample\\s+type|type\\s+of\\s+specimen)\\s*[:=]\\s*([^\\n]+)", RegexOption.IGNORE_CASE),
@@ -244,12 +395,53 @@ object CultureTextParser {
         val collectionDate = if (!date.isNullOrBlank()) date else extractDateFromText(block)
         val susceptibility = parseSusceptibility(block)
         val markers = resistanceMarkerPatterns.filter { (marker, pattern) -> pattern.containsMatchIn(block) && !isNegatedMarker(block, marker) }.keys.toSet()
+        val comments = findComments(block)
         val explicitGrowth = Regex("\\b(growth\\s+of|positive|isolated|growth\\s+detected|growth\\s+present)\\b", RegexOption.IGNORE_CASE).containsMatchIn(block)
-        if (!noGrowth && organism.isNullOrBlank() && !explicitGrowth && markers.isEmpty() && susceptibility.isEmpty()) return null
-        if (!noGrowth && organism.isNullOrBlank() && !explicitGrowth) {
-            return ParsedCultureValue(specimen, site, collectionDate, null, GrowthStatus.UNKNOWN, susceptibility, markers, emptyList(), ParseConfidence.LOW)
+
+        val hasSignal = noGrowth || !organism.isNullOrBlank() || explicitGrowth || markers.isNotEmpty() || susceptibility.isNotEmpty() || comments.isNotEmpty()
+        if (!hasSignal) {
+            // Never silently discard a block that GENUINELY BEGINS a culture
+            // section (its first line matches blockStartPattern — e.g. "Aerobic
+            // culture:", "Bacteriology:") but whose remaining content wasn't
+            // matched by any structured extractor above. This is scoped to blocks
+            // that truly start a culture section — not just any block containing
+            // the word "culture" somewhere — so a preceding lab-panel block that
+            // merely ends with a trailing "Blood Culture" header (its own content
+            // is unrelated lab values) is correctly excluded rather than surfaced
+            // as a spurious low-confidence culture row.
+            val firstLine = block.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+            val wordCount = block.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+            val meaningful = blockStartPattern.containsMatchIn(firstLine) && wordCount in 4..120 && block.trim().length <= 500
+            if (!meaningful) return null
+            val excerpt = block.trim().replace(Regex("\\s+"), " ").take(180)
+            return ParsedCultureValue(
+                specimen, site, collectionDate, null, GrowthStatus.UNKNOWN, emptyList(), emptySet(),
+                listOf("Not confidently parsed — review original report.", excerpt), ParseConfidence.LOW
+            )
         }
-        return ParsedCultureValue(specimen, site, collectionDate, organism, if (noGrowth) GrowthStatus.NO_GROWTH else GrowthStatus.GROWTH_DETECTED, susceptibility, markers, emptyList(), ParseConfidence.HIGH)
+        // Growth status: NO_GROWTH is explicit. GROWTH_DETECTED requires either an
+        // identified organism or explicit growth wording — a resistance marker,
+        // susceptibility row, or comment mentioned alone (no organism, no explicit
+        // growth phrase) does not by itself confirm growth, so it stays UNKNOWN
+        // rather than being over-asserted as a positive culture.
+        val growthStatus = when {
+            noGrowth -> GrowthStatus.NO_GROWTH
+            !organism.isNullOrBlank() || explicitGrowth -> GrowthStatus.GROWTH_DETECTED
+            else -> GrowthStatus.UNKNOWN
+        }
+        // No-growth with no organism is a fully valid, correctly-parsed result
+        // (absence of an organism is expected, not a parsing weakness) and stays
+        // HIGH confidence. MEDIUM is the genuinely uncertain case: growth wording
+        // was found but the organism name itself wasn't identified. LOW is the
+        // ambiguous case: only a marker/susceptibility/comment was seen, with no
+        // explicit growth or no-growth statement either way.
+        val confidence = when {
+            !organism.isNullOrBlank() -> ParseConfidence.HIGH
+            noGrowth -> ParseConfidence.HIGH
+            growthStatus == GrowthStatus.GROWTH_DETECTED -> ParseConfidence.MEDIUM
+            else -> ParseConfidence.LOW
+        }
+        return ParsedCultureValue(specimen, site, collectionDate, organism, growthStatus, susceptibility, markers, comments, confidence)
     }
 
     private fun isNegatedMarker(block: String, marker: String): Boolean {

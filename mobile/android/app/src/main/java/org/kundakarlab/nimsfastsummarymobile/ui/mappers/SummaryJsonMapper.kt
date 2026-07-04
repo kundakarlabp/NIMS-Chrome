@@ -39,7 +39,8 @@ object SummaryJsonMapper {
                         // normal and appear on every successfully-parsed PDF report. The old logic
                         // (|| notes.isNotBlank()) caused every parsed PDF to show as "failed",
                         // producing "Failed: 20" even when reports were successfully parsed.
-                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true)
+                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true),
+                        rawText = row.optString("raw_text")
                     )
                 )
             }
