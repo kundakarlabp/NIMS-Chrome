@@ -16,22 +16,23 @@ class OnDeviceReportProcessor(
     override val capabilities = setOf(ProcessingCapability.HTML, ProcessingCapability.PLAIN_TEXT, ProcessingCapability.PDF, ProcessingCapability.LABS, ProcessingCapability.CULTURES, ProcessingCapability.SUMMARY)
 
     override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> {
-        if (!input.isPdf()) return textProcessor.parseReport(input)
+        if (!input.isPdf()) return enhanceTextResult(textProcessor.parseReport(input))
         return try {
             when (val extracted = pdfExtractor.extract(input.bytes, onPdfProgress)) {
                 is PdfExtractionResult.Success -> {
                     val textInput = input.copy(contentType = "text/plain; charset=utf-8", bytes = extracted.text.toByteArray(Charsets.UTF_8))
                     when (val parsed = textProcessor.parseReport(textInput)) {
                         is ProcessingResult.Success -> {
-                            val warnings = parsed.warnings + extracted.warnings + "Processed from PDF on-device."
-                            ProcessingResult.Success(parsed.value.copy(warnings = parsed.value.warnings + warnings, processorName = "On-device PDF"), "On-device PDF", warnings)
+                            val enhanced = enhanceCultureParsing(parsed.value)
+                            val warnings = parsed.warnings + extracted.warnings + "Processed from PDF on-device." + cultureWarning(enhanced, parsed.value)
+                            ProcessingResult.Success(enhanced.copy(warnings = enhanced.warnings + warnings, processorName = "On-device PDF"), "On-device PDF", warnings.distinct())
                         }
                         is ProcessingResult.Unsupported -> ProcessingResult.Unsupported(parsed.reason)
                         is ProcessingResult.Failure -> parsed
                     }
                 }
                 is PdfExtractionResult.ImageOnly -> ProcessingResult.Unsupported("This PDF appears to contain images without extractable text. OCR is not enabled. Open the source report in NIMS.")
-                PdfExtractionResult.Encrypted -> ProcessingResult.Unsupported("This PDF is password-protected and cannot be processed on-device.")
+                PdfExtractionResult.Encrypted -> ProcessingResult.Unsupported("This PDE is protected and cannot be processed on-device.")
                 is PdfExtractionResult.TooLarge -> ProcessingResult.Failure("This PDF is too large for on-device processing. Open the source report in NIMS.", "LOCAL_PDF_TOO_LARGE", false)
                 is PdfExtractionResult.TooManyPages -> ProcessingResult.Failure("This PDF has too many pages for on-device processing. Open the source report in NIMS.", "LOCAL_PDF_TOO_MANY_PAGES", false)
                 is PdfExtractionResult.Corrupt -> ProcessingResult.Failure(extracted.userMessage, "LOCAL_PDF_CORRUPT", false)
@@ -45,6 +46,35 @@ class OnDeviceReportProcessor(
     }
 
     override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = textProcessor.summarize(reports, mode)
+
+    private fun enhanceTextResult(result: ProcessingResult<ParsedReport>): ProcessingResult<ParsedReport> = when (result) {
+        is ProcessingResult.Success -> {
+            val enhanced = enhanceCultureParsing(result.value)
+            val warnings = result.warnings + cultureWarning(enhanced, result.value)
+            ProcessingResult.Success(enhanced.copy(warnings = enhanced.warnings + warnings), result.processorName, warnings.distinct())
+        }
+        else -> result
+    }
+
+    private fun enhanceCultureParsing(report: ParsedReport): ParsedReport {
+        val parsed = ProductionCultureParser.parse(report.rawText, report.dateSent)
+        if (parsed.isEmpty()) return report
+        val selected = if (cultureScore(parsed) >= cultureScore(report.cultures)) parsed else report.cultures
+        return report.copy(cultures = selected)
+    }
+
+    private fun cultureWarning(enhanced: ParsedReport, original: ParsedReport): List<String> =
+        if (enhanced.cultures !== original.cultures && enhanced.cultures.isNotEmpty()) {
+            listOf("Culture reports were parsed with bottle/isolate-safe extraction. Verify organism, AST, and contaminant flags against the source report.")
+        } else emptyList()
+
+    private fun cultureScore(rows: List<ParsedCultureValue>): Int = rows.sumOf { row ->
+        1 + row.susceptibility.size * 2 + (if (row.organism.isNullOrBlank()) 0 else 5) + if (row.site.isNullOrBlank()) 0 else 2 + when (row.growthStatus) {
+            GrowthStatus.GROWTH_DETECTED, GrowthStatus.NO_GROWTH -> 3
+            GrowthStatus.PENDING -> 2
+            GrowthStatus.UNKNOWN -> 0
+        }
+    }
 }
 
-private fun ReportInput.isPdf(): Boolean = contentType.contains("pdf", true) || (bytes.size >= 4 && bytes[0] == '%'.code.toByte() && bytes[1] == 'P'.code.toByte() && bytes[2] == 'D'.code.toByte() && bytes[3] == 'F'.code.toByte())
+private fun ReportInput.isPdf(): Boolean = contentType.contains("pdf", true) || (bytes.size >= 4 && bytes[0] == 37.toByte() && bytes[1] == 80.toByte() && bytes[2] == 68.toByte() && bytes[3] == 70.toByte())
