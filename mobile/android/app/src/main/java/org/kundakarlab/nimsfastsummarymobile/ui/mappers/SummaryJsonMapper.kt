@@ -26,23 +26,7 @@ object SummaryJsonMapper {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 val status = row.optString("status", "unknown")
-                val notes = row.optString("notes")
-                add(
-                    UiSourceReport(
-                        dateSent = row.optString("date_sent"),
-                        reportName = row.optString("report_name", "Unnamed report"),
-                        type = row.optString("type", row.optString("report_type", "other")),
-                        status = status,
-                        notes = notes,
-                        // hasError must only be true for genuine failures (error/unsupported status),
-                        // NOT for processing notes like "Processed from PDF on-device." which are
-                        // normal and appear on every successfully-parsed PDF report. The old logic
-                        // (|| notes.isNotBlank()) caused every parsed PDF to show as "failed",
-                        // producing "Failed: 20" even when reports were successfully parsed.
-                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true),
-                        rawText = row.optString("raw_text")
-                    )
-                )
+                add(UiSourceReport(row.optString("date_sent"), row.optString("report_name", "Unnamed report"), row.optString("type", row.optString("report_type", "other")), status, row.optString("notes"), status.equals("error", true) || status.equals("unsupported", true), row.optString("raw_text")))
             }
         }
     }
@@ -54,24 +38,12 @@ object SummaryJsonMapper {
         return buildList {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
-                val values = strings(row.optJSONArray("values"))
+                val values = stringsPreserveBlanks(row.optJSONArray("values"))
                 if (values.size != columns.size) continue
-                val alignedValues = values
-                val history = columns.zip(alignedValues).filter { it.second.isNotBlank() }
+                val history = columns.zip(values).filter { it.second.isNotBlank() }
                 val latest = history.firstOrNull()
                 val previous = history.drop(1).firstOrNull()
-                add(
-                    UiLabTrendRow(
-                        parameter = row.optString("parameter", "Parameter"),
-                        latestValue = latest?.second.orEmpty(),
-                        latestDate = latest?.first.orEmpty(),
-                        previousValue = previous?.second,
-                        previousDate = previous?.first,
-                        trendText = row.optString("trend", "insufficient data"),
-                        abnormality = abnormality(latest?.second.orEmpty()),
-                        history = history
-                    )
-                )
+                add(UiLabTrendRow(row.optString("parameter", "Parameter"), latest?.second.orEmpty(), latest?.first.orEmpty(), previous?.second, previous?.first, row.optString("trend", "insufficient data"), abnormality(latest?.second.orEmpty()), history))
             }
         }
     }
@@ -84,14 +56,14 @@ object SummaryJsonMapper {
                 add(
                     UiCultureRow(
                         collectionDate = firstNonBlank(row, "collection_date", "date_sent", "reporting_date"),
-                        cultureNo = firstNonBlank(row, "culture_no", "culture_number", "specimen_no"),
-                        specimen = firstNonBlank(row, "specimen", "site_specimen", "specimen_no"),
-                        site = firstNonBlank(row, "site", "site_specimen"),
-                        organism = firstNonBlank(row, "organism", "growth"),
+                        cultureNo = firstNonBlank(row, "culture_no", "culture_number", "specimen_no", "isolate_number"),
+                        specimen = firstNonBlank(row, "specimen", "sample_type", "site_specimen", "specimen_no"),
+                        site = firstNonBlank(row, "site", "bottle_name", "site_specimen"),
+                        organism = firstNonBlank(row, "organism", "organism_name", "growth"),
                         growth = firstNonBlank(row, "growth", "growth_quantity", "result"),
-                        status = firstNonBlank(row, "result", "status", "report_status", fallback = "unknown"),
-                        sensitivitySummary = row.optString("sensitivity_summary"),
-                        comment = row.optString("comment"),
+                        status = firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown"),
+                        sensitivitySummary = sirSummary(row).ifBlank { stringField(row, "sensitivity_summary") },
+                        comment = cultureComment(row),
                         sourceReportName = row.optString("report_name")
                     )
                 )
@@ -99,11 +71,42 @@ object SummaryJsonMapper {
         }
     }
 
+    private fun sirSummary(row: JSONObject): String {
+        val summaryObject = row.optJSONObject("sensitivity_summary")
+        val susceptible = strings(row.optJSONArray("sensitive")) + strings(row.optJSONArray("susceptible")) + strings(row.optJSONArray("sensitive_drugs")) + strings(row.optJSONArray("susceptible_antibiotics")) + strings(summaryObject?.optJSONArray("sensitive")) + strings(summaryObject?.optJSONArray("susceptible"))
+        val intermediate = strings(row.optJSONArray("intermediate")) + strings(row.optJSONArray("intermediate_drugs")) + strings(row.optJSONArray("intermediate_antibiotics")) + strings(summaryObject?.optJSONArray("intermediate"))
+        val resistant = strings(row.optJSONArray("resistant")) + strings(row.optJSONArray("resistant_drugs")) + strings(row.optJSONArray("resistant_antibiotics")) + strings(summaryObject?.optJSONArray("resistant"))
+        return listOf("S: " + susceptible.distinct().joinToString(", "), "I: " + intermediate.distinct().joinToString(", "), "R: " + resistant.distinct().joinToString(", ")).filterNot { it.endsWith(": ") }.joinToString("; ")
+    }
+
+    private fun cultureComment(row: JSONObject): String {
+        val notes = buildList {
+            firstNonBlank(row, "comment", "microbiology_note", "note").takeIf { it.isNotBlank() }?.let(::add)
+            firstNonBlank(row, "bottle_name").takeIf { it.isNotBlank() }?.let { add("Bottle: $it") }
+            firstNonBlank(row, "reporting_status", "report_status").takeIf { it.isNotBlank() }?.let { add("Report status: $it") }
+            firstNonBlank(row, "isolate_number").takeIf { it.isNotBlank() }?.let { add("Isolate: $it") }
+            if (row.optBoolean("clinical_review_flag", false)) add("Clinical-significance review required; verify with source report and bedside context.")
+        }
+        return notes.distinct().joinToString(" | ")
+    }
+
     private fun strings(values: JSONArray?): List<String> {
         if (values == null) return emptyList()
         return buildList {
-            for (index in 0 until values.length()) add(values.optString(index))
+            for (index in 0 until values.length()) {
+                if (!values.isNull(index)) values.optString(index).trim().takeIf { it.isNotBlank() }?.let(::add)
+            }
         }
+    }
+
+    private fun stringsPreserveBlanks(values: JSONArray?): List<String> {
+        if (values == null) return emptyList()
+        return buildList { for (index in 0 until values.length()) add(if (values.isNull(index)) "" else values.optString(index)) }
+    }
+
+    private fun stringField(row: JSONObject, key: String): String {
+        val value = row.opt(key)
+        return if (value is String) value.trim() else ""
     }
 
     private fun abnormality(value: String): Abnormality {
@@ -120,8 +123,8 @@ object SummaryJsonMapper {
 
     private fun firstNonBlank(row: JSONObject, vararg keys: String, fallback: String = ""): String {
         for (key in keys) {
-            val value = row.optString(key)
-            if (value.isNotBlank()) return value
+            val value = row.optString(key).trim()
+            if (value.isNotBlank() && value != "null") return value
         }
         return fallback
     }
