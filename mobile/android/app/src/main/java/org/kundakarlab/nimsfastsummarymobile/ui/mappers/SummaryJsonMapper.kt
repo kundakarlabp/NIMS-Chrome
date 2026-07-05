@@ -26,8 +26,7 @@ object SummaryJsonMapper {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 val status = row.optString("status", "unknown")
-                val notes = row.optString("notes")
-                add(UiSourceReport(row.optString("date_sent"), row.optString("report_name", "Unnamed report"), row.optString("type", row.optString("report_type", "other")), status, notes, status.equals("error", true) || status.equals("unsupported", true), row.optString("raw_text")))
+                add(UiSourceReport(row.optString("date_sent"), row.optString("report_name", "Unnamed report"), row.optString("type", row.optString("report_type", "other")), status, row.optString("notes"), status.equals("error", true) || status.equals("unsupported", true), row.optString("raw_text")))
             }
         }
     }
@@ -63,7 +62,7 @@ object SummaryJsonMapper {
                         organism = firstNonBlank(row, "organism", "organism_name", "growth"),
                         growth = firstNonBlank(row, "growth", "growth_quantity", "result"),
                         status = firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown"),
-                        sensitivitySummary = sirSummary(row).ifBlank { row.optString("sensitivity_summary") },
+                        sensitivitySummary = sirSummary(row).ifBlank { stringField(row, "sensitivity_summary") },
                         comment = cultureComment(row),
                         sourceReportName = row.optString("report_name")
                     )
@@ -86,19 +85,28 @@ object SummaryJsonMapper {
             firstNonBlank(row, "bottle_name").takeIf { it.isNotBlank() }?.let { add("Bottle: $it") }
             firstNonBlank(row, "reporting_status", "report_status").takeIf { it.isNotBlank() }?.let { add("Report status: $it") }
             firstNonBlank(row, "isolate_number").takeIf { it.isNotBlank() }?.let { add("Isolate: $it") }
-            if (row.optString("clinical_review_flag").equals("true", ignoreCase = true)) add("Clinical-significance review required; verify with source report and bedside context.")
+            if (row.optBoolean("clinical_review_flag", false)) add("Clinical-significance review required; verify with source report and bedside context.")
         }
         return notes.distinct().joinToString(" | ")
     }
 
     private fun strings(values: JSONArray?): List<String> {
         if (values == null) return emptyList()
-        return buildList { for (index in 0 until values.length()) values.optString(index).takeIf { it.isNotBlank() }?.let(::add) }
+        return buildList {
+            for (index in 0 until values.length()) {
+                if (!values.isNull(index)) values.optString(index).trim().takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
     }
 
     private fun stringsPreserveBlanks(values: JSONArray?): List<String> {
         if (values == null) return emptyList()
-        return buildList { for (index in 0 until values.length()) add(values.optString(index)) }
+        return buildList { for (index in 0 until values.length()) add(if (values.isNull(index)) "" else values.optString(index)) }
+    }
+
+    private fun stringField(row: JSONObject, key: String): String {
+        val value = row.opt(key)
+        return if (value is String) value.trim() else ""
     }
 
     private fun abnormality(value: String): Abnormality {
@@ -115,8 +123,8 @@ object SummaryJsonMapper {
 
     private fun firstNonBlank(row: JSONObject, vararg keys: String, fallback: String = ""): String {
         for (key in keys) {
-            val value = row.optString(key)
-            if (value.isNotBlank()) return value
+            val value = row.optString(key).trim()
+            if (value.isNotBlank() && value != "null") return value
         }
         return fallback
     }
