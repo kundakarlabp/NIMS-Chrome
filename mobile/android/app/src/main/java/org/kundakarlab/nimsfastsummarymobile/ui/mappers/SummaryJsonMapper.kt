@@ -34,11 +34,6 @@ object SummaryJsonMapper {
                         type = row.optString("type", row.optString("report_type", "other")),
                         status = status,
                         notes = notes,
-                        // hasError must only be true for genuine failures (error/unsupported status),
-                        // NOT for processing notes like "Processed from PDF on-device." which are
-                        // normal and appear on every successfully-parsed PDF report. The old logic
-                        // (|| notes.isNotBlank()) caused every parsed PDF to show as "failed",
-                        // producing "Failed: 20" even when reports were successfully parsed.
                         hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true),
                         rawText = row.optString("raw_text")
                     )
@@ -56,8 +51,7 @@ object SummaryJsonMapper {
                 val row = rows.optJSONObject(index) ?: continue
                 val values = strings(row.optJSONArray("values"))
                 if (values.size != columns.size) continue
-                val alignedValues = values
-                val history = columns.zip(alignedValues).filter { it.second.isNotBlank() }
+                val history = columns.zip(values).filter { it.second.isNotBlank() }
                 val latest = history.firstOrNull()
                 val previous = history.drop(1).firstOrNull()
                 add(
@@ -84,14 +78,14 @@ object SummaryJsonMapper {
                 add(
                     UiCultureRow(
                         collectionDate = firstNonBlank(row, "collection_date", "date_sent", "reporting_date"),
-                        cultureNo = firstNonBlank(row, "culture_no", "culture_number", "specimen_no"),
-                        specimen = firstNonBlank(row, "specimen", "site_specimen", "specimen_no"),
-                        site = firstNonBlank(row, "site", "site_specimen"),
-                        organism = firstNonBlank(row, "organism", "growth"),
+                        cultureNo = firstNonBlank(row, "culture_no", "culture_number", "specimen_no", "isolate_number"),
+                        specimen = firstNonBlank(row, "specimen", "sample_type", "site_specimen", "specimen_no"),
+                        site = firstNonBlank(row, "site", "bottle_name", "site_specimen"),
+                        organism = firstNonBlank(row, "organism", "organism_name", "growth"),
                         growth = firstNonBlank(row, "growth", "growth_quantity", "result"),
-                        status = firstNonBlank(row, "result", "status", "report_status", fallback = "unknown"),
-                        sensitivitySummary = row.optString("sensitivity_summary"),
-                        comment = row.optString("comment"),
+                        status = firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown"),
+                        sensitivitySummary = sirSummary(row).ifBlank { row.optString("sensitivity_summary") },
+                        comment = cultureComment(row),
                         sourceReportName = row.optString("report_name")
                     )
                 )
@@ -99,10 +93,46 @@ object SummaryJsonMapper {
         }
     }
 
+    private fun sirSummary(row: JSONObject): String {
+        val summaryObject = row.optJSONObject("sensitivity_summary")
+        val susceptible = strings(row.optJSONArray("sensitive")) +
+            strings(row.optJSONArray("susceptible")) +
+            strings(row.optJSONArray("sensitive_drugs")) +
+            strings(row.optJSONArray("susceptible_antibiotics")) +
+            strings(summaryObject?.optJSONArray("sensitive")) +
+            strings(summaryObject?.optJSONArray("susceptible"))
+        val intermediate = strings(row.optJSONArray("intermediate")) +
+            strings(row.optJSONArray("intermediate_drugs")) +
+            strings(row.optJSONArray("intermediate_antibiotics")) +
+            strings(summaryObject?.optJSONArray("intermediate"))
+        val resistant = strings(row.optJSONArray("resistant")) +
+            strings(row.optJSONArray("resistant_drugs")) +
+            strings(row.optJSONArray("resistant_antibiotics")) +
+            strings(summaryObject?.optJSONArray("resistant"))
+
+        val parts = listOf(
+            "S: " + susceptible.distinct().joinToString(", "),
+            "I: " + intermediate.distinct().joinToString(", "),
+            "R: " + resistant.distinct().joinToString(", ")
+        ).filterNot { it.endsWith(": ") }
+        return parts.joinToString("; ")
+    }
+
+    private fun cultureComment(row: JSONObject): String {
+        val notes = buildList {
+            firstNonBlank(row, "comment", "microbiology_note", "note").takeIf { it.isNotBlank() }?.let(::add)
+            firstNonBlank(row, "bottle_name").takeIf { it.isNotBlank() }?.let { add("Bottle: $it") }
+            firstNonBlank(row, "reporting_status", "report_status").takeIf { it.isNotBlank() }?.let { add("Report status: $it") }
+            firstNonBlank(row, "isolate_number").takeIf { it.isNotBlank() }?.let { add("Isolate: $it") }
+            if (row.optString("clinical_review_flag").equals("true", ignoreCase = true)) add("Clinical-significance review required; verify with source report and bedside context.")
+        }
+        return notes.distinct().joinToString(" | ")
+    }
+
     private fun strings(values: JSONArray?): List<String> {
         if (values == null) return emptyList()
         return buildList {
-            for (index in 0 until values.length()) add(values.optString(index))
+            for (index in 0 until values.length()) values.optString(index).takeIf { it.isNotBlank() }?.let(::add)
         }
     }
 
