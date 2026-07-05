@@ -27,17 +27,7 @@ object SummaryJsonMapper {
                 val row = rows.optJSONObject(index) ?: continue
                 val status = row.optString("status", "unknown")
                 val notes = row.optString("notes")
-                add(
-                    UiSourceReport(
-                        dateSent = row.optString("date_sent"),
-                        reportName = row.optString("report_name", "Unnamed report"),
-                        type = row.optString("type", row.optString("report_type", "other")),
-                        status = status,
-                        notes = notes,
-                        hasError = status.equals("error", ignoreCase = true) || status.equals("unsupported", ignoreCase = true),
-                        rawText = row.optString("raw_text")
-                    )
-                )
+                add(UiSourceReport(row.optString("date_sent"), row.optString("report_name", "Unnamed report"), row.optString("type", row.optString("report_type", "other")), status, notes, status.equals("error", true) || status.equals("unsupported", true), row.optString("raw_text")))
             }
         }
     }
@@ -49,23 +39,12 @@ object SummaryJsonMapper {
         return buildList {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
-                val values = strings(row.optJSONArray("values"))
+                val values = stringsPreserveBlanks(row.optJSONArray("values"))
                 if (values.size != columns.size) continue
                 val history = columns.zip(values).filter { it.second.isNotBlank() }
                 val latest = history.firstOrNull()
                 val previous = history.drop(1).firstOrNull()
-                add(
-                    UiLabTrendRow(
-                        parameter = row.optString("parameter", "Parameter"),
-                        latestValue = latest?.second.orEmpty(),
-                        latestDate = latest?.first.orEmpty(),
-                        previousValue = previous?.second,
-                        previousDate = previous?.first,
-                        trendText = row.optString("trend", "insufficient data"),
-                        abnormality = abnormality(latest?.second.orEmpty()),
-                        history = history
-                    )
-                )
+                add(UiLabTrendRow(row.optString("parameter", "Parameter"), latest?.second.orEmpty(), latest?.first.orEmpty(), previous?.second, previous?.first, row.optString("trend", "insufficient data"), abnormality(latest?.second.orEmpty()), history))
             }
         }
     }
@@ -95,27 +74,10 @@ object SummaryJsonMapper {
 
     private fun sirSummary(row: JSONObject): String {
         val summaryObject = row.optJSONObject("sensitivity_summary")
-        val susceptible = strings(row.optJSONArray("sensitive")) +
-            strings(row.optJSONArray("susceptible")) +
-            strings(row.optJSONArray("sensitive_drugs")) +
-            strings(row.optJSONArray("susceptible_antibiotics")) +
-            strings(summaryObject?.optJSONArray("sensitive")) +
-            strings(summaryObject?.optJSONArray("susceptible"))
-        val intermediate = strings(row.optJSONArray("intermediate")) +
-            strings(row.optJSONArray("intermediate_drugs")) +
-            strings(row.optJSONArray("intermediate_antibiotics")) +
-            strings(summaryObject?.optJSONArray("intermediate"))
-        val resistant = strings(row.optJSONArray("resistant")) +
-            strings(row.optJSONArray("resistant_drugs")) +
-            strings(row.optJSONArray("resistant_antibiotics")) +
-            strings(summaryObject?.optJSONArray("resistant"))
-
-        val parts = listOf(
-            "S: " + susceptible.distinct().joinToString(", "),
-            "I: " + intermediate.distinct().joinToString(", "),
-            "R: " + resistant.distinct().joinToString(", ")
-        ).filterNot { it.endsWith(": ") }
-        return parts.joinToString("; ")
+        val susceptible = strings(row.optJSONArray("sensitive")) + strings(row.optJSONArray("susceptible")) + strings(row.optJSONArray("sensitive_drugs")) + strings(row.optJSONArray("susceptible_antibiotics")) + strings(summaryObject?.optJSONArray("sensitive")) + strings(summaryObject?.optJSONArray("susceptible"))
+        val intermediate = strings(row.optJSONArray("intermediate")) + strings(row.optJSONArray("intermediate_drugs")) + strings(row.optJSONArray("intermediate_antibiotics")) + strings(summaryObject?.optJSONArray("intermediate"))
+        val resistant = strings(row.optJSONArray("resistant")) + strings(row.optJSONArray("resistant_drugs")) + strings(row.optJSONArray("resistant_antibiotics")) + strings(summaryObject?.optJSONArray("resistant"))
+        return listOf("S: " + susceptible.distinct().joinToString(", "), "I: " + intermediate.distinct().joinToString(", "), "R: " + resistant.distinct().joinToString(", ")).filterNot { it.endsWith(": ") }.joinToString("; ")
     }
 
     private fun cultureComment(row: JSONObject): String {
@@ -131,9 +93,12 @@ object SummaryJsonMapper {
 
     private fun strings(values: JSONArray?): List<String> {
         if (values == null) return emptyList()
-        return buildList {
-            for (index in 0 until values.length()) values.optString(index).takeIf { it.isNotBlank() }?.let(::add)
-        }
+        return buildList { for (index in 0 until values.length()) values.optString(index).takeIf { it.isNotBlank() }?.let(::add) }
+    }
+
+    private fun stringsPreserveBlanks(values: JSONArray?): List<String> {
+        if (values == null) return emptyList()
+        return buildList { for (index in 0 until values.length()) add(values.optString(index)) }
     }
 
     private fun abnormality(value: String): Abnormality {
