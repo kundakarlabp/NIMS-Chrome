@@ -1,16 +1,18 @@
+// The shared NIMS WebView shim is now valid source and no longer requires
+// line-number based post-processing. Keep this task hook as a deterministic
+// validation step so generated assets cannot silently reintroduce the removed
+// runtime symbols that previously broke login/navigation.
 tasks.named('syncNimsRuntimeAssets').configure {
     doLast {
         def directory = layout.buildDirectory.dir('generated/nimsRuntimeAssets').get().asFile
-        def runtimeFile = directory.listFiles()
-            .findAll { it.name.endsWith('.js') }
-            .sort { it.name }
-            .last()
-        def lines = runtimeFile.readLines()
-        assert lines.size() >= 190
-        lines[163] = '          return undefined;'
-        2.times { lines.remove(164) }
-        lines[179] = '    } catch (error) { /* compatibility guard */ }'
-        3.times { lines.remove(180) }
-        runtimeFile.text = lines.join('\n') + '\n'
+        def runtimeFile = new File(directory, 'nimsWebviewShim.js')
+        assert runtimeFile.isFile()
+        def source = runtimeFile.getText('UTF-8')
+        assert source.contains('__nimsInjectedAt')
+        assert source.contains('function patchOffset()')
+        assert source.contains('function patchAjaxCompleteTab()')
+        assert !source.contains('postRuntime(')
+        assert !source.contains('reportReady(')
+        assert !source.contains('phase ||')
     }
 }
