@@ -14,22 +14,27 @@ object NimsCultureMetadataEnricher {
         "(?i)\\b(?:of|in)\\s+(?:the\\s+)?(first|second|third|fourth|\\d+(?:st|nd|rd|th)?)\\s+set\\b"
     )
 
-    fun enrich(values: List<ParsedCultureValue>): List<ParsedCultureValue> = values.map { value ->
-        val source = value.rawSectionText.orEmpty()
-        val heading = value.bottleName?.takeIf { it.isNotBlank() }
-            ?: bottleLine.find(source)?.groupValues?.getOrNull(1)?.trim()
-        val bottle = value.bottleNumber
-            ?: bottleNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
-        val set = value.setNumber
-            ?: setNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
-        val stage = value.reportStage?.takeUnless { it.isBlank() || it == "unspecified" }
-            ?: stage(heading.orEmpty() + " " + source.take(300))
-        value.copy(
-            bottleName = heading,
-            bottleNumber = bottle,
-            setNumber = set,
-            reportStage = stage
-        )
+    fun enrich(values: List<ParsedCultureValue>, fullReportText: String = ""): List<ParsedCultureValue> {
+        val reportHeadings = bottleLine.findAll(fullReportText).map { it.groupValues[1].trim() }.toList()
+        return values.mapIndexed { index, value ->
+            val source = value.rawSectionText.orEmpty()
+            val heading = value.bottleName?.takeIf { it.isNotBlank() }
+                ?: bottleLine.find(source)?.groupValues?.getOrNull(1)?.trim()
+                ?: reportHeadings.getOrNull(index)
+                ?: reportHeadings.singleOrNull()
+            val bottle = value.bottleNumber
+                ?: bottleNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
+            val set = value.setNumber
+                ?: setNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
+            val stage = value.reportStage?.takeUnless { it.isBlank() || it == "unspecified" }
+                ?: stage(heading.orEmpty() + " " + source.take(300))
+            value.copy(
+                bottleName = heading,
+                bottleNumber = bottle,
+                setNumber = set,
+                reportStage = stage
+            )
+        }
     }
 
     private fun stage(text: String): String = when {
