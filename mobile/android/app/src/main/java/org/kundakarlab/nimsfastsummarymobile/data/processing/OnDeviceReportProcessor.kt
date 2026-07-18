@@ -53,7 +53,9 @@ class OnDeviceReportProcessor(
         fallbackDate: String
     ): ProcessingResult<ParsedReport> {
         if (result !is ProcessingResult.Success) return result
-        val nimsCultures = NimsCultureTextParser.parse(extractedText, fallbackDate)
+        val nimsCultures = NimsCultureMetadataEnricher.enrich(
+            NimsCultureTextParser.parse(extractedText, fallbackDate)
+        )
         if (nimsCultures.isEmpty()) return result
         return ProcessingResult.Success(
             value = result.value.copy(cultures = nimsCultures, rawText = extractedText),
