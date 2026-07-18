@@ -40,7 +40,10 @@ data class ParsedLabValue(
 data class AntibioticResult(
     val antibiotic: String,
     val interpretation: String,
-    val confidence: ParseConfidence
+    val confidence: ParseConfidence,
+    val micValue: Double? = null,
+    val micComparator: String? = null,
+    val micUnit: String? = null
 )
 
 data class ParsedCultureValue(
@@ -52,7 +55,17 @@ data class ParsedCultureValue(
     val susceptibility: List<AntibioticResult>,
     val explicitResistanceMarkers: Set<String>,
     val comments: List<String>,
-    val confidence: ParseConfidence
+    val confidence: ParseConfidence,
+    val labStudyNumber: String? = null,
+    val reportingDate: String? = null,
+    val reportStage: String? = null,
+    val bottleName: String? = null,
+    val setNumber: Int? = null,
+    val bottleNumber: Int? = null,
+    val isolateNumber: Int? = null,
+    val gramStain: String? = null,
+    val organismRaw: String? = null,
+    val rawSectionText: String? = null
 )
 
 data class ParsedReport(
@@ -64,8 +77,6 @@ data class ParsedReport(
     val cultures: List<ParsedCultureValue> = emptyList(),
     val warnings: List<String> = emptyList(),
     val processorName: String,
-    // Full original report text (post HTML-strip/normalize), so the UI can show
-    // "expand and see every word from the original report" without re-fetching.
     val rawText: String = ""
 ) {
     fun toHelperJson(): JSONObject = JSONObject()
@@ -103,9 +114,30 @@ private fun ParsedCultureValue.toJson(): JSONObject = JSONObject()
     .put("specimen", specimen.orEmpty())
     .put("site", site.orEmpty())
     .put("collection_date", collectionDate.orEmpty())
+    .put("reporting_date", reportingDate.orEmpty())
+    .put("lab_study_number", labStudyNumber.orEmpty())
     .put("organism", organism.orEmpty())
+    .put("organism_raw", organismRaw.orEmpty())
     .put("status", growthStatus.name.lowercase())
-    .put("susceptibility", JSONArray().also { array -> susceptibility.forEach { array.put(JSONObject().put("antibiotic", it.antibiotic).put("interpretation", it.interpretation)) } })
+    .put("report_stage", reportStage.orEmpty())
+    .put("bottle_name", bottleName.orEmpty())
+    .put("set_number", setNumber ?: JSONObject.NULL)
+    .put("bottle_number", bottleNumber ?: JSONObject.NULL)
+    .put("isolate_number", isolateNumber ?: JSONObject.NULL)
+    .put("gram_stain", gramStain.orEmpty())
+    .put("susceptibility", JSONArray().also { array ->
+        susceptibility.forEach { result ->
+            array.put(
+                JSONObject()
+                    .put("antibiotic", result.antibiotic)
+                    .put("interpretation", result.interpretation)
+                    .put("mic_value", result.micValue ?: JSONObject.NULL)
+                    .put("mic_comparator", result.micComparator.orEmpty())
+                    .put("mic_unit", result.micUnit.orEmpty())
+            )
+        }
+    })
     .put("explicit_resistance_markers", JSONArray(explicitResistanceMarkers.toList()))
     .put("comments", JSONArray(comments))
     .put("confidence", confidence.name.lowercase())
+    .put("raw_section_text", rawSectionText.orEmpty())
