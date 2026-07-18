@@ -62,16 +62,28 @@ class LocalSummaryBuilder {
     private fun addCultures(lines: MutableList<String>, reports: List<ParsedReport>, concise: Boolean) {
         val cultures = reports.flatMap { it.cultures }
         cultures.filter { it.growthStatus == GrowthStatus.GROWTH_DETECTED }.forEach {
-            lines += "${it.specimen ?: "Culture"}: ${it.organism ?: "growth reported"}."
+            val identity = listOfNotNull(
+                it.specimen,
+                it.bottleNumber?.let { n -> "bottle $n" },
+                it.isolateNumber?.let { n -> "isolate $n" },
+                it.reportStage?.takeUnless { stage -> stage == "unspecified" }
+            ).joinToString(" · ").ifBlank { "Culture" }
+            lines += "$identity: ${it.organism ?: "growth reported"}."
             if (!concise && it.explicitResistanceMarkers.isNotEmpty()) lines += "Explicit resistance markers: ${it.explicitResistanceMarkers.joinToString(", ")}."
-            if (!concise && it.susceptibility.isNotEmpty()) lines += "Susceptibility: ${it.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" }}."
+            if (!concise && it.susceptibility.isNotEmpty()) lines += "Susceptibility: ${it.susceptibility.joinToString("; ") { s -> s.displayText() }}."
         }
         val noGrowth = cultures.filter { it.growthStatus == GrowthStatus.NO_GROWTH }
         if (noGrowth.isNotEmpty()) lines += "No-growth cultures: ${noGrowth.mapNotNull { it.specimen }.ifEmpty { listOf(noGrowth.size.toString()) }.joinToString(", ")}."
+        val pending = cultures.count { it.growthStatus == GrowthStatus.PENDING }
+        if (pending > 0) lines += "Preliminary/pending culture observations: $pending."
     }
 
     private fun dateRange(reports: List<ParsedReport>): String? = reports.mapNotNull { report -> DateNormalizer.normalize(report.dateSent).sortEpoch?.let { it to report.dateSent } }.sortedBy { it.first }.map { it.second }.let { dates -> if (dates.isEmpty()) null else "${dates.first()} to ${dates.last()}" }
     private fun ParsedLabValue.valueText(): String = ((if (comparator == NumericComparator.LESS_THAN) "<" else if (comparator == NumericComparator.GREATER_THAN) ">" else "") + (numericValue?.toString() ?: textValue.orEmpty()) + " " + unit.orEmpty()).trim()
+    private fun AntibioticResult.displayText(): String {
+        val mic = micValue?.let { value -> " (MIC ${micComparator.orEmpty()}$value ${micUnit.orEmpty()})" }.orEmpty()
+        return "$antibiotic $interpretation$mic".trim()
+    }
 
     private fun toSummaryJson(reports: List<ParsedReport>, lines: List<String>, warnings: List<String>): JSONObject {
         val normalizedDates = reports.map { it.dateSent to DateNormalizer.normalize(it.dateSent) }
@@ -96,32 +108,30 @@ class LocalSummaryBuilder {
             .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
                 val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
-                a.put(
-                    JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
-                        .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
-                        .put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "")
-                        .put("processor", r.processorName)
-                        // Full original report text, so a physician can tap a report
-                        // and see every word from the source document without
-                        // re-fetching it from NIMS.
-                        .put("raw_text", r.rawText)
-                )
+                a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
+                    .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
+                    .put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "")
+                    .put("processor", r.processorName).put("raw_text", r.rawText))
             } })
             .put("interpretation", JSONArray(lines))
             .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c ->
-                // Combine explicit resistance markers with any free-text comments
-                // extracted from the report (e.g. "Comment: repeat culture advised")
-                // so both surface in the Cultures tab instead of only the markers.
                 val commentParts = buildList {
                     if (c.explicitResistanceMarkers.isNotEmpty()) add("Markers: " + c.explicitResistanceMarkers.joinToString(", "))
                     addAll(c.comments)
                 }
-                a.put(
-                    JSONObject().put("collection_date", c.collectionDate.orEmpty()).put("specimen", c.specimen.orEmpty())
-                        .put("organism", c.organism.orEmpty()).put("status", c.growthStatus.name.lowercase())
-                        .put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> "${s.antibiotic} ${s.interpretation}" })
-                        .put("comment", commentParts.joinToString(" | "))
-                )
+                a.put(JSONObject()
+                    .put("collection_date", c.collectionDate.orEmpty()).put("reporting_date", c.reportingDate.orEmpty())
+                    .put("lab_study_number", c.labStudyNumber.orEmpty()).put("specimen", c.specimen.orEmpty()).put("site", c.site.orEmpty())
+                    .put("organism", c.organism.orEmpty()).put("organism_raw", c.organismRaw.orEmpty()).put("status", c.growthStatus.name.lowercase())
+                    .put("report_stage", c.reportStage.orEmpty()).put("bottle_name", c.bottleName.orEmpty())
+                    .put("set_number", c.setNumber ?: JSONObject.NULL).put("bottle_number", c.bottleNumber ?: JSONObject.NULL)
+                    .put("isolate_number", c.isolateNumber ?: JSONObject.NULL).put("gram_stain", c.gramStain.orEmpty())
+                    .put("susceptibility", JSONArray().also { results -> c.susceptibility.forEach { s ->
+                        results.put(JSONObject().put("antibiotic", s.antibiotic).put("interpretation", s.interpretation)
+                            .put("mic_value", s.micValue ?: JSONObject.NULL).put("mic_comparator", s.micComparator.orEmpty()).put("mic_unit", s.micUnit.orEmpty()))
+                    } })
+                    .put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> s.displayText() })
+                    .put("comment", commentParts.joinToString(" | ")))
             } })
             .put("lab_trend_table", JSONObject().put("columns", JSONArray(dateColumns)).put("rows", JSONArray().also { rows ->
                 rowsByCode.toSortedMap().forEach { (_, labsByDate) ->
@@ -132,27 +142,8 @@ class LocalSummaryBuilder {
             .put("warnings", JSONArray(warnings))
     }
 
-    private fun isPreferred(candidate: IndexedLab, current: IndexedLab): Boolean = compareValuesBy(
-        candidate,
-        current,
-        { confidenceRank(it.lab.confidence) },
-        { -it.reportIndex },
-        { -it.labIndex },
-        { stableLabKey(it.lab) }
-    ) > 0
-
-    private fun confidenceRank(value: ParseConfidence): Int = when (value) {
-        ParseConfidence.HIGH -> 2
-        ParseConfidence.MEDIUM -> 1
-        ParseConfidence.LOW -> 0
-    }
-
-    private fun stableLabKey(lab: ParsedLabValue): String = listOf(
-        lab.numericValue?.toString().orEmpty(),
-        lab.textValue.orEmpty(),
-        lab.unit.orEmpty(),
-        lab.comparator.name
-    ).joinToString("|")
-
+    private fun isPreferred(candidate: IndexedLab, current: IndexedLab): Boolean = compareValuesBy(candidate, current, { confidenceRank(it.lab.confidence) }, { -it.reportIndex }, { -it.labIndex }, { stableLabKey(it.lab) }) > 0
+    private fun confidenceRank(value: ParseConfidence): Int = when (value) { ParseConfidence.HIGH -> 2; ParseConfidence.MEDIUM -> 1; ParseConfidence.LOW -> 0 }
+    private fun stableLabKey(lab: ParsedLabValue): String = listOf(lab.numericValue?.toString().orEmpty(), lab.textValue.orEmpty(), lab.unit.orEmpty(), lab.comparator.name).joinToString("|")
     private data class IndexedLab(val lab: ParsedLabValue, val reportIndex: Int, val labIndex: Int)
 }
