@@ -22,18 +22,32 @@ object NimsCultureMetadataEnricher {
                 ?: bottleLine.find(source)?.groupValues?.getOrNull(1)?.trim()
                 ?: reportHeadings.getOrNull(index)
                 ?: reportHeadings.singleOrNull()
+            val metadataText = listOfNotNull(heading, source, fullReportText.takeIf { values.size == 1 }).joinToString(" ")
             val bottle = value.bottleNumber
-                ?: bottleNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
+                ?: bottleNumber.find(metadataText)?.groupValues?.getOrNull(1)?.let(::ordinal)
+                ?: namedOrdinal(metadataText, "bottle")
             val set = value.setNumber
-                ?: setNumber.find(heading.orEmpty())?.groupValues?.getOrNull(1)?.let(::ordinal)
-            val stage = value.reportStage?.takeUnless { it.isBlank() || it == "unspecified" }
-                ?: stage(heading.orEmpty() + " " + source.take(300))
+                ?: setNumber.find(metadataText)?.groupValues?.getOrNull(1)?.let(::ordinal)
+                ?: namedOrdinal(metadataText, "set")
+            val reportStage = value.reportStage?.takeUnless { it.isBlank() || it == "unspecified" }
+                ?: stage(metadataText)
             value.copy(
                 bottleName = heading,
                 bottleNumber = bottle,
                 setNumber = set,
-                reportStage = stage
+                reportStage = reportStage
             )
+        }
+    }
+
+    private fun namedOrdinal(text: String, noun: String): Int? {
+        val lower = text.lowercase()
+        return when {
+            lower.contains("first $noun") -> 1
+            lower.contains("second $noun") -> 2
+            lower.contains("third $noun") -> 3
+            lower.contains("fourth $noun") -> 4
+            else -> null
         }
     }
 
