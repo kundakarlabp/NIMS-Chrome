@@ -23,7 +23,7 @@ class NimsCultureTextParserTest {
             COLLECTION: PERIPHERAL
         """.trimIndent()
 
-        val result = NimsCultureTextParser.parse(text).single()
+        val result = NimsCultureMetadataEnricher.enrich(NimsCultureTextParser.parse(text)).single()
         assertEquals("B21921", result.labStudyNumber)
         assertEquals(2, result.bottleNumber)
         assertEquals(1, result.setNumber)
@@ -55,7 +55,7 @@ class NimsCultureTextParserTest {
             CEFTRIAXONE CIPROFLOXACIN
         """.trimIndent()
 
-        val result = NimsCultureTextParser.parse(text)
+        val result = NimsCultureMetadataEnricher.enrich(NimsCultureTextParser.parse(text))
         assertEquals(2, result.size)
         assertTrue(result.any { it.reportStage == "48-hour preliminary" && it.growthStatus == GrowthStatus.NO_GROWTH })
         assertTrue(result.any { it.reportStage == "final" && it.organism == "Klebsiella pneumoniae" })
