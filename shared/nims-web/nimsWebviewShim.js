@@ -1,191 +1,106 @@
-// Android-only compatibility adapter for the live NIMS WebView runtime.
-//
-// The NIMS pages currently expose three WebView-only failures seen on-device:
-// 1. date_time is referenced before its defining asset is available;
-// 2. tabmenu.js reads .offset().left even when the selected element is absent;
-// 3. dynamically-created iframes call ajaxCompleteTab() without the iframe arg.
-//
-// This adapter fixes only those runtime contracts. It does not click menus,
-// submit forms, read credentials, or alter the report-extraction workflow.
+// Minimal Android WebView compatibility adapter for NIMS pages.
+// It deliberately avoids intercepting jQuery assignment or rewriting page scripts.
 (function (w) {
   "use strict";
   if (!w || !w.document) return;
 
-  var ALLOWED_HOSTS = { "nimsts.edu.in": true, "www.nimsts.edu.in": true };
   try {
-    if (!ALLOWED_HOSTS[w.location.hostname] || w.location.protocol !== "https:") return;
-  } catch (e) {
+    if (w.location.protocol !== "https:" || !/^(?:www\.)?nimsts\.edu\.in$/i.test(w.location.hostname)) return;
+  } catch (_error) {
     return;
   }
 
-  if (typeof w.date_time !== "function") {
-    w.date_time = function () { return ""; };
-  }
-
-  // NEW (not previously present anywhere): mark that injection actually ran
-  // in THIS window, and capture the full uncaught-error message+stack before
-  // Android's onConsoleMessage truncates it to ~220 chars. Self-contained
-  // (does not depend on NimsReportCore having loaded) so it works even if the
-  // core/utils/bridge payload failed to concatenate or parse.
   w.__nimsInjectedAt = Date.now();
+
+  // Several NIMS pages call these globals before the defining legacy script has
+  // loaded. Safe no-op fallbacks prevent the page from aborting during login,
+  // menu rendering and report-popup setup. A later page definition may replace
+  // them normally.
+  if (typeof w.date_time !== "function") w.date_time = function () { return ""; };
+  if (typeof w.refresh !== "function") w.refresh = function () { return undefined; };
+
   if (!w.__nimsErrorCaptureInstalled) {
     w.__nimsErrorCaptureInstalled = true;
-    var previousOnError = w.onerror;
-    w.onerror = function (message, source, lineno, colno, error) {
+    var previous = w.onerror;
+    w.onerror = function (message, source, line, column, error) {
       w.__nimsLastError = {
         message: String(message || ""),
         source: String(source || ""),
-        line: lineno || 0,
-        column: colno || 0,
+        line: line || 0,
+        column: column || 0,
         stack: error && error.stack ? String(error.stack).slice(0, 2000) : ""
       };
-      if (typeof previousOnError === "function") {
-        try { return previousOnError.call(w, message, source, lineno, colno, error); } catch (e) { /* ignore */ }
+      if (typeof previous === "function") {
+        try { return previous.call(w, message, source, line, column, error); } catch (_ignored) { /* continue */ }
       }
       return false;
     };
   }
 
-  function patchOffset(jq) {
-    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.__nimsSafeOffset) return false;
+  function patchOffset() {
+    var jq = w.jQuery || w.$;
+    if (!jq || !jq.fn || typeof jq.fn.offset !== "function" || jq.fn.offset.__nimsSafeOffset) return;
     var original = jq.fn.offset;
-    jq.fn.offset = function () {
+    var wrapped = function () {
       var value;
       try {
         value = original.apply(this, arguments);
       } catch (error) {
-        if (arguments.length) throw error;
+        if (arguments.length > 0) throw error;
         value = null;
       }
       return value == null && arguments.length === 0 ? { top: 0, left: 0 } : value;
     };
-    jq.fn.__nimsSafeOffset = true;
-    return true;
+    wrapped.__nimsSafeOffset = true;
+    wrapped.__nimsOriginal = original;
+    jq.fn.offset = wrapped;
   }
-
-  // Patch the bundled fallback immediately. Then patch one subsequent jQuery
-  // assignment, which covers the page replacing the fallback with its own copy.
-  patchOffset(w.jQuery || w.$);
-  (function armNextJqueryAssignment() {
-    var descriptor;
-    try { descriptor = Object.getOwnPropertyDescriptor(w, "jQuery"); } catch (e) { descriptor = null; }
-    if (descriptor && descriptor.configurable === false) return;
-    var current = w.jQuery;
-    try {
-      Object.defineProperty(w, "jQuery", {
-        configurable: true,
-        enumerable: descriptor ? descriptor.enumerable !== false : true,
-        get: function () { return current; },
-        set: function (value) {
-          current = value;
-          patchOffset(value);
-          try {
-            Object.defineProperty(w, "jQuery", {
-              configurable: true,
-              enumerable: true,
-              writable: true,
-              value: value
-            });
-          } catch (e) { /* keep the accessor if the page prevents replacement */ }
-        }
-      });
-    } catch (e) { /* bounded polling below still patches later copies */ }
-  })();
-
-  var lastLoadedFrame = null;
-  var lastLoadedAt = 0;
-  var FRAME_MAX_AGE_MS = 2500;
 
   function isFrame(value) {
-    return Boolean(value && /^(IFRAME|FRAME)$/i.test(value.tagName || "") && value.ownerDocument === w.document);
+    return Boolean(value && /^(?:IFRAME|FRAME)$/i.test(String(value.tagName || "")));
   }
 
-  function isNimsTabFrame(frame) {
-    if (!isFrame(frame)) return false;
-    var id = String(frame.id || frame.name || "");
-    if (id === "frmMainMenu") return true;
-    if (/_iframe$/i.test(id)) return true;
-    try {
-      var src = String(frame.getAttribute("src") || frame.src || "");
-      return /\/AHIMSG5\/|\/HISInvestigationG5\/|\/HISClinical\//i.test(src);
-    } catch (e) {
-      return false;
+  function recentNimsFrame() {
+    var frames = w.document.querySelectorAll("iframe,frame");
+    for (var i = frames.length - 1; i >= 0; i -= 1) {
+      var frame = frames[i];
+      var id = String(frame.id || frame.name || "");
+      var src = "";
+      try { src = String(frame.getAttribute("src") || frame.src || ""); } catch (_ignored) { src = ""; }
+      if (/_iframe$/i.test(id) || /\/(?:AHIMSG5|HISInvestigationG5|HISClinical)\//i.test(src)) return frame;
     }
+    return null;
   }
 
-  function rememberLoadedFrame(event) {
-    var frame = event && (event.target || event.srcElement);
-    if (!isNimsTabFrame(frame)) return;
-    lastLoadedFrame = frame;
-    lastLoadedAt = Date.now();
-  }
-
-  w.document.addEventListener("load", rememberLoadedFrame, true);
-
-  function recentLoadedFrame() {
-    if (!lastLoadedFrame || !lastLoadedFrame.isConnected) return null;
-    if (Date.now() - lastLoadedAt > FRAME_MAX_AGE_MS) return null;
-    return lastLoadedFrame;
-  }
-
-  function eventFrame() {
-    try {
-      var event = w.event;
-      var frame = event && (event.currentTarget || event.target || event.srcElement);
-      return isNimsTabFrame(frame) ? frame : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function isContentDocumentRace(error) {
-    var message = String(error && error.message || error || "");
-    return /contentDocument/i.test(message) && /undefined|null|cannot read|not an object/i.test(message);
-  }
-
-  function wrapAjaxCompleteTab(fn) {
-    if (typeof fn !== "function" || fn.__nimsFrameArgumentAdapter) return fn;
-    var wrapped = function (obj) {
-      var receiver = this;
-      var frame = isNimsTabFrame(obj) ? obj : eventFrame() || recentLoadedFrame();
+  function patchAjaxCompleteTab() {
+    var original = w.ajaxCompleteTab;
+    if (typeof original !== "function" || original.__nimsFrameArgumentAdapter) return;
+    var wrapped = function (candidate) {
+      var frame = isFrame(candidate) ? candidate : recentNimsFrame();
       if (!frame) return undefined;
-      var attempts = 0;
-      function invoke() {
-        attempts += 1;
-        try {
-          return fn.call(receiver, frame);
-        } catch (error) {
-          if (isContentDocumentRace(error) && attempts < 3) {
-            w.setTimeout(invoke, attempts * 100);
-            return undefined;
-          }
-          postRuntime("nims_runtime_error", "ajaxCompleteTab: " + String(error && error.message || error));
-          if (w.console && w.console.error) w.console.error("NIMS ajaxCompleteTab compatibility failure", error);
-          throw error;
-        }
+      try {
+        return original.call(this, frame);
+      } catch (error) {
+        var message = String(error && error.message || error || "");
+        if (/contentDocument|undefined|null|cannot read/i.test(message)) return undefined;
+        throw error;
       }
-      return invoke();
     };
     wrapped.__nimsFrameArgumentAdapter = true;
-    wrapped.__nimsOriginal = fn;
-    return wrapped;
+    wrapped.__nimsOriginal = original;
+    w.ajaxCompleteTab = wrapped;
   }
 
-  function patchAvailableFunctions() {
-    try { patchOffset(w.jQuery || w.$); } catch (e) { /* page still loading */ }
-    try {
-      if (typeof w.ajaxCompleteTab === "function" && !w.ajaxCompleteTab.__nimsFrameArgumentAdapter) {
-        w.ajaxCompleteTab = wrapAjaxCompleteTab(w.ajaxCompleteTab);
-      }
-    } catch (error) {
-      postRuntime("nims_runtime_error", "ajaxCompleteTab patch: " + String(error && error.message || error));
-    }
-    reportReady(phase || "check");
+  function patch() {
+    try { patchOffset(); } catch (_ignoredOffset) { /* page still loading */ }
+    try { patchAjaxCompleteTab(); } catch (_ignoredTab) { /* page still loading */ }
+    if (typeof w.date_time !== "function") w.date_time = function () { return ""; };
+    if (typeof w.refresh !== "function") w.refresh = function () { return undefined; };
   }
 
-  [0, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000].forEach(function (delay) {
-    w.setTimeout(patchAvailableFunctions, delay);
+  [0, 25, 75, 150, 300, 600, 1200, 2500, 5000].forEach(function (delay) {
+    w.setTimeout(patch, delay);
   });
-  w.addEventListener("DOMContentLoaded", patchAvailableFunctions, { once: true });
-  w.addEventListener("load", patchAvailableFunctions, { once: true });
+  w.document.addEventListener("DOMContentLoaded", patch, { once: true });
+  w.addEventListener("load", patch, { once: true });
 })(typeof window !== "undefined" ? window : null);
