@@ -15,10 +15,8 @@ import kotlin.coroutines.coroutineContext
 class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
     private val appContext = context.applicationContext
 
-    override suspend fun extract(pdfBytes: ByteArray, onProgress: ((Int, Int) -> Unit)?): PdfExtractionResult = mutex.withPermit {
-        if (pdfBytes.size > PdfExtractionLimits.MAX_LOCAL_PDF_BYTES) {
-            return@withPermit PdfExtractionResult.TooLarge(pdfBytes.size, PdfExtractionLimits.MAX_LOCAL_PDF_BYTES)
-        }
+    override suspend fun extract(pdfBytes: ByteArray, onProgress: ((Int, Int) -> Unit)?): PdfExtractionResult = extractionSlots.withPermit {
+        if (pdfBytes.size > PdfExtractionLimits.MAX_LOCAL_PDF_BYTES) return@withPermit PdfExtractionResult.TooLarge(pdfBytes.size, PdfExtractionLimits.MAX_LOCAL_PDF_BYTES)
         if (!pdfBytes.startsWithPdfMagic()) return@withPermit PdfExtractionResult.Corrupt("This PDF report could not be read on-device.")
         withContext(Dispatchers.IO) {
             init(appContext)
@@ -28,26 +26,16 @@ class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
                     val pages = document.numberOfPages
                     if (pages <= 0) return@withContext PdfExtractionResult.ImageOnly(0)
                     if (pages > PdfExtractionLimits.MAX_PDF_PAGES) return@withContext PdfExtractionResult.TooManyPages(pages, PdfExtractionLimits.MAX_PDF_PAGES)
-                    val out = StringBuilder()
-                    val warnings = mutableListOf<String>()
-                    for (page in 1..pages) {
-                        coroutineContext.ensureActive()
-                        val stripper = PDFTextStripper().apply {
-                            sortByPosition = true
-                            startPage = page
-                            endPage = page
-                        }
-                        val pageText = stripper.getText(document).orEmpty()
-                        if (out.isNotEmpty()) out.append("\n\n--- Page ").append(page).append(" of ").append(pages).append(" ---\n")
-                        val remaining = PdfExtractionLimits.MAX_EXTRACTED_TEXT_CHARS - out.length
-                        if (remaining <= 0) {
-                            warnings += "Extracted PDF text was truncated at the local safety limit."
-                            break
-                        }
-                        out.append(pageText.take(remaining))
-                        onProgress?.invoke(page, pages)
-                    }
-                    val normalized = PdfExtractedTextNormalizer.normalize(out.toString())
+                    coroutineContext.ensureActive()
+                    val text = PDFTextStripper().apply {
+                        sortByPosition = true
+                        startPage = 1
+                        endPage = pages
+                    }.getText(document).orEmpty()
+                    onProgress?.invoke(pages, pages)
+                    val truncated = text.length > PdfExtractionLimits.MAX_EXTRACTED_TEXT_CHARS
+                    val normalized = PdfExtractedTextNormalizer.normalize(text.take(PdfExtractionLimits.MAX_EXTRACTED_TEXT_CHARS))
+                    val warnings = if (truncated) listOf("Extracted PDF text was truncated at the local safety limit.") else emptyList()
                     if (normalized.length < PdfExtractionLimits.MIN_USEFUL_TEXT_CHARS) PdfExtractionResult.ImageOnly(pages)
                     else PdfExtractionResult.Success(normalized, pages, warnings)
                 }
@@ -62,7 +50,10 @@ class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
     }
 
     companion object {
-        private val mutex = Semaphore(1)
+        // The bulk pipeline already limits concurrent report work. Two extraction
+        // slots remove the previous global serialization while keeping peak memory
+        // bounded on mid-range Android devices.
+        private val extractionSlots = Semaphore(2)
         @Volatile private var initialized = false
         private fun init(context: Context) {
             if (!initialized) synchronized(this) {

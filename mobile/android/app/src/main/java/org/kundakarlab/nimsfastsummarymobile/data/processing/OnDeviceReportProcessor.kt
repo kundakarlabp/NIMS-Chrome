@@ -16,12 +16,15 @@ class OnDeviceReportProcessor(
     override val capabilities = setOf(ProcessingCapability.HTML, ProcessingCapability.PLAIN_TEXT, ProcessingCapability.PDF, ProcessingCapability.LABS, ProcessingCapability.CULTURES, ProcessingCapability.SUMMARY)
 
     override suspend fun parseReport(input: ReportInput): ProcessingResult<ParsedReport> {
-        if (!input.isPdf()) return textProcessor.parseReport(input)
+        if (!input.isPdf()) {
+            val parsed = textProcessor.parseReport(input)
+            return refineCultures(parsed, input.bytes.toString(Charsets.UTF_8), input.dateSent)
+        }
         return try {
             when (val extracted = pdfExtractor.extract(input.bytes, onPdfProgress)) {
                 is PdfExtractionResult.Success -> {
                     val textInput = input.copy(contentType = "text/plain; charset=utf-8", bytes = extracted.text.toByteArray(Charsets.UTF_8))
-                    when (val parsed = textProcessor.parseReport(textInput)) {
+                    when (val parsed = refineCultures(textProcessor.parseReport(textInput), extracted.text, input.dateSent)) {
                         is ProcessingResult.Success -> {
                             val warnings = parsed.warnings + extracted.warnings + "Processed from PDF on-device."
                             ProcessingResult.Success(parsed.value.copy(warnings = parsed.value.warnings + warnings, processorName = "On-device PDF"), "On-device PDF", warnings)
@@ -42,6 +45,24 @@ class OnDeviceReportProcessor(
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         }
+    }
+
+    private fun refineCultures(
+        result: ProcessingResult<ParsedReport>,
+        extractedText: String,
+        fallbackDate: String
+    ): ProcessingResult<ParsedReport> {
+        if (result !is ProcessingResult.Success) return result
+        val nimsCultures = NimsCultureMetadataEnricher.enrich(
+            NimsCultureTextParser.parse(extractedText, fallbackDate),
+            extractedText
+        )
+        if (nimsCultures.isEmpty()) return result
+        return ProcessingResult.Success(
+            value = result.value.copy(cultures = nimsCultures, rawText = extractedText),
+            processorName = result.processorName,
+            warnings = result.warnings
+        )
     }
 
     override suspend fun summarize(reports: List<ParsedReport>, mode: SummaryMode): ProcessingResult<ProcessingSummary> = textProcessor.summarize(reports, mode)
