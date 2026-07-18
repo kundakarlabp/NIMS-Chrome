@@ -54,7 +54,8 @@ class OnDeviceReportProcessor(
     ): ProcessingResult<ParsedReport> {
         if (result !is ProcessingResult.Success) return result
         val nimsCultures = NimsCultureMetadataEnricher.enrich(
-            NimsCultureTextParser.parse(extractedText, fallbackDate)
+            NimsCultureTextParser.parse(extractedText, fallbackDate),
+            extractedText
         )
         if (nimsCultures.isEmpty()) return result
         return ProcessingResult.Success(
