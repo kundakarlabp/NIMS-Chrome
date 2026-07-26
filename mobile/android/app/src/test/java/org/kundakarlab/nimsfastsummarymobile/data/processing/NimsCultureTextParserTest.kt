@@ -34,6 +34,24 @@ class NimsCultureTextParserTest {
         val levofloxacin = result.susceptibility.first { it.antibiotic == "Levofloxacin" }
         assertEquals(0.25, levofloxacin.micValue!!, 0.001)
         assertEquals("Susceptible", levofloxacin.interpretation)
+        assertTrue(result.susceptibility.filterNot { it.antibiotic == "Levofloxacin" }.all { it.micValue == null })
+    }
+
+    @Test
+    fun micDoesNotCrossAnAntibioticOrLineBoundary() {
+        val text = """
+            Sample Processed: Blood
+            CULTURE REPORT
+            CULTURE SHOWS GROWTH OF KLEBSIELLA PNEUMONIAE
+            SENSITIVITY REPORT
+            AMIKACIN
+            MEROPENEM MIC <= 1 mg/L
+        """.trimIndent()
+
+        val result = NimsCultureTextParser.parse(text).single().susceptibility
+
+        assertEquals(null, result.first { it.antibiotic == "Amikacin" }.micValue)
+        assertEquals(1.0, result.first { it.antibiotic == "Meropenem" }.micValue!!, 0.001)
     }
 
     @Test

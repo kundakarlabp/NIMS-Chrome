@@ -35,11 +35,23 @@ class ReportRowSelectorTest {
 
         val selected = ReportRowSelector.select(rows, NimsAnalysisMode.FAST)
 
-        assertEquals(8, selected.size)
-        assertEquals(3, selected.count { it.getJSONArray("report_tags").toString().contains("cbc") })
-        assertEquals(3, selected.count { it.getJSONArray("report_tags").toString().contains("rft") })
+        assertEquals(12, selected.size)
+        assertEquals(5, selected.count { it.getJSONArray("report_tags").toString().contains("cbc") })
+        assertEquals(5, selected.count { it.getJSONArray("report_tags").toString().contains("rft") })
         assertTrue(selected.any { it.getString("report_name") == "Culture" })
         assertTrue(selected.any { it.getString("report_name") == "CRP" })
+    }
+
+    @Test
+    fun fastModeNeverDropsCulturesBecauseOfGlobalCap() {
+        val rows = JSONArray()
+        repeat(30) { rows.put(row("Culture $it", "culture")) }
+        repeat(10) { rows.put(row("CBC $it", "cbc")) }
+
+        val selected = ReportRowSelector.select(rows, NimsAnalysisMode.FAST)
+
+        assertEquals(30, selected.count { it.getJSONArray("report_tags").toString().contains("culture") })
+        assertEquals(5, selected.count { it.getJSONArray("report_tags").toString().contains("cbc") })
     }
 
     @Test

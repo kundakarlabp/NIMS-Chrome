@@ -918,17 +918,21 @@
     if (mode === "bulk_cultures_only") return sorted.filter((row) => (row.report_tags || []).includes("culture"));
     if (mode === "test_direct") return sorted.filter((row) => (row.report_tags || []).includes("cbc")).slice(0, 1).concat(sorted.slice(0, 1)).slice(0, 1);
     const selected = [];
-    const counts = { cbc: 0, combined: 0 };
+    const counts = { cbc: 0, rft: 0, lft: 0, electrolytes: 0 };
     for (const row of sorted) {
-      if (selected.length >= 20) break;
       const tags = row.report_tags || [];
       if (tags.includes("culture") || tags.includes("inflammatory")) selected.push(row);
-      else if (tags.includes("cbc") && counts.cbc < 3) {
+      else if (tags.includes("cbc") && counts.cbc < 5) {
         counts.cbc += 1;
         selected.push(row);
-      } else if ((tags.includes("rft") || tags.includes("lft") || tags.includes("electrolytes")) && counts.combined < 3) {
-        counts.combined += 1;
-        selected.push(row);
+      } else {
+        for (const tag of ["rft", "lft", "electrolytes"]) {
+          if (tags.includes(tag) && counts[tag] < 5) {
+            counts[tag] += 1;
+            selected.push(row);
+            break;
+          }
+        }
       }
     }
     return selected;

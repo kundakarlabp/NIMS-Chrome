@@ -26,18 +26,20 @@ internal object ReportRowSelector {
     private fun selectFast(rows: List<JSONObject>): List<JSONObject> {
         val selected = mutableListOf<JSONObject>()
         var cbc = 0
-        var chemistry = 0
+        val chemistry = mutableMapOf("rft" to 0, "lft" to 0, "electrolytes" to 0)
         for (row in rows) {
-            if (selected.size >= 20) break
             when {
                 row.hasTag("culture") || row.hasTag("inflammatory") -> selected += row
-                row.hasTag("cbc") && cbc < 3 -> {
+                row.hasTag("cbc") && cbc < 5 -> {
                     selected += row
                     cbc += 1
                 }
-                (row.hasTag("rft") || row.hasTag("lft") || row.hasTag("electrolytes")) && chemistry < 3 -> {
-                    selected += row
-                    chemistry += 1
+                else -> {
+                    val tag = chemistry.keys.firstOrNull { row.hasTag(it) && chemistry.getValue(it) < 5 }
+                    if (tag != null) {
+                        selected += row
+                        chemistry[tag] = chemistry.getValue(tag) + 1
+                    }
                 }
             }
         }

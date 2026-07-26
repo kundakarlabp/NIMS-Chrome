@@ -217,22 +217,12 @@ private fun PortalScreen(
 
 @Composable
 private fun SourceReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
-    // Tracks which single report card is expanded (index into `reports`, -1 = none).
-    // Tapping a card toggles it; tapping another collapses the previous one so
-    // only one full report is shown at a time, keeping the list fast to scroll.
-    var expandedIndex by remember { mutableStateOf(-1) }
     LazyColumn(modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { ScreenTitle("Source reports", reports.size) }
         if (reports.isEmpty()) item { ResultCard("No reports parsed yet.") }
-        itemsIndexed(reports) { index, report ->
-            val expanded = expandedIndex == index
-            val expandable = report.rawText.isNotBlank()
+        items(reports) { report ->
             ResultCard {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = expandable) { expandedIndex = if (expanded) -1 else index }
-                ) {
+                Column(Modifier.fillMaxWidth()) {
                     Text(report.reportName.ifBlank { "Report" }, fontWeight = FontWeight.Bold)
                     Text(
                         "${report.dateSent.ifBlank { "No date" }} · ${report.type}",
@@ -245,27 +235,7 @@ private fun SourceReportsScreen(modifier: Modifier, reports: List<UiSourceReport
                     if (report.notes.isNotBlank()) {
                         Text(report.notes, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (expandable) {
-                        Text(
-                            if (expanded) "Tap to collapse" else "Tap to view the full original report",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                // Full original report text, copied verbatim from the source
-                // document, exactly as requested — every word, selectable/copyable.
-                if (expanded && expandable) {
-                    SelectionContainer {
-                        Text(
-                            report.rawText,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(6.dp))
-                                .padding(8.dp)
-                        )
-                    }
+                    Text(report.sourceAction, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

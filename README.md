@@ -68,7 +68,7 @@ source .venv/bin/activate
 15. Confirm helper status shows `ok`.
 16. Click `Discover Mapping`. This performs one controlled `View Report` click only after report rows exist.
 17. Click `Test Direct Fetch`. This should fetch one report silently without visibly opening a PDF and validate the mapping only if the helper parses at least one value or culture.
-18. Only after `Test Direct Fetch` succeeds, click `Bulk Fast Summary`, `Bulk Cultures Only`, or `Bulk Full Summary`.
+18. Only after `Test Direct Fetch` succeeds, click `Quick Review`, `Bulk Cultures Only`, or `Bulk Full Summary`.
 19. Verify the generated values against source reports before clinical decisions.
 
 ### Desktop With Railway Helper
@@ -201,7 +201,7 @@ After mock testing, test only on de-identified real PDF/report output before any
 
 `Bulk Fast Summary` and `Bulk Full Summary` use direct silent fetch only. They do not use the popup/open-close fallback by default. If the mapping is not validated by a successful `Test Direct Fetch` in the current session, they stop with `Direct report mapping is not validated. Run Discover Mapping, then Test Direct Fetch first.`
 
-`Bulk Fast Summary` initially selects latest 3 CBC reports, latest 3 renal/liver/electrolyte reports, all culture reports, CRP/procalcitonin when present, and caps the run at 20 reports. `Bulk Full Summary` processes all visible rows with concurrency 3, capped internally at 5.
+`Quick Review` selects every visible culture report, the latest 5 CBC reports, the latest 5 reports from each renal/liver/electrolyte group, and CRP/procalcitonin when present. Cultures are processed and shown first; laboratory processing continues afterward. There is no global cap that can silently omit microbiology. `Bulk Full Summary` remains the advanced all-visible-reports mode.
 
 `Manual Popup Fallback` remains available as a separate explicit button. It may visibly open reports one by one and is expected to be slow.
 

@@ -24,6 +24,7 @@ import androidx.webkit.WebViewFeature
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -68,6 +70,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -216,7 +221,7 @@ class MainActivity : ComponentActivity() {
                     onOpenCrSearchDirect = { openCrSearchDirect() },
                     onCopyFullLog = { copyFullLog() },
                     navigationInProgress = navigationInProgress,
-                    onFetchReports = { log("Fetch Reports tapped"); runMode("bulk_full") },
+                    onFetchReports = { log("Quick Review tapped"); runMode("bulk_fast") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
                     physicianNote = physicianNote,
@@ -830,7 +835,26 @@ class MainActivity : ComponentActivity() {
                 }
                 listOf(result)
             } else {
-                processBulk(prepared).map { it.getOrElse { error -> errorParsedReport(JSONObject(), error.message ?: "Report failed") } }
+                val cultureRequests = prepared.filter { request ->
+                    val tags = request.row.optJSONArray("report_tags")?.toString().orEmpty()
+                    tags.contains("culture", ignoreCase = true)
+                }
+                val otherRequests = prepared.filterNot { it in cultureRequests }
+                val cultureReports = processBulk(cultureRequests)
+                if (cultureReports.isNotEmpty()) {
+                    when (val partial = withContext(Dispatchers.IO) {
+                        processingRouter.summarize(cultureReports, SummaryMode.CULTURES_ONLY)
+                    }) {
+                        is ProcessingResult.Success -> {
+                            val partialJson = partial.value.helperJson ?: localSummaryJson(cultureReports, partial.value.text)
+                            uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(partialJson, physicianNote)
+                            selectedTab = 3
+                            setState(AppState.FETCHING, "Cultures ready. Continuing with laboratory trends…")
+                        }
+                        else -> Unit
+                    }
+                }
+                cultureReports + processBulk(otherRequests)
             }
             val summaryMode = when (mode) {
                 "bulk_full" -> SummaryMode.FULL
@@ -844,7 +868,10 @@ class MainActivity : ComponentActivity() {
                     sanitizedSummaryText = json.toString()
                     settings.saveLastSummaryJson(sanitizedSummaryText)
                     uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(json, physicianNote)
-                    selectedTab = 4
+                    val hasActionableCulture = uiSummary?.cultures.orEmpty().any {
+                        it.status.equals("growth_detected", true) || it.status.equals("pending", true)
+                    }
+                    selectedTab = if (hasActionableCulture) 3 else 2
                     setState(AppState.SUMMARY_READY, "Summary ready.")
                 }
                 is ProcessingResult.Unsupported -> setState(AppState.ERROR, summaryResult.reason)
@@ -860,18 +887,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun processBulk(prepared: List<PreparedReportRequest>): List<Result<ParsedReport>> = coroutineScope {
+    private suspend fun processBulk(prepared: List<PreparedReportRequest>): List<ParsedReport> = coroutineScope {
         val semaphore = Semaphore(2)
         prepared.mapIndexed { index, request ->
             async(Dispatchers.IO) {
                 semaphore.withPermit {
                     ensureActive()
                     try {
-                        Result.success(fetchAndParseOne(request, index, prepared.size))
+                        fetchAndParseOne(request, index, prepared.size)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
-                        Result.failure(error)
+                        errorParsedReport(request.row, error.message ?: "Report failed")
                     }
                 }
             }
@@ -917,7 +944,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", if (report.labs.isEmpty() && report.cultures.isEmpty()) "Open source report in NIMS" else "").put("raw_text", report.rawText)) } })
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", "Open source report in NIMS")) } })
         .put("interpretation", JSONArray(text.lines()))
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
@@ -1247,9 +1274,9 @@ private fun NimsFastSummaryApp(
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
-            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
+            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty()) { onTabSelected(0) }
             2 -> TrendsScreen(contentModifier, summary?.labTrends.orEmpty())
-            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty())
+            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty()) { onTabSelected(0) }
             else -> SummaryScreen(
                 modifier = contentModifier,
                 summary = summary,
@@ -1338,7 +1365,7 @@ private fun NimsWebViewScreen(
                 Button(
                     onClick = onFetchReports,
                     enabled = !navigationInProgress
-                ) { Text(if (navigationInProgress) "Fetching…" else "Fetch Reports") }
+                ) { Text(if (navigationInProgress) "Starting…" else "Quick Review") }
             }
             if (state == AppState.FETCHING) {
                 item { OutlinedButton(onClick = onCancelProcessing) { Text("Stop") } }
@@ -1393,10 +1420,10 @@ private fun NimsWebViewScreen(
 }
 
 @Composable
-private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
+private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>, onOpenSource: () -> Unit) {
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { SectionTitle("Source reports", "${reports.size} reports") }
-        if (reports.isEmpty()) item { EmptyCard("Tap Fetch Reports on the NIMS tab to load reports.") }
+        if (reports.isEmpty()) item { EmptyCard("Tap Quick Review on the NIMS tab to load reports.") }
         items(reports) { report ->
             ResultCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1413,6 +1440,7 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall
                 )
+                TextButton(onClick = onOpenSource) { Text(report.sourceAction) }
             }
         }
     }
@@ -1420,46 +1448,50 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
 
 @Composable
 private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
-    // Date range filter state
-    var filterFrom by remember { mutableStateOf("") }
-    var filterTo by remember { mutableStateOf("") }
-    val filtered = remember(rows, filterFrom, filterTo) {
-        if (filterFrom.isBlank() && filterTo.isBlank()) rows
-        else rows.filter { row ->
-            val epoch = DateNormalizer.normalize(row.latestDate).sortEpoch ?: return@filter true
-            val fromEpoch = if (filterFrom.isBlank()) null else DateNormalizer.normalize(filterFrom).sortEpoch
-            val toEpoch = if (filterTo.isBlank()) null else DateNormalizer.normalize(filterTo).sortEpoch
-            (fromEpoch == null || epoch >= fromEpoch) && (toEpoch == null || epoch <= toEpoch)
+    var windowDays by remember { mutableStateOf<Int?>(14) }
+    var selectedPanel by remember { mutableStateOf("All") }
+    val filtered = remember(rows, windowDays, selectedPanel) {
+        rows.mapNotNull { row ->
+            if (selectedPanel != "All" && labPanel(row.parameter) != selectedPanel) return@mapNotNull null
+            val dated = row.history.mapNotNull { point ->
+                DateNormalizer.normalize(point.first).sortEpoch?.let { Triple(it, point.first, point.second) }
+            }.sortedByDescending { it.first }
+            val latestEpoch = dated.firstOrNull()?.first
+            val cutoff = if (windowDays == null || latestEpoch == null) null else latestEpoch - windowDays!! * 86_400_000L
+            val kept = dated.filter { cutoff == null || it.first >= cutoff }.map { it.second to it.third }
+            if (kept.isEmpty()) null else row.copy(
+                latestDate = kept.first().first,
+                latestValue = kept.first().second,
+                previousDate = kept.drop(1).firstOrNull()?.first,
+                previousValue = kept.drop(1).firstOrNull()?.second,
+                history = kept
+            )
         }
     }
 
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { SectionTitle("Lab Trends", "${filtered.size} parameters") }
 
-        // Date range filter row
         item {
             Card(
                 Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F4F8))
             ) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Filter by date range", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = filterFrom, onValueChange = { filterFrom = it },
-                            label = { Text("From (e.g. 01-Jan-2024)") },
-                            modifier = Modifier.weight(1f), singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall
-                        )
-                        OutlinedTextField(
-                            value = filterTo, onValueChange = { filterTo = it },
-                            label = { Text("To (e.g. 31-Dec-2024)") },
-                            modifier = Modifier.weight(1f), singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall
-                        )
+                    Text("Panel", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(listOf("All", "Hemogram", "Renal / metabolic", "Liver", "Inflammatory", "Other")) { panel ->
+                            OutlinedButton(onClick = { selectedPanel = panel }) { Text((if (selectedPanel == panel) "✓ " else "") + panel) }
+                        }
                     }
-                    if (filterFrom.isNotBlank() || filterTo.isNotBlank()) {
-                        TextButton(onClick = { filterFrom = ""; filterTo = "" }, Modifier.align(Alignment.End)) { Text("Clear filter") }
+                    Text("Time window (relative to latest available result)", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(listOf(7, 14, 30, 0)) { days ->
+                            val label = if (days == 0) "All" else "${days}d"
+                            OutlinedButton(onClick = { windowDays = days.takeIf { it > 0 } }) {
+                                Text((if (windowDays == days.takeIf { it > 0 }) "✓ " else "") + label)
+                            }
+                        }
                     }
                 }
             }
@@ -1468,42 +1500,13 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
         if (filtered.isEmpty()) {
             item {
                 EmptyCard(
-                    if (rows.isEmpty()) "Tap Fetch Reports to generate lab trends."
-                    else "No trends match the selected date range."
+                    if (rows.isEmpty()) "Tap Quick Review to generate lab trends."
+                    else "No results match this panel and time window."
                 )
             }
         } else {
             // Group by category
-            val groups = filtered.groupBy { row ->
-                when {
-                    row.parameter.uppercase().let { p ->
-                        p.startsWith("HEM") || p.startsWith("HAEM") || p.startsWith("WBC") || p.startsWith("TLC") ||
-                        p.contains("PLATELET") || p.contains("MCV") || p.contains("MCH") || p.contains("MCHC") ||
-                        p.contains("NEUTRO") || p.contains("LYMPH") || p.contains("MONOCYTE") ||
-                        p.contains("EOSINOPHIL") || p.contains("RBC") || p.contains("HCT") || p.contains("PCV") ||
-                        p.contains("RDW") || p.contains("ESR") || p.contains("POLY") || p.contains("HB")
-                    } -> "🩸 CBC / Haematology"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("CREATININE") || p.contains("UREA") || p.contains("EGFR") ||
-                        p.contains("SODIUM") || p.contains("POTASSIUM") || p.contains("CHLORIDE") || p.contains("BICARBONATE")
-                    } -> "🫘 Renal / Electrolytes"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("BILIRUBIN") || p.contains("ALT") || p.contains("AST") || p.contains("SGOT") ||
-                        p.contains("SGPT") || p.contains("ALP") || p.contains("GGT") || p.contains("ALBUMIN") ||
-                        p.contains("TOTAL PROTEIN") || p.contains("LDH")
-                    } -> "🫀 Liver / LFT"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("CRP") || p.contains("PROCALCITONIN") || p.contains("PCT") || p.contains("FERRITIN")
-                    } -> "🔥 Inflammatory Markers"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("PT") || p.contains("INR") || p.contains("APTT") || p.contains("THROMBOPLASTIN")
-                    } -> "🩹 Coagulation"
-                    row.parameter.uppercase().let { p ->
-                        p.contains("GLUCOSE") || p.contains("HBA1C")
-                    } -> "💉 Glucose / Diabetes"
-                    else -> "📋 Other"
-                }
-            }
+            val groups = filtered.groupBy { labPanel(it.parameter) }
 
             groups.entries.sortedBy { it.key }.forEach { (group, groupRows) ->
                 item {
@@ -1516,6 +1519,7 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
                         Row(verticalAlignment = Alignment.Top) {
                             Column(Modifier.weight(1f)) {
                                 Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                TrendChart(row.history)
                                 // History timeline
                                 if (row.history.size > 1) {
                                     Spacer(Modifier.height(3.dp))
@@ -1568,12 +1572,72 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
     }
 }
 
+private fun labPanel(parameter: String): String {
+    val p = parameter.uppercase()
+    return when {
+        listOf("HEM", "HAEM", "WBC", "TLC", "PLATELET", "MCV", "MCH", "NEUTRO", "LYMPH", "MONOCYTE", "EOSINOPHIL", "RBC", "HCT", "PCV", "RDW", "ANC", "ALC").any { p.contains(it) } || p == "HB" -> "Hemogram"
+        listOf("CREATININE", "UREA", "EGFR", "SODIUM", "POTASSIUM", "CHLORIDE", "BICARBONATE", "GLUCOSE").any { p.contains(it) } -> "Renal / metabolic"
+        listOf("BILIRUBIN", "ALT", "AST", "SGOT", "SGPT", "ALP", "GGT", "ALBUMIN", "TOTAL PROTEIN", "LDH").any { p.contains(it) } -> "Liver"
+        listOf("CRP", "PROCALCITONIN", "PCT", "FERRITIN").any { p.contains(it) } -> "Inflammatory"
+        else -> "Other"
+    }
+}
+
 @Composable
-private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
+private fun TrendChart(history: List<Pair<String, String>>) {
+    val points = history.asReversed().mapNotNull { (_, raw) ->
+        Regex("[-+]?[0-9][0-9,]*(?:\\.[0-9]+)?").find(raw)?.value?.replace(",", "")?.toFloatOrNull()
+    }
+    if (points.isEmpty()) return
+    val lineColor = MaterialTheme.colorScheme.primary
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(110.dp)
+            .padding(vertical = 8.dp)
+    ) {
+        val min = points.minOrNull() ?: return@Canvas
+        val max = points.maxOrNull() ?: return@Canvas
+        val span = (max - min).takeIf { it > 0f } ?: 1f
+        val left = 8.dp.toPx()
+        val right = size.width - 8.dp.toPx()
+        val top = 8.dp.toPx()
+        val bottom = size.height - 8.dp.toPx()
+        repeat(3) { index ->
+            val y = top + (bottom - top) * index / 2f
+            drawLine(Color(0xFFE1E7EF), start = androidx.compose.ui.geometry.Offset(left, y), end = androidx.compose.ui.geometry.Offset(right, y), strokeWidth = 1.dp.toPx())
+        }
+        val path = Path()
+        points.forEachIndexed { index, value ->
+            val x = if (points.size == 1) (left + right) / 2f else left + (right - left) * index / (points.size - 1f)
+            val y = bottom - (bottom - top) * (value - min) / span
+            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            drawCircle(lineColor, radius = 3.5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
+        }
+        if (points.size > 1) drawPath(path, lineColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenSource: () -> Unit) {
+    var expandedIndex by remember { mutableIntStateOf(-1) }
+    val positive = rows.count { it.status.equals("growth_detected", true) }
+    val pending = rows.count { it.status.equals("pending", true) }
+    val noGrowth = rows.count { it.status.equals("no_growth", true) }
+    val review = rows.count { it.status.equals("unknown", true) }
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Cultures", "${rows.size} results") }
+        item { SectionTitle("Cultures", "${rows.size} episodes · positive first") }
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item { Badge("Positive $positive", Color(0xFFFFE8CC)) }
+                item { Badge("Pending $pending", Color(0xFFFFF1C2)) }
+                item { Badge("Needs review $review", Color(0xFFFFDAD6)) }
+                item { Badge("No growth $noGrowth", Color(0xFFE6F4EA)) }
+            }
+        }
         if (rows.isEmpty()) item { EmptyCard("No culture data parsed yet.") }
-        items(rows) { row ->
+        itemsIndexed(rows) { index, row ->
+            val expanded = expandedIndex == index
             val isPositive = row.status.contains("growth_detected", true)
             val growthColor = when {
                 row.status.contains("no_growth", true) -> Color(0xFFE6F4EA)
@@ -1590,47 +1654,82 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
             }
             val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { null }
 
-            // All details shown inline — no tap-to-expand per user request
             ResultCard {
-                Row(verticalAlignment = Alignment.Top) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { expandedIndex = if (expanded) -1 else index },
+                    verticalAlignment = Alignment.Top
+                ) {
                     Column(Modifier.weight(1f)) {
                         Text(displayOrganism, fontWeight = FontWeight.Bold)
-                        Text(row.collectionDate.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF555555))
+                        Text(
+                            listOf(
+                                row.collectionDate.ifBlank { "No date" },
+                                specimenDisplay,
+                                row.setNumber?.let { "set $it" },
+                                row.bottleNumber?.let { "bottle $it" },
+                                row.isolateNumber?.let { "isolate $it" },
+                                row.reportStage.takeIf(String::isNotBlank)
+                            ).filterNotNull().joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF555555)
+                        )
                         if (specimenDisplay != null) {
-                            Text("Specimen: $specimenDisplay", style = MaterialTheme.typography.bodySmall)
+                            Text(if (expanded) "Tap to collapse" else "Tap for culture details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                     Badge(row.status.replace("_", " "), growthColor)
                 }
-                if (row.sourceReportName.isNotBlank() && !row.sourceReportName.equals(displayOrganism, true)) {
+                if (expanded && row.sourceReportName.isNotBlank() && !row.sourceReportName.equals(displayOrganism, true)) {
                     Text("Source: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
                 }
-                if (row.sensitivitySummary.isNotBlank()) {
+                if (expanded && row.gramStain.isNotBlank()) {
+                    Text("Gram stain: ${row.gramStain}", style = MaterialTheme.typography.bodySmall)
+                }
+                if (expanded) {
+                    Text(
+                        "Parse confidence: ${row.confidence} · antibiogram: ${row.antibiogramCompleteness}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF666666)
+                    )
+                }
+                if (expanded && row.timeline.size > 1) {
+                    Text("Report timeline", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    row.timeline.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                }
+                if (expanded && row.sensitivitySummary.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
-                    Text("Sensitivity / Antibiogram:", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                    // Parse and display each antibiotic result on its own line
-                    row.sensitivitySummary.split(";").map { it.trim() }.filter { it.isNotBlank() }.forEach { entry ->
-                        val color = when {
-                            entry.contains("Susceptible", true) || entry.contains("Sensitive", true) -> Color(0xFF1B5E20)
-                            entry.contains("Resistant", true) -> Color(0xFFB71C1C)
-                            entry.contains("Intermediate", true) -> Color(0xFFE65100)
-                            else -> Color(0xFF333333)
+                    val entries = row.sensitivitySummary.split(";").map(String::trim).filter(String::isNotBlank)
+                    listOf(
+                        "Susceptible" to entries.filter { it.contains("Susceptible", true) || it.contains("Sensitive", true) },
+                        "Intermediate" to entries.filter { it.contains("Intermediate", true) },
+                        "Resistant" to entries.filter { it.contains("Resistant", true) }
+                    ).forEach { (heading, values) ->
+                        if (values.isNotEmpty()) {
+                            val color = when (heading) {
+                                "Susceptible" -> Color(0xFF1B5E20)
+                                "Resistant" -> Color(0xFFB71C1C)
+                                else -> Color(0xFFE65100)
+                            }
+                            Text(heading, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall, color = color)
+                            values.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall, color = color) }
                         }
-                        Text("  $entry", style = MaterialTheme.typography.bodySmall, color = color)
                     }
-                } else if (isPositive) {
+                } else if (expanded && isPositive) {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "Sensitivity data not available (image-based PDF or not yet reported).",
                         style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888)
                     )
                 }
-                if (row.comment.isNotBlank()) {
+                if (expanded && row.comment.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
                 }
-                if (row.cultureNo.isNotBlank()) {
+                if (expanded && row.cultureNo.isNotBlank()) {
                     Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
+                }
+                if (expanded) {
+                    TextButton(onClick = onOpenSource) { Text("Open source report list in NIMS") }
                 }
             }
         }

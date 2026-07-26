@@ -73,9 +73,14 @@ class RemoteReportMapperTest {
     }
 
     @Test fun summaryMapperValidatesUsefulContent() {
-        val json = JSONObject().put("interpretation", JSONArray().put("A")).put("warnings", JSONArray().put("W"))
+        val json = JSONObject()
+            .put("interpretation", JSONArray().put("A"))
+            .put("warnings", JSONArray().put("W"))
+            .put("source_reports", JSONArray().put(JSONObject().put("raw_text", "transient").put("report_name", "CBC")))
         val summary = RemoteSummaryMapper.toProcessingSummary(json, 2)
-        assertEquals(json, summary.helperJson)
+        assertEquals("A", summary.helperJson!!.getJSONArray("interpretation").getString(0))
+        assertFalse(summary.helperJson.toString().contains("transient"))
+        assertFalse(summary.helperJson.toString().contains("raw_text"))
         assertEquals(2, summary.reportsProcessed)
         assertTrue(summary.warnings.contains("W"))
         assertThrows(IllegalArgumentException::class.java) { RemoteSummaryMapper.toProcessingSummary(JSONObject(), 1) }

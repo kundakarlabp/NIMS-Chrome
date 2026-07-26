@@ -17,9 +17,7 @@ data class UiSourceReport(
     val status: String,
     val notes: String,
     val hasError: Boolean,
-    // Full original report text, so tapping a report can show every word from the
-    // source document (copied verbatim) without re-fetching it from NIMS.
-    val rawText: String = ""
+    val sourceAction: String = "Open source report in NIMS"
 )
 
 data class UiLabTrendRow(
@@ -43,7 +41,17 @@ data class UiCultureRow(
     val status: String,
     val sensitivitySummary: String,
     val comment: String,
-    val sourceReportName: String = ""
+    val sourceReportName: String = "",
+    val reportingDate: String = "",
+    val reportStage: String = "",
+    val bottleName: String = "",
+    val setNumber: Int? = null,
+    val bottleNumber: Int? = null,
+    val isolateNumber: Int? = null,
+    val gramStain: String = "",
+    val timeline: List<String> = emptyList(),
+    val confidence: String = "unknown",
+    val antibiogramCompleteness: String = "unavailable"
 )
 
 data class UiSummary(
