@@ -59,6 +59,32 @@ class LocalTextReportProcessorTest {
         assertTrue(report.labs.any { it.canonicalCode == "APTT" })
         assertTrue(report.cultures.flatMap { it.susceptibility }.any { it.antibiotic.contains("Meropenem", true) && it.interpretation == "Susceptible" })
     }
+    @Test fun parsesRequestedInflammatoryAndMolecularResults() {
+        val report = success(
+            """
+            hs-CRP 18.2 mg/L
+            ESR 64 mm/hr
+            Aspergillus Galactomannan Index 1.42
+            Beta-D-Glucan 236 pg/mL
+            CMV DNA PCR Result: Detected
+            SARS-CoV-2 RT-PCR
+            Result: Not Detected
+            HIV Viral Load 12,450 copies/mL
+            """.trimIndent()
+        )
+
+        assertTrue(report.labs.any { it.canonicalCode == "HSCRP" && it.numericValue == 18.2 })
+        assertTrue(report.labs.any { it.canonicalCode == "ESR" && it.numericValue == 64.0 })
+        assertTrue(report.labs.any { it.canonicalCode == "GM" && it.numericValue == 1.42 })
+        assertTrue(report.labs.any { it.canonicalCode == "BDG" && it.numericValue == 236.0 })
+        assertTrue(report.labs.any { it.displayName == "CMV PCR" && it.textValue == "Detected" })
+        assertTrue(report.labs.any { it.displayName == "SARS-CoV-2 PCR" && it.textValue == "Not detected" })
+        assertTrue(report.labs.any { it.displayName == "HIV viral load" && it.numericValue == 12450.0 && it.unit.equals("copies/mL", true) })
+    }
+
+    @Test fun pcrHeadingWithoutExplicitResultIsNotInferredNegative() {
+        assertTrue(MolecularResultParser.parse("CMV DNA PCR\nSample received", "2026-01-01").isEmpty())
+    }
     private fun success(text: String): ParsedReport = (runSuspend { LocalTextReportProcessor().parseReport(input(text)) } as ProcessingResult.Success).value
     private fun input(text: String, type: String = "text/plain") = ReportInput("r1", "Test", "2026-01-01", "lab", type, text.toByteArray())
 }

@@ -11,6 +11,7 @@ enum class Abnormality {
 }
 
 data class UiSourceReport(
+    val sourceKey: String,
     val dateSent: String,
     val reportName: String,
     val type: String,
@@ -32,6 +33,7 @@ data class UiLabTrendRow(
 )
 
 data class UiCultureRow(
+    val sourceKey: String = "",
     val collectionDate: String,
     val cultureNo: String,
     val specimen: String,
@@ -64,13 +66,20 @@ data class UiSummary(
 ) {
     val failedReportCount: Int get() = sourceReports.count { it.hasError }
     val parsedReportCount: Int get() = sourceReports.count { !it.hasError }
+    val positiveCultureCount: Int get() = cultures.count { it.status == "growth_detected" }
+    val pendingCultureCount: Int get() = cultures.count { it.status == "pending" }
+    val noGrowthCultureCount: Int get() = cultures.count { it.status == "no_growth" }
+    val reviewCultureCount: Int get() = cultures.count { it.status !in setOf("growth_detected", "pending", "no_growth") }
     val dateRange: String
         get() {
-            val dates = sourceReports.map { it.dateSent }.filter { it.isNotBlank() }.distinct()
+            val dates = sourceReports.mapNotNull { report ->
+                org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
+                    .normalize(report.dateSent).sortEpoch?.let { it to report.dateSent }
+            }.distinctBy { it.first }.sortedBy { it.first }.map { it.second }
             return when {
                 dates.isEmpty() -> "No dates"
                 dates.size == 1 -> dates.first()
-                else -> "${dates.last()} to ${dates.first()}"
+                else -> "${dates.first()} to ${dates.last()}"
             }
         }
 }

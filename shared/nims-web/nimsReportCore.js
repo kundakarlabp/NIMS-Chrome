@@ -921,17 +921,15 @@
     const counts = { cbc: 0, rft: 0, lft: 0, electrolytes: 0 };
     for (const row of sorted) {
       const tags = row.report_tags || [];
-      if (tags.includes("culture") || tags.includes("inflammatory")) selected.push(row);
+      if (tags.includes("culture") || tags.includes("inflammatory") || tags.includes("molecular")) selected.push(row);
       else if (tags.includes("cbc") && counts.cbc < 5) {
         counts.cbc += 1;
         selected.push(row);
       } else {
-        for (const tag of ["rft", "lft", "electrolytes"]) {
-          if (tags.includes(tag) && counts[tag] < 5) {
-            counts[tag] += 1;
-            selected.push(row);
-            break;
-          }
+        const panelTags = ["rft", "lft", "electrolytes"].filter((tag) => tags.includes(tag));
+        if (panelTags.some((tag) => counts[tag] < 5)) {
+          selected.push(row);
+          panelTags.forEach((tag) => { counts[tag] += 1; });
         }
       }
     }
@@ -990,7 +988,8 @@
     if (/rft|renal|urea|creatinine/.test(lower)) tags.push("rft");
     if (/electrolyte|sodium|potassium|chloride/.test(lower)) tags.push("electrolytes");
     if (/lft|liver|bilirubin|sgot|sgpt|ast|alt|albumin/.test(lower)) tags.push("lft");
-    if (/crp|c reactive protein|procalcitonin/.test(lower)) tags.push("inflammatory");
+    if (/crp|c reactive protein|procalcitonin|esr|galactomannan|beta[- ]?d[- ]?glucan|\bbdg\b/.test(lower)) tags.push("inflammatory");
+    if (/\bpcr\b|rt[- ]?pcr|viral load|cbnaat|gene\s*xpert/.test(lower)) tags.push("molecular");
     return tags.length ? Array.from(new Set(tags)) : ["other"];
   }
 

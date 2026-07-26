@@ -98,7 +98,7 @@ The extension still performs direct NIMS report fetching in the browser session.
 
 ### Android WebView Mobile Mode
 
-Android version 0.10.0 uses a browser-first WebView. NIMS loads normally during login and navigation with no document-start JavaScript, no persistent JavaScript bridge, no polling observer, and no injected jQuery or compatibility layer.
+Android version 0.10.1 uses a browser-first WebView with on-device report processing. Login remains manual; report parsing begins only after the clinician taps Quick Review.
 
 Normal workflow:
 
@@ -201,7 +201,7 @@ After mock testing, test only on de-identified real PDF/report output before any
 
 `Bulk Fast Summary` and `Bulk Full Summary` use direct silent fetch only. They do not use the popup/open-close fallback by default. If the mapping is not validated by a successful `Test Direct Fetch` in the current session, they stop with `Direct report mapping is not validated. Run Discover Mapping, then Test Direct Fetch first.`
 
-`Quick Review` selects every visible culture report, the latest 5 CBC reports, the latest 5 reports from each renal/liver/electrolyte group, and CRP/procalcitonin when present. Cultures are processed and shown first; laboratory processing continues afterward. There is no global cap that can silently omit microbiology. `Bulk Full Summary` remains the advanced all-visible-reports mode.
+`Quick Review` selects every visible culture, inflammatory-marker, and molecular/PCR report, plus the latest 5 CBC reports and latest 5 reports from each renal/liver/electrolyte group. Culture and laboratory PDFs are processed concurrently with bounded on-device concurrency; microbiology receives more worker capacity and is displayed as soon as its batch is ready. The one report used to validate direct fetching is reused rather than downloaded twice. There is no global cap that can silently omit microbiology. `Bulk Full Summary` remains the advanced all-visible-reports mode.
 
 `Manual Popup Fallback` remains available as a separate explicit button. It may visibly open reports one by one and is expected to be slow.
 

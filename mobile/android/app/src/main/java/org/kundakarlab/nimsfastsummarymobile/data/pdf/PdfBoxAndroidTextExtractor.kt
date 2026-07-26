@@ -52,8 +52,9 @@ class PdfBoxAndroidTextExtractor(context: Context) : PdfTextExtractor {
     companion object {
         // The bulk pipeline already limits concurrent report work. Two extraction
         // slots remove the previous global serialization while keeping peak memory
-        // bounded on mid-range Android devices.
-        private val extractionSlots = Semaphore(2)
+        // bounded on mid-range Android devices. The report queue never schedules
+        // more than five total tasks, so three decoded PDFs is the hard ceiling.
+        private val extractionSlots = Semaphore(3)
         @Volatile private var initialized = false
         private fun init(context: Context) {
             if (!initialized) synchronized(this) {

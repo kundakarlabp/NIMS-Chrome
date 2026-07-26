@@ -21,7 +21,8 @@ class LocalTextReportProcessor(
         // Extract date from PDF text when row metadata doesn't have it — this is
         // the root cause of "report date unavailable" and Trends showing 0 parameters.
         val effectiveDate = input.dateSent.ifBlank { LabTextParser.extractDateFromText(text) ?: CultureTextParser.extractDateFromText(text) ?: "" }
-        val labs = LabTextParser.parse(text, effectiveDate)
+        val labs = (LabTextParser.parse(text, effectiveDate) + MolecularResultParser.parse(text, effectiveDate))
+            .distinctBy { listOf(it.canonicalCode, it.numericValue?.toString().orEmpty(), it.textValue.orEmpty(), it.unit.orEmpty()).joinToString("|") }
         val cultures = CultureTextParser.parse(text, effectiveDate)
         if (labs.isEmpty() && cultures.isEmpty()) return ProcessingResult.Failure("No high-confidence lab or culture rows were found.", "LOCAL_PARSE_INCOMPLETE", true)
         val warnings = buildList { if (input.contentType.contains("html", true)) add("HTML report text was auto-extracted on-device.") }
@@ -54,7 +55,9 @@ class LocalTextReportProcessor(
         "no growth", "growth detected", "sensitive", "resistant", "aerobic culture",
         // Pathology / other
         "biopsy", "cytology", "smear", "staining", "gram", "acid fast", "tb",
-        "fluid", "pus", "sputum", "blood culture"
+        "fluid", "pus", "sputum", "blood culture",
+        // Molecular / fungal biomarkers
+        "pcr", "rt-pcr", "viral load", "galactomannan", "beta-d-glucan", "beta d glucan"
     ).any { text.contains(it, true) }
 }
 
@@ -105,12 +108,17 @@ object LabTextParser {
         LabDefinition("GGT", "GGT", labels("GGT", "Gamma GT", "Gamma Glutamyl Transferase"), setOf("U/L", "IU/L"), 0.0..5000.0, 9.0, 48.0, "U/L"),
         LabDefinition("ALB", "Albumin", labels("Albumin", "Serum Albumin"), setOf("g/dL"), 0.0..10.0, 3.5, 5.0, "g/dL"),
         LabDefinition("TP", "Total Protein", labels("Total Protein"), setOf("g/dL"), 0.0..15.0, 6.3, 8.2, "g/dL"),
-        LabDefinition("CRP", "CRP", labels("CRP", "C-Reactive Protein"), setOf("mg/L", "mg/dL"), 0.0..1000.0, null, 10.0, "mg/L"),
+        // Keep hsCRP before CRP because the shorter CRP label also occurs inside
+        // "hs-CRP". They are clinically distinct assays and must trend separately.
+        LabDefinition("HSCRP", "hsCRP", labels("hsCRP", "hs-CRP", "High Sensitivity CRP", "High Sensitivity C-Reactive Protein"), setOf("mg/L", "mg/dL"), 0.0..1000.0, null, null, "mg/L"),
+        LabDefinition("CRP", "CRP", labels("CRP", "C-Reactive Protein"), setOf("mg/L", "mg/dL"), 0.0..1000.0, null, null, "mg/L"),
         LabDefinition("PCT", "Procalcitonin", labels("Procalcitonin", "PCT"), setOf("ng/mL"), 0.0..1000.0, null, 0.5, "ng/mL"),
         LabDefinition("PT", "Prothrombin Time", labels("PT", "Prothrombin Time"), setOf("sec", "seconds"), 0.0..200.0, 11.0, 13.5, "sec"),
         LabDefinition("INR", "INR", labels("INR"), emptySet(), 0.0..20.0, 0.8, 1.2, ""),
         LabDefinition("APTT", "aPTT", labels("aPTT", "APTT", "Activated Partial Thromboplastin"), setOf("sec", "seconds"), 0.0..300.0, 25.0, 35.0, "sec"),
         LabDefinition("ESR", "ESR", labels("ESR", "Erythrocyte Sedimentation Rate"), setOf("mm/hr", "mm/1st hour"), 0.0..150.0, null, 20.0, "mm/hr"),
+        LabDefinition("GM", "Galactomannan index", labels("Galactomannan Index", "Aspergillus Galactomannan", "Galactomannan"), emptySet(), 0.0..100.0, null, null, null),
+        LabDefinition("BDG", "Beta-D-glucan", labels("Beta-D-Glucan", "Beta D Glucan", "1,3-Beta-D-Glucan", "1,3 Beta D Glucan", "BDG"), setOf("pg/mL"), 0.0..100000.0, null, null, "pg/mL"),
         LabDefinition("LDH", "LDH", labels("LDH", "Lactate Dehydrogenase"), setOf("U/L", "IU/L"), 0.0..10000.0, 135.0, 225.0, "U/L"),
         LabDefinition("URIC", "Uric Acid", labels("Uric Acid", "Serum Uric Acid"), setOf("mg/dL"), 0.0..20.0, 2.4, 7.0, "mg/dL"),
         LabDefinition("GLUCOSE", "Blood Glucose", labels("Random Blood Sugar", "Blood Glucose", "Random Plasma Glucose", "Fasting Blood Sugar", "RBS"), setOf("mg/dL"), 0.0..2000.0, 70.0, 140.0, "mg/dL"),
@@ -179,6 +187,85 @@ object LabTextParser {
             line.substring(labelMatch.range.first, labelMatch.range.last + 1).trim(' ', ':'),
             value, null, unit, refLow, refHigh, refRangeText, abnormality, date, confidence, comparator
         )
+    }
+}
+
+/**
+ * Extracts only explicit molecular results. Absence of a result phrase never
+ * becomes "negative"; a PCR heading without an adjacent detected/not-detected
+ * or quantitative value is deliberately ignored.
+ */
+object MolecularResultParser {
+    private val assayMarker = Regex("\\b(?:RT[- ]?PCR|PCR|CBNAAT|GENE\\s*XPERT|VIRAL\\s+LOAD)\\b", RegexOption.IGNORE_CASE)
+    private val qualitative = Regex("\\b(NOT\\s+DETECTED|DETECTED|NON[- ]?REACTIVE|REACTIVE|NEGATIVE|POSITIVE)\\b", RegexOption.IGNORE_CASE)
+    private val quantitative = Regex("([<>])?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(IU/mL|copies/mL|copies/ml|log\\s*IU/mL|log\\s*copies/mL)", RegexOption.IGNORE_CASE)
+
+    fun parse(text: String, date: String?): List<ParsedLabValue> {
+        val lines = text.lines().map(String::trim).filter(String::isNotBlank)
+        return lines.mapIndexedNotNull { index, line ->
+            if (!assayMarker.containsMatchIn(line)) return@mapIndexedNotNull null
+            val next = lines.getOrNull(index + 1).orEmpty()
+            val sameLineQualitative = qualitative.find(line)
+            val sameLineQuantitative = quantitative.find(line)
+            val adjacent = if (sameLineQualitative == null && sameLineQuantitative == null && next.length <= 120) next else ""
+            val qualitativeMatch = sameLineQualitative ?: qualitative.find(adjacent)
+            val quantitativeMatch = sameLineQuantitative ?: quantitative.find(adjacent)
+            if (qualitativeMatch == null && quantitativeMatch == null) return@mapIndexedNotNull null
+
+            val display = assayName(line)
+            val quantitativeValue = quantitativeMatch?.groupValues?.getOrNull(2)?.replace(",", "")?.toDoubleOrNull()
+            val comparator = when (quantitativeMatch?.groupValues?.getOrNull(1)) {
+                "<" -> NumericComparator.LESS_THAN
+                ">" -> NumericComparator.GREATER_THAN
+                else -> NumericComparator.EQUAL
+            }
+            val textValue = qualitativeMatch?.groupValues?.getOrNull(1)
+                ?.uppercase()
+                ?.replace(Regex("\\s+"), " ")
+                ?.let {
+                    when (it) {
+                        "NOT DETECTED" -> "Not detected"
+                        "NON-REACTIVE", "NON REACTIVE" -> "Non-reactive"
+                        else -> it.lowercase().replaceFirstChar(Char::uppercase)
+                    }
+                }
+            ParsedLabValue(
+                canonicalCode = "PCR_" + CanonicalLabCodes.normalize(display).removePrefix("PCR_"),
+                displayName = display,
+                sourceName = line.take(120),
+                numericValue = quantitativeValue,
+                textValue = textValue,
+                unit = quantitativeMatch?.groupValues?.getOrNull(3)?.takeIf(String::isNotBlank),
+                referenceLow = null,
+                referenceHigh = null,
+                abnormality = Abnormality.UNKNOWN,
+                resultDate = date,
+                confidence = if (sameLineQualitative != null || sameLineQuantitative != null) ParseConfidence.HIGH else ParseConfidence.MEDIUM,
+                comparator = comparator
+            )
+        }.distinctBy { it.canonicalCode }
+    }
+
+    private fun assayName(line: String): String {
+        val known = listOf(
+            Regex("\\b(?:CMV|CYTOMEGALOVIRUS)\\b", RegexOption.IGNORE_CASE) to "CMV PCR",
+            Regex("\\b(?:EBV|EPSTEIN[- ]BARR)\\b", RegexOption.IGNORE_CASE) to "EBV PCR",
+            Regex("\\b(?:BK\\s+VIRUS|BKV)\\b", RegexOption.IGNORE_CASE) to "BK virus PCR",
+            Regex("\\b(?:JC\\s+VIRUS|JCV)\\b", RegexOption.IGNORE_CASE) to "JC virus PCR",
+            Regex("\\b(?:HBV|HEPATITIS\\s+B)\\b", RegexOption.IGNORE_CASE) to "HBV PCR",
+            Regex("\\b(?:HCV|HEPATITIS\\s+C)\\b", RegexOption.IGNORE_CASE) to "HCV PCR",
+            Regex("\\bHIV(?:-?1)?\\b", RegexOption.IGNORE_CASE) to "HIV viral load",
+            Regex("\\b(?:SARS[- ]?COV[- ]?2|COVID[- ]?19)\\b", RegexOption.IGNORE_CASE) to "SARS-CoV-2 PCR",
+            Regex("\\b(?:MTB|MYCOBACTERIUM\\s+TUBERCULOSIS|CBNAAT|GENE\\s*XPERT)\\b", RegexOption.IGNORE_CASE) to "MTB molecular test"
+        )
+        known.firstOrNull { it.first.containsMatchIn(line) }?.let { return it.second }
+        val marker = assayMarker.find(line) ?: return "PCR result"
+        val prefix = line.substring(0, marker.range.first)
+            .replace(Regex("\\b(?:QUALITATIVE|QUANTITATIVE|REAL\\s+TIME|RESULT|TEST|ASSAY)\\b", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("[^A-Za-z0-9+.-]+"), " ")
+            .trim()
+            .takeLast(48)
+        return if (prefix.length >= 2) "$prefix PCR" else "PCR result"
     }
 }
 

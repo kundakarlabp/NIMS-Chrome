@@ -383,7 +383,7 @@ def test_printreport_rows_have_safe_locator_and_are_not_failed_immediately() -> 
     assert "transient_print_report_arg" not in serialized
 
 
-def test_fast_summary_selection_is_capped_and_test_first_selects_latest_cbc() -> None:
+def test_fast_summary_keeps_all_cultures_and_limits_each_lab_group() -> None:
     script = r"""
     const utils = require('./extension/src/contentUtils.js');
     const rows = [];
@@ -395,9 +395,9 @@ def test_fast_summary_selection_is_capped_and_test_first_selects_latest_cbc() ->
     console.log(JSON.stringify({ fastCount: fast.length, cbcCount: fast.filter(r => r.report_tags.includes('cbc')).length, rleCount: fast.filter(r => r.report_tags.includes('rft')).length, testFirst }));
     """
     out = run_node(script)
-    assert out["fastCount"] <= 20
-    assert out["cbcCount"] <= 3
-    assert out["rleCount"] <= 3
+    assert out["fastCount"] == 40
+    assert out["cbcCount"] == 5
+    assert out["rleCount"] == 5
     assert len(out["testFirst"]) == 1
     assert out["testFirst"][0]["report_name"] == "CBC 10"
 
@@ -610,7 +610,9 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "mappingValidated = false" in main_activity
     assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
     assert "Run Test One Report successfully before bulk summary." in main_activity
-    assert "Semaphore(2)" in main_activity
+    assert "processBulk(cultureRequests, concurrency = 3" in main_activity
+    assert "processBulk(otherRequests, concurrency = 2" in main_activity
+    assert "Semaphore(concurrency.coerceIn(1, 4))" in main_activity
     assert "ReportFetchQueue(concurrency = 3)" not in main_activity
     assert "private var webViewUserAgent = \"\"" in main_activity
     assert "webViewUserAgent = webView.settings.userAgentString" in main_activity
