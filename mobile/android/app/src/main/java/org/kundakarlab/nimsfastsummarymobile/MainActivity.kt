@@ -118,6 +118,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 
@@ -136,6 +137,11 @@ class MainActivity : ComponentActivity() {
     // clickFirstReportForMode's comment in nimsReportCore.js for the full
     // explanation. Cleared whenever mapping/mappingValidated are cleared.
     private var discoveredTestRow: JSONObject? = null
+    // Exact report URLs contain transient NIMS arguments. They are kept only
+    // in memory for the current authenticated session so source buttons can
+    // open the matching PDF without persisting or exporting those arguments.
+    private val transientSourceUrls = mutableMapOf<String, String>()
+    private var validatedReportCache: Pair<String, ParsedReport>? = null
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
@@ -162,8 +168,7 @@ class MainActivity : ComponentActivity() {
         ProcessingRouter(
             local = OnDeviceReportProcessor(
                 textProcessor = LocalTextReportProcessor(),
-                pdfExtractor = PdfBoxAndroidTextExtractor(applicationContext),
-                onPdfProgress = { completed, total -> runOnUiThread { setState(AppState.FETCHING, "Extracting PDF page $completed of $total...") } }
+                pdfExtractor = PdfBoxAndroidTextExtractor(applicationContext)
             ),
             remote = RemoteReportProcessor { helper() },
             modeProvider = { processingMode },
@@ -230,7 +235,8 @@ class MainActivity : ComponentActivity() {
                     onCopySummary = { copyCleanSummary() },
                     onCopyJson = { copyText("NIMS Fast Summary JSON", sanitizedSummaryText.ifBlank { "{}" }) },
                     onExportText = { shareText("NIMS Fast Summary", cleanSummaryText()) },
-                    onClearResults = { clearResults() }
+                    onClearResults = { clearResults() },
+                    onOpenSourceReport = { sourceKey -> openSourceReport(sourceKey) }
                 )
             }
         }
@@ -441,6 +447,8 @@ class MainActivity : ComponentActivity() {
         mapping = null
         mappingValidated = false
         discoveredTestRow = null
+        validatedReportCache = null
+        transientSourceUrls.clear()
         clearWebViewSession(coldStartOnly = false) {
             webView.loadUrl(NIMS_LOGIN_URL)
             setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
@@ -485,6 +493,8 @@ class MainActivity : ComponentActivity() {
         mapping = null
         mappingValidated = false
         discoveredTestRow = null
+        validatedReportCache = null
+        transientSourceUrls.clear()
         setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
         evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
             when {
@@ -552,6 +562,7 @@ class MainActivity : ComponentActivity() {
     private fun discoverMapping() {
         mappingValidated = false
         discoveredTestRow = null
+        validatedReportCache = null
         evaluateCore("JSON.stringify(NimsReportCore.clickFirstReportForMode('test_direct', document))") { click ->
             if (!click.optBoolean("ok")) {
                 setState(AppState.ERROR, click.optString("error", "No View Report button found for row"))
@@ -665,13 +676,9 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
 
-                setState(AppState.FETCHING, "Testing one visible report before bulk analysis…")
+                setState(AppState.FETCHING, "Validating one report before parallel analysis…")
                 runModeInternal("test_direct")
-                checks = 0
-                while (!mappingValidated && checks < 90) {
-                    delay(500)
-                    checks += 1
-                }
+                activeProcessingJob?.join()
                 if (!mappingValidated) {
                     setState(AppState.ERROR, "One-report validation did not succeed. Keep the result list visible and retry.")
                     return@launch
@@ -793,7 +800,9 @@ class MainActivity : ComponentActivity() {
                 skipped += 1
                 continue
             }
-            prepared.add(PreparedReportRequest(row, transient, directUrl))
+            val reportId = safeReportKey(transient, row)
+            transientSourceUrls[reportId] = directUrl
+            prepared.add(PreparedReportRequest(row, transient, directUrl, reportId))
         }
         if (skipped > 0 && prepared.isEmpty()) {
             setState(AppState.ERROR, "NIMS report rows were detected but their identifiers were not accepted. " +
@@ -833,6 +842,7 @@ class MainActivity : ComponentActivity() {
                     setState(AppState.ERROR, result.warnings.firstOrNull() ?: "Test One Report did not parse a report.")
                     return
                 }
+                validatedReportCache = result.reportId to result
                 listOf(result)
             } else {
                 val cultureRequests = prepared.filter { request ->
@@ -840,21 +850,34 @@ class MainActivity : ComponentActivity() {
                     tags.contains("culture", ignoreCase = true)
                 }
                 val otherRequests = prepared.filterNot { it in cultureRequests }
-                val cultureReports = processBulk(cultureRequests)
-                if (cultureReports.isNotEmpty()) {
-                    when (val partial = withContext(Dispatchers.IO) {
-                        processingRouter.summarize(cultureReports, SummaryMode.CULTURES_ONLY)
-                    }) {
-                        is ProcessingResult.Success -> {
-                            val partialJson = partial.value.helperJson ?: localSummaryJson(cultureReports, partial.value.text)
-                            uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(partialJson, physicianNote)
-                            selectedTab = 3
-                            setState(AppState.FETCHING, "Cultures ready. Continuing with laboratory trends…")
-                        }
-                        else -> Unit
-                    }
+                val completed = AtomicInteger(0)
+                val markCompleted = {
+                    val done = completed.incrementAndGet()
+                    setState(AppState.FETCHING, "Processing $done/${prepared.size} reports in parallel…")
                 }
-                cultureReports + processBulk(otherRequests)
+                val (cultureReports, otherReports) = coroutineScope {
+                    // Reserve more capacity for microbiology while laboratory
+                    // reports begin immediately instead of waiting for every
+                    // culture PDF to finish.
+                    val cultureJob = async { processBulk(cultureRequests, concurrency = 3, onCompleted = markCompleted) }
+                    val laboratoryJob = async { processBulk(otherRequests, concurrency = 2, onCompleted = markCompleted) }
+                    val cultures = cultureJob.await()
+                    if (cultures.isNotEmpty()) {
+                        when (val partial = withContext(Dispatchers.IO) {
+                            processingRouter.summarize(cultures, SummaryMode.CULTURES_ONLY)
+                        }) {
+                            is ProcessingResult.Success -> {
+                                val partialJson = partial.value.helperJson ?: localSummaryJson(cultures, partial.value.text)
+                                uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(partialJson, physicianNote)
+                                selectedTab = 3
+                                setState(AppState.FETCHING, "Cultures ready; laboratory trends are still processing…")
+                            }
+                            else -> Unit
+                        }
+                    }
+                    cultures to laboratoryJob.await()
+                }
+                cultureReports + otherReports
             }
             val summaryMode = when (mode) {
                 "bulk_full" -> SummaryMode.FULL
@@ -887,18 +910,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun processBulk(prepared: List<PreparedReportRequest>): List<ParsedReport> = coroutineScope {
-        val semaphore = Semaphore(2)
+    private suspend fun processBulk(
+        prepared: List<PreparedReportRequest>,
+        concurrency: Int,
+        onCompleted: () -> Unit
+    ): List<ParsedReport> = coroutineScope {
+        val semaphore = Semaphore(concurrency.coerceIn(1, 4))
         prepared.mapIndexed { index, request ->
             async(Dispatchers.IO) {
                 semaphore.withPermit {
                     ensureActive()
                     try {
-                        fetchAndParseOne(request, index, prepared.size)
+                        validatedReportCache
+                            ?.takeIf { it.first == request.reportId }
+                            ?.second
+                            ?.also { log("Reusing the report parsed during validation") }
+                            ?: fetchAndParseOne(request, index, prepared.size)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
                         errorParsedReport(request.row, error.message ?: "Report failed")
+                    } finally {
+                        onCompleted()
                     }
                 }
             }
@@ -915,7 +948,7 @@ class MainActivity : ComponentActivity() {
         if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
         if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
         val input = ReportInput(
-            reportId = safeReportKey(transient, row),
+            reportId = request.reportId,
             reportName = row.optString("report_name"),
             dateSent = row.optString("date_sent"),
             reportType = row.optString("report_type", "other"),
@@ -923,10 +956,9 @@ class MainActivity : ComponentActivity() {
             bytes = response.bytes,
             safeSource = NimsUrlPolicy.safeSourceForHelper(url)
         )
-        if (input.contentType.contains("pdf", true) || input.bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) setState(AppState.FETCHING, "Extracting PDF text on-device…")
         log("Parsing report ${index + 1}/$total")
         return when (val parsed = processingRouter.parse(input)) {
-            is ProcessingResult.Success -> parsed.value.copy(warnings = parsed.value.warnings + parsed.warnings)
+            is ProcessingResult.Success -> parsed.value.copy(warnings = (parsed.value.warnings + parsed.warnings).distinct())
             is ProcessingResult.Unsupported -> errorParsedReport(row, parsed.reason)
             is ProcessingResult.Failure -> errorParsedReport(row, parsed.userMessage)
         }
@@ -944,8 +976,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.joinToString("; ")).put("action", "Open source report in NIMS")) } })
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("report_id", report.reportId).put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.distinct().joinToString("; ")).put("action", "Open source report in NIMS")) } })
         .put("interpretation", JSONArray(text.lines()))
+
+    private fun openSourceReport(sourceKey: String) {
+        val url = transientSourceUrls[sourceKey]
+        if (url.isNullOrBlank() || !NimsReportTemplate.isAllowedNimsUrl(url)) {
+            setState(AppState.ERROR, "This source link is no longer available. Return to the current CR result list and run Quick Review again.")
+            selectedTab = 0
+            return
+        }
+        selectedTab = 0
+        webView.loadUrl(url)
+        setState(AppState.HELPER_READY, "Opening the exact source report in NIMS…")
+    }
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -1135,6 +1179,8 @@ class MainActivity : ComponentActivity() {
         mapping = null
         mappingValidated = false
         discoveredTestRow = null
+        validatedReportCache = null
+        transientSourceUrls.clear()
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 
@@ -1235,7 +1281,8 @@ private fun NimsFastSummaryApp(
     onCopySummary: () -> Unit,
     onCopyJson: () -> Unit,
     onExportText: () -> Unit,
-    onClearResults: () -> Unit
+    onClearResults: () -> Unit,
+    onOpenSourceReport: (String) -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -1274,9 +1321,9 @@ private fun NimsFastSummaryApp(
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
-            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty()) { onTabSelected(0) }
+            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty(), onOpenSourceReport)
             2 -> TrendsScreen(contentModifier, summary?.labTrends.orEmpty())
-            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty()) { onTabSelected(0) }
+            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty(), onOpenSourceReport)
             else -> SummaryScreen(
                 modifier = contentModifier,
                 summary = summary,
@@ -1420,27 +1467,44 @@ private fun NimsWebViewScreen(
 }
 
 @Composable
-private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>, onOpenSource: () -> Unit) {
-    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { SectionTitle("Source reports", "${reports.size} reports") }
+private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>, onOpenSource: (String) -> Unit) {
+    LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { SectionTitle("Source reports", "${reports.size} reports · tap to verify") }
         if (reports.isEmpty()) item { EmptyCard("Tap Quick Review on the NIMS tab to load reports.") }
         items(reports) { report ->
-            ResultCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenSource(report.sourceKey) },
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (report.hasError) Color(0xFFFFF0EF) else MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f)) {
-                        Text(report.reportName, fontWeight = FontWeight.Bold)
+                            Text(
+                                report.reportName,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         Text(report.dateSent.ifBlank { "No date" }, style = MaterialTheme.typography.bodySmall)
                     }
-                    Badge(report.type.uppercase())
-                    Spacer(Modifier.width(6.dp))
-                    Badge(report.status, if (report.hasError) Color(0xFFFFE2E0) else Color(0xFFE6F4EA))
+                        Badge(if (report.hasError) "Needs review" else report.type.uppercase(), if (report.hasError) Color(0xFFFFDAD6) else Color(0xFFE8EEF7))
                 }
-                if (report.notes.isNotBlank()) Text(
-                    report.notes,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                TextButton(onClick = onOpenSource) { Text(report.sourceAction) }
+                    if (report.hasError && report.notes.isNotBlank()) {
+                        Text(
+                            report.notes.substringBefore(";").take(180),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text("Open exact report", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }
@@ -1452,7 +1516,8 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
     var selectedPanel by remember { mutableStateOf("All") }
     val filtered = remember(rows, windowDays, selectedPanel) {
         rows.mapNotNull { row ->
-            if (selectedPanel != "All" && labPanel(row.parameter) != selectedPanel) return@mapNotNull null
+            val panel = labPanel(row.parameter)
+            if (panel == "Hidden" || (selectedPanel != "All" && panel != selectedPanel)) return@mapNotNull null
             val dated = row.history.mapNotNull { point ->
                 DateNormalizer.normalize(point.first).sortEpoch?.let { Triple(it, point.first, point.second) }
             }.sortedByDescending { it.first }
@@ -1480,7 +1545,7 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Panel", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(listOf("All", "Hemogram", "Renal / metabolic", "Liver", "Inflammatory", "Other")) { panel ->
+                        items(listOf("All", "Hemogram", "Renal / metabolic", "Liver", "Inflammatory", "Molecular / PCR", "Other")) { panel ->
                             OutlinedButton(onClick = { selectedPanel = panel }) { Text((if (selectedPanel == panel) "✓ " else "") + panel) }
                         }
                     }
@@ -1519,29 +1584,16 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
                         Row(verticalAlignment = Alignment.Top) {
                             Column(Modifier.weight(1f)) {
                                 Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                TrendChart(row.history)
-                                // History timeline
+                                if (row.history.size > 1) TrendChart(row.history)
                                 if (row.history.size > 1) {
-                                    Spacer(Modifier.height(3.dp))
-                                    Text(
-                                        row.history.take(8).joinToString("  ·  ") { (d, v) ->
-                                            "${d.replace("-", "/")}: $v"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color(0xFF555555)
-                                    )
-                                }
-                                // Trend direction
-                                if (row.trendText.isNotBlank() && row.trendText != "auto-parsed" && row.trendText != "insufficient data") {
-                                    Spacer(Modifier.height(3.dp))
-                                    Badge(
-                                        "↕ ${row.trendText}",
-                                        when {
-                                            row.trendText.contains("ris", true) || row.trendText.contains("increas", true) -> Color(0xFFFFE2E0)
-                                            row.trendText.contains("fall", true) || row.trendText.contains("decreas", true) -> Color(0xFFE6F4EA)
-                                            else -> Color(0xFFEEEEEE)
+                                    Spacer(Modifier.height(6.dp))
+                                    Text("History", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                    row.history.take(10).forEach { (date, value) ->
+                                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                            Text(date, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                                            Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
                                         }
-                                    )
+                                    }
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
@@ -1575,10 +1627,14 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
 private fun labPanel(parameter: String): String {
     val p = parameter.uppercase()
     return when {
-        listOf("HEM", "HAEM", "WBC", "TLC", "PLATELET", "MCV", "MCH", "NEUTRO", "LYMPH", "MONOCYTE", "EOSINOPHIL", "RBC", "HCT", "PCV", "RDW", "ANC", "ALC").any { p.contains(it) } || p == "HB" -> "Hemogram"
+        listOf("MCV", "MCH", "MCHC", "NEUTRO", "LYMPH", "MONOCYTE", "EOSINOPHIL", "BASOPHIL", "RBC", "HCT", "PCV", "RDW", "ANC", "ALC").any { p.contains(it) } -> "Hidden"
+        p == "HB" || p.contains("HEMOGLOBIN") || p.contains("HAEMOGLOBIN") ||
+            p == "WBC" || p.contains("WBC/TLC") || p.contains("TOTAL WBC") || p.contains("TOTAL LEUCO") ||
+            p.contains("PLATELET") -> "Hemogram"
         listOf("CREATININE", "UREA", "EGFR", "SODIUM", "POTASSIUM", "CHLORIDE", "BICARBONATE", "GLUCOSE").any { p.contains(it) } -> "Renal / metabolic"
         listOf("BILIRUBIN", "ALT", "AST", "SGOT", "SGPT", "ALP", "GGT", "ALBUMIN", "TOTAL PROTEIN", "LDH").any { p.contains(it) } -> "Liver"
-        listOf("CRP", "PROCALCITONIN", "PCT", "FERRITIN").any { p.contains(it) } -> "Inflammatory"
+        listOf("CRP", "HSCRP", "PROCALCITONIN", "PCT", "ESR", "GALACTOMANNAN", "BETA-D-GLUCAN", "BETA D GLUCAN", "BDG").any { p.contains(it) } -> "Inflammatory"
+        listOf("PCR", "VIRAL LOAD", "MOLECULAR", "CBNAAT", "GENE XPERT").any { p.contains(it) } -> "Molecular / PCR"
         else -> "Other"
     }
 }
@@ -1619,7 +1675,7 @@ private fun TrendChart(history: List<Pair<String, String>>) {
 }
 
 @Composable
-private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenSource: () -> Unit) {
+private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenSource: (String) -> Unit) {
     var expandedIndex by remember { mutableIntStateOf(-1) }
     val positive = rows.count { it.status.equals("growth_detected", true) }
     val pending = rows.count { it.status.equals("pending", true) }
@@ -1653,6 +1709,12 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                 else -> row.status.replace("_", " ").replaceFirstChar { it.uppercase() }.ifBlank { "Culture" }
             }
             val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { null }
+            val statusLabel = when (row.status) {
+                "growth_detected" -> "Positive"
+                "no_growth" -> "No growth"
+                "pending" -> "Pending"
+                else -> "Review"
+            }
 
             ResultCard {
                 Row(
@@ -1663,21 +1725,22 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                         Text(displayOrganism, fontWeight = FontWeight.Bold)
                         Text(
                             listOf(
-                                row.collectionDate.ifBlank { "No date" },
+                                row.collectionDate.takeIf(String::isNotBlank)?.let { "Sent $it" } ?: "Sample date unavailable",
                                 specimenDisplay,
                                 row.setNumber?.let { "set $it" },
                                 row.bottleNumber?.let { "bottle $it" },
-                                row.isolateNumber?.let { "isolate $it" },
-                                row.reportStage.takeIf(String::isNotBlank)
+                                row.isolateNumber?.let { "isolate $it" }
                             ).filterNotNull().joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF555555)
+                            color = Color(0xFF555555),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        if (specimenDisplay != null) {
-                            Text(if (expanded) "Tap to collapse" else "Tap for culture details", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                        }
+                        if (row.reportingDate.isNotBlank()) Text("Reported ${row.reportingDate}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                        if (row.cultureNo.isNotBlank()) Text("Lab no. ${row.cultureNo}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
+                        Text(if (expanded) "Hide details" else "Review details", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     }
-                    Badge(row.status.replace("_", " "), growthColor)
+                    Badge(statusLabel, growthColor)
                 }
                 if (expanded && row.sourceReportName.isNotBlank() && !row.sourceReportName.equals(displayOrganism, true)) {
                     Text("Source: ${row.sourceReportName}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
@@ -1685,13 +1748,15 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                 if (expanded && row.gramStain.isNotBlank()) {
                     Text("Gram stain: ${row.gramStain}", style = MaterialTheme.typography.bodySmall)
                 }
-                if (expanded) {
-                    Text(
-                        "Parse confidence: ${row.confidence} · antibiogram: ${row.antibiogramCompleteness}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF666666)
-                    )
-                }
+                if (expanded) Text(
+                    listOf(
+                        row.reportStage.takeIf(String::isNotBlank)?.let { "Stage: $it" },
+                        "Parse confidence: ${row.confidence}",
+                        "Antibiogram: ${row.antibiogramCompleteness}"
+                    ).filterNotNull().joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF666666)
+                )
                 if (expanded && row.timeline.size > 1) {
                     Text("Report timeline", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                     row.timeline.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
@@ -1717,7 +1782,7 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                 } else if (expanded && isPositive) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Sensitivity data not available (image-based PDF or not yet reported).",
+                        "No susceptibility result was parsed from this report. Verify the source if susceptibility is clinically expected.",
                         style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888)
                     )
                 }
@@ -1725,11 +1790,8 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                     Spacer(Modifier.height(4.dp))
                     Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
                 }
-                if (expanded && row.cultureNo.isNotBlank()) {
-                    Text("Culture no: ${row.cultureNo}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
-                }
                 if (expanded) {
-                    TextButton(onClick = onOpenSource) { Text("Open source report list in NIMS") }
+                    TextButton(onClick = { onOpenSource(row.sourceKey) }) { Text("Open exact source report") }
                 }
             }
         }
@@ -1751,21 +1813,61 @@ private fun SummaryScreen(
         item { SectionTitle("Clinical summary", summary?.dateRange ?: "No summary") }
         item {
             ResultCard {
-                Text("Snapshot", fontWeight = FontWeight.Bold)
-                Text("Reports: ${summary?.sourceReports?.size ?: 0}")
-                val parsed = summary?.parsedReportCount ?: 0
-                val failed = summary?.failedReportCount ?: 0
-                if (failed > 0) Text("Unsupported/failed: $failed (image PDFs or unrecognised format)", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                Text("Parsed successfully: $parsed")
-                Text("Cultures: ${summary?.cultures?.size ?: 0}")
+                Text("At a glance", fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    item { Badge("Positive ${summary?.positiveCultureCount ?: 0}", Color(0xFFFFE8CC)) }
+                    item { Badge("Pending ${summary?.pendingCultureCount ?: 0}", Color(0xFFFFF1C2)) }
+                    item { Badge("No growth ${summary?.noGrowthCultureCount ?: 0}", Color(0xFFE6F4EA)) }
+                    item { Badge("Reports ${summary?.parsedReportCount ?: 0}/${summary?.sourceReports?.size ?: 0}", Color(0xFFE8EEF7)) }
+                }
             }
         }
         item {
             ResultCard {
-                Text("Interpretation", fontWeight = FontWeight.Bold)
-                val bullets = summary?.interpretation.orEmpty()
-                if (bullets.isEmpty()) Text("No interpretation available")
-                bullets.take(8).forEach { Text("- $it") }
+                Text("Positive / pending cultures", fontWeight = FontWeight.Bold)
+                val actionable = summary?.cultures.orEmpty().filter { it.status in setOf("growth_detected", "pending") }
+                if (actionable.isEmpty()) Text("No positive or pending culture was parsed.", style = MaterialTheme.typography.bodySmall)
+                actionable.take(6).forEach { culture ->
+                    Text(
+                        "• ${culture.collectionDate.ifBlank { "Date unavailable" }} — " +
+                            culture.site.ifBlank { culture.specimen }.ifBlank { "Specimen not parsed" } +
+                            ": " + culture.organism.ifBlank {
+                                if (culture.status == "pending") "pending" else "growth detected; organism not parsed"
+                            },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+        item {
+            ResultCard {
+                Text("Latest key results", fontWeight = FontWeight.Bold)
+                val keyLabs = summary?.labTrends.orEmpty()
+                    .filter { labPanel(it.parameter) in setOf("Hemogram", "Renal / metabolic", "Inflammatory", "Molecular / PCR") }
+                    .sortedBy { summaryLabRank(it.parameter) }
+                    .take(12)
+                if (keyLabs.isEmpty()) Text("No key laboratory values were parsed.", style = MaterialTheme.typography.bodySmall)
+                keyLabs.forEach { lab ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        Text(lab.parameter, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(lab.latestValue.ifBlank { "—" }, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodySmall)
+                            Text(lab.latestDate, style = MaterialTheme.typography.labelSmall, color = Color(0xFF666666))
+                        }
+                    }
+                }
+            }
+        }
+        if ((summary?.failedReportCount ?: 0) > 0 || (summary?.reviewCultureCount ?: 0) > 0) {
+            item {
+                ResultCard {
+                    Text("Needs source review", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                    summary?.sourceReports.orEmpty().filter { it.hasError }.take(5).forEach {
+                        Text("• ${it.dateSent} — ${it.reportName}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    val cultureReview = summary?.reviewCultureCount ?: 0
+                    if (cultureReview > 0) Text("• $cultureReview culture episode(s) were not confidently classified.", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
         item {
@@ -1792,6 +1894,23 @@ private fun SummaryScreen(
                 style = MaterialTheme.typography.bodySmall
             )
         }
+    }
+}
+
+private fun summaryLabRank(parameter: String): Int {
+    val p = parameter.uppercase()
+    return when {
+        p == "HB" || p.contains("HEMOGLOBIN") || p.contains("HAEMOGLOBIN") -> 0
+        p.contains("WBC") || p.contains("TLC") -> 1
+        p.contains("PLATELET") -> 2
+        p.contains("CREATININE") -> 3
+        p.contains("UREA") -> 4
+        p.contains("SODIUM") -> 5
+        p.contains("POTASSIUM") -> 6
+        p.contains("CRP") -> 7
+        p.contains("PROCALCITONIN") || p == "PCT" -> 8
+        p.contains("PCR") || p.contains("VIRAL LOAD") || p.contains("MOLECULAR") -> 9
+        else -> 20
     }
 }
 
@@ -1921,5 +2040,6 @@ data class ReportFetchResult(
 data class PreparedReportRequest(
     val row: JSONObject,
     val transientArg: String,
-    val directUrl: String
+    val directUrl: String,
+    val reportId: String
 )

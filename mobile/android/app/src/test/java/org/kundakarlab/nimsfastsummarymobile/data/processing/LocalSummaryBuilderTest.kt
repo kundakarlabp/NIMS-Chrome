@@ -104,6 +104,14 @@ class LocalSummaryBuilderTest {
         assertEquals(listOf("11.0 g/dL", "10.0 g/dL"), strings(rows.getJSONObject(0).getJSONArray("values")))
     }
 
+    @Test fun structuredRowsRetainSafeReportKeyForExactTransientSourceLookup() {
+        val report = report("02-06-2026", 1.4, GrowthStatus.GROWTH_DETECTED).copy(reportId = "report_key:abc")
+        val json = LocalSummaryBuilder().build(listOf(report), SummaryMode.FULL).helperJson!!
+
+        assertEquals("report_key:abc", json.getJSONArray("source_reports").getJSONObject(0).getString("report_id"))
+        assertEquals("report_key:abc", json.getJSONArray("culture_table").getJSONObject(0).getString("report_id"))
+    }
+
     @Test fun duplicateSameDateResultsPreferHighestConfidenceValue() {
         val medium = ParsedLabValue("CREAT", "Creatinine", "Creatinine", 1.1, null, null, null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.MEDIUM)
         val high = ParsedLabValue("CREAT", "Creatinine", "Creatinine", 1.2, null, "mg/dL", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH)

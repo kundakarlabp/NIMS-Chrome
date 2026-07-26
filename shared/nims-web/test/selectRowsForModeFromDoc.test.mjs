@@ -74,6 +74,28 @@ test('selectRowsForModeFromDoc returns empty array (not throws) when page has no
   dom.window.close();
 });
 
+test('quick review includes every molecular/PCR row without consuming panel limits', () => {
+  const { core, dom } = makeDoc();
+  const rows = [
+    ...Array.from({ length: 7 }, (_, index) => ({
+      report_name: `CMV PCR ${index}`,
+      date_sent: `${String(index + 1).padStart(2, '0')}-Jun-2026`,
+      report_tags: ['molecular']
+    })),
+    ...Array.from({ length: 7 }, (_, index) => ({
+      report_name: `CBC ${index}`,
+      date_sent: `${String(index + 1).padStart(2, '0')}-May-2026`,
+      report_tags: ['cbc']
+    }))
+  ];
+
+  const selected = core.selectRowsForMode(rows, 'bulk_fast');
+
+  assert.equal(selected.filter((row) => row.report_tags.includes('molecular')).length, 7);
+  assert.equal(selected.filter((row) => row.report_tags.includes('cbc')).length, 5);
+  dom.window.close();
+});
+
 // ROOT CAUSE REGRESSION (the row-relocation defect, distinct from the JS-
 // interpolation crash above): a row must never be re-located by row_index in
 // a LATER, separate call after the DOM has been mutated -- which is exactly

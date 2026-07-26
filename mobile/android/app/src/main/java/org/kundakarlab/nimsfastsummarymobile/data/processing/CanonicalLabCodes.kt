@@ -10,7 +10,12 @@ object CanonicalLabCodes {
         "total bilirubin" to "TBIL", "direct bilirubin" to "DBIL",
         "ast" to "AST", "sgot" to "AST", "ast sgot" to "AST", "alt" to "ALT", "sgpt" to "ALT", "alt sgpt" to "ALT",
         "alkaline phosphatase" to "ALP", "alp" to "ALP", "albumin" to "ALB",
-        "crp" to "CRP", "c reactive protein" to "CRP", "procalcitonin" to "PCT", "pct" to "PCT",
+        "crp" to "CRP", "c reactive protein" to "CRP",
+        "hscrp" to "HSCRP", "hs crp" to "HSCRP", "high sensitivity crp" to "HSCRP", "high sensitivity c reactive protein" to "HSCRP",
+        "procalcitonin" to "PCT", "pct" to "PCT",
+        "esr" to "ESR", "erythrocyte sedimentation rate" to "ESR",
+        "galactomannan" to "GM", "galactomannan index" to "GM", "aspergillus galactomannan" to "GM",
+        "beta d glucan" to "BDG", "1 3 beta d glucan" to "BDG", "bdg" to "BDG",
         "pt" to "PT", "prothrombin time" to "PT", "inr" to "INR"
     )
     fun normalize(value: String): String {

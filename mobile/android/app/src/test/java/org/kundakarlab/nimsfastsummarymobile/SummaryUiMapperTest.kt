@@ -16,7 +16,7 @@ class SummaryUiMapperTest {
             .put(
                 "source_reports",
                 JSONArray()
-                    .put(JSONObject().put("date_sent", "19-May-2026").put("report_name", "CBC").put("type", "cbc").put("status", "parsed"))
+                    .put(JSONObject().put("report_id", "report_key:cbc").put("date_sent", "19-May-2026").put("report_name", "CBC").put("type", "cbc").put("status", "parsed"))
                     .put(JSONObject().put("date_sent", "18-May-2026").put("report_name", "Culture").put("type", "culture").put("status", "error").put("notes", "parse failed"))
             )
             .put(
@@ -49,6 +49,7 @@ class SummaryUiMapperTest {
         val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(summary, "Review antibiotic dose.")
 
         assertEquals(2, ui.sourceReports.size)
+        assertEquals("report_key:cbc", ui.sourceReports.first().sourceKey)
         assertEquals(1, ui.failedReportCount)
         assertEquals("Hb", ui.labTrends.first().parameter)
         assertEquals(Abnormality.LOW, ui.labTrends.first().abnormality)
@@ -126,6 +127,7 @@ class SummaryUiMapperTest {
     fun mapperConsolidatesPreliminaryAndFinalCultureIntoPositiveEpisode() {
         val cultures = JSONArray()
             .put(JSONObject()
+                .put("report_id", "report_key:preliminary")
                 .put("lab_study_number", "B100")
                 .put("collection_date", "01-Jun-2026")
                 .put("specimen", "Blood")
@@ -146,7 +148,52 @@ class SummaryUiMapperTest {
         assertEquals(1, ui.cultures.size)
         assertEquals("growth_detected", ui.cultures.single().status)
         assertEquals("Klebsiella pneumoniae", ui.cultures.single().organism)
+        assertEquals("report_key:preliminary", ui.cultures.single().sourceKey)
         assertEquals(2, ui.cultures.single().timeline.size)
+    }
+
+    @Test
+    fun consolidatedCultureUsesPreferredFinalSourceWhenBothStagesHaveKeys() {
+        val cultures = JSONArray()
+            .put(JSONObject()
+                .put("report_id", "report_key:preliminary")
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("report_stage", "preliminary")
+                .put("status", "pending"))
+            .put(JSONObject()
+                .put("report_id", "report_key:final")
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("report_stage", "final")
+                .put("status", "positive"))
+
+        val row = SummaryJsonMapper.parseSummaryJsonToUiSummary(
+            JSONObject().put("culture_table", cultures)
+        ).cultures.single()
+
+        assertEquals("report_key:final", row.sourceKey)
+    }
+
+    @Test
+    fun cultureCommentDoesNotRepeatStructuredTimingAndBottleFields() {
+        val culture = JSONObject()
+            .put("report_stage", "final")
+            .put("reporting_date", "02-Jun-2026 10:30")
+            .put("bottle_name", "First bottle")
+            .put("set_number", 1)
+            .put("bottle_number", 1)
+            .put("comment", "Clinical correlation advised")
+
+        val row = SummaryJsonMapper.parseSummaryJsonToUiSummary(
+            JSONObject().put("culture_table", JSONArray().put(culture))
+        ).cultures.single()
+
+        assertEquals("Clinical correlation advised", row.comment)
+        assertEquals("02-Jun-2026 10:30", row.reportingDate)
+        assertEquals(1, row.bottleNumber)
     }
 
     private fun summaryWithTrendRows(vararg rows: JSONObject): JSONObject = JSONObject()

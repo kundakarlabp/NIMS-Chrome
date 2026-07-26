@@ -107,7 +107,6 @@ object NimsCultureTextParser {
         val specimen = specimen(body)
         val site = Regex("(?im)^\\s*COLLECTION\\s*:\\s*([^\\n]+)").find(body)?.groupValues?.get(1)?.trim()
         val comments = buildList {
-            gram?.takeIf { it.isNotBlank() }?.let { add("Gram stain: ${compact(it)}") }
             sections["NOTE"]?.takeIf { it.isNotBlank() }?.let { add(compact(it)) }
             sections["COMMENTS"]?.takeIf { it.isNotBlank() }?.let { add(compact(it)) }
             if (susceptibility.isEmpty() && listOf("SENSITIVITY REPORT", "SUSCEPTIBILITY REPORT", "INTERMEDIATE REPORT", "RESISTANCE REPORT").any { !sections[it].isNullOrBlank() }) {

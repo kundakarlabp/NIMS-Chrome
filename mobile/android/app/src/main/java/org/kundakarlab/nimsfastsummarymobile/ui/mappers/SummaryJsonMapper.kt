@@ -2,6 +2,7 @@ package org.kundakarlab.nimsfastsummarymobile.ui.mappers
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
 import org.kundakarlab.nimsfastsummarymobile.ui.models.Abnormality
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiCultureRow
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiLabTrendRow
@@ -25,6 +26,7 @@ object SummaryJsonMapper {
                 val row = rows.optJSONObject(index) ?: continue
                 val status = row.optString("status", "unknown")
                 add(UiSourceReport(
+                    sourceKey = row.optString("report_id"),
                     dateSent = row.optString("date_sent"),
                     reportName = row.optString("report_name", "Unnamed report"),
                     type = row.optString("type", row.optString("report_type", "other")),
@@ -34,7 +36,7 @@ object SummaryJsonMapper {
                     sourceAction = row.optString("action", "Open source report in NIMS")
                 ))
             }
-        }
+        }.sortedByDescending { DateNormalizer.normalize(it.dateSent).sortEpoch ?: Long.MIN_VALUE }
     }
 
     private fun labTrends(table: JSONObject?): List<UiLabTrendRow> {
@@ -66,6 +68,7 @@ object SummaryJsonMapper {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 add(UiCultureRow(
+                    sourceKey = row.optString("report_id"),
                     collectionDate = firstNonBlank(row, "collection_date", "date_sent", "reporting_date"),
                     cultureNo = firstNonBlank(row, "lab_study_number", "culture_no", "culture_number", "specimen_no"),
                     specimen = firstNonBlank(row, "specimen", "sample_type", "site_specimen", "specimen_no"),
@@ -107,6 +110,12 @@ object SummaryJsonMapper {
             .map { episode ->
                 val preferred = episode.maxByOrNull { stageRank(it.reportStage) } ?: episode.last()
                 preferred.copy(
+                    sourceKey = preferred.sourceKey.ifBlank {
+                        episode
+                            .sortedByDescending { stageRank(it.reportStage) }
+                            .firstNotNullOfOrNull { it.sourceKey.takeIf(String::isNotBlank) }
+                            .orEmpty()
+                    },
                     comment = episode.map { it.comment }.filter(String::isNotBlank).distinct().joinToString(" | "),
                     timeline = episode.sortedBy { stageRank(it.reportStage) }.map {
                         listOf(
@@ -117,7 +126,10 @@ object SummaryJsonMapper {
                     }.distinct()
                 )
             }
-            .sortedWith(compareBy<UiCultureRow>({ statusRank(it.status) }, { it.collectionDate }).reversed())
+            .sortedWith(
+                compareByDescending<UiCultureRow> { statusRank(it.status) }
+                    .thenByDescending { DateNormalizer.normalize(it.collectionDate).sortEpoch ?: Long.MIN_VALUE }
+            )
     }
 
     private fun stageRank(value: String): Int = when {
@@ -186,13 +198,6 @@ object SummaryJsonMapper {
     private fun cultureComment(row: JSONObject): String {
         val notes = buildList {
             firstNonBlank(row, "comment", "microbiology_note", "note").takeIf { it.isNotBlank() }?.let(::add)
-            firstNonBlank(row, "report_stage", "reporting_status", "report_status").takeIf { it.isNotBlank() && it != "unspecified" }?.let { add("Stage: $it") }
-            firstNonBlank(row, "bottle_name").takeIf { it.isNotBlank() }?.let { add("Bottle: $it") }
-            intField(row, "set_number")?.let { add("Set: $it") }
-            intField(row, "bottle_number")?.let { add("Bottle no: $it") }
-            intField(row, "isolate_number")?.let { add("Isolate: $it") }
-            firstNonBlank(row, "gram_stain").takeIf { it.isNotBlank() }?.let { add("Gram stain: $it") }
-            firstNonBlank(row, "reporting_date").takeIf { it.isNotBlank() }?.let { add("Reported: $it") }
             if (booleanField(row, "clinical_review_flag")) add("Clinical-significance review required; verify with source report and bedside context.")
         }
         return notes.distinct().joinToString(" | ")

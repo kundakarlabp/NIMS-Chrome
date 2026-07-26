@@ -182,35 +182,27 @@
     if (mode === "test_first" || mode === "test_direct") return selectOneTestRow(sorted);
     if (mode === "cultures_only" || mode === "bulk_cultures_only") return sorted.filter((row) => hasTag(row, "culture"));
 
-    const limits = { cbc: 3, renal_liver_electrolytes: 3 };
-    const counts = {};
+    const limits = { cbc: 5, rft: 5, lft: 5, electrolytes: 5 };
+    const counts = { cbc: 0, rft: 0, lft: 0, electrolytes: 0 };
     const selected = [];
     for (const row of sorted) {
-      if (selected.length >= 20) break;
       const tags = row.report_tags || inferReportTags(row.report_name || "");
-      if (tags.includes("culture")) {
+      if (tags.includes("culture") || tags.includes("inflammatory") || tags.includes("molecular")) {
         selected.push(row);
         continue;
       }
-      if (tags.includes("inflammatory")) {
-        selected.push(row);
-        continue;
-      }
-      let include = false;
       if (tags.includes("cbc")) {
-        counts.cbc = counts.cbc || 0;
         if (counts.cbc < limits.cbc) {
-          include = true;
           counts.cbc += 1;
+          selected.push(row);
         }
-      } else if (tags.includes("rft") || tags.includes("lft") || tags.includes("electrolytes")) {
-        counts.renal_liver_electrolytes = counts.renal_liver_electrolytes || 0;
-        if (counts.renal_liver_electrolytes < limits.renal_liver_electrolytes) {
-          include = true;
-          counts.renal_liver_electrolytes += 1;
-        }
+        continue;
       }
-      if (include) selected.push(row);
+      const panelTags = ["rft", "lft", "electrolytes"].filter((tag) => tags.includes(tag));
+      if (panelTags.some((tag) => counts[tag] < limits[tag])) {
+        selected.push(row);
+        panelTags.forEach((tag) => { counts[tag] += 1; });
+      }
     }
     return selected;
   }
@@ -447,7 +439,8 @@
     if (/electrolyte|sodium|potassium|chloride|bicarbonate/.test(lower)) tags.push("electrolytes");
     if (/lft|liver|bilirubin|sgot|sgpt|ast|alt|albumin|alkaline phosphatase|\balp\b/.test(lower)) tags.push("lft");
     if (/coag|prothrombin|\bpt\b|\binr\b|aptt/.test(lower)) tags.push("coagulation");
-    if (/crp|c reactive protein|procalcitonin/.test(lower)) tags.push("inflammatory");
+    if (/crp|c reactive protein|procalcitonin|esr|galactomannan|beta[- ]?d[- ]?glucan|\bbdg\b/.test(lower)) tags.push("inflammatory");
+    if (/\bpcr\b|rt[- ]?pcr|viral load|cbnaat|gene\s*xpert/.test(lower)) tags.push("molecular");
     if (/xray|x-ray|\bct\b|mri|usg|ultrasound|radiology/.test(lower)) tags.push("radiology");
     return tags.length ? unique(tags) : ["other"];
   }

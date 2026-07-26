@@ -35,7 +35,11 @@ class LocalSummaryBuilder {
     }
 
     private fun addLabTrends(lines: MutableList<String>, reports: List<ParsedReport>, keyOnly: Boolean, warnings: MutableList<String>) {
-        val keyCodes = setOf("HB", "WBC", "PLT", "CREAT", "NA", "K", "TBIL", "CRP", "PCT", "INR", "NEUT", "LYMPH", "ALT", "AST", "ALB")
+        val keyCodes = setOf(
+            "HB", "WBC", "PLT", "CREAT", "UREA", "NA", "K", "TBIL",
+            "CRP", "HSCRP", "ESR", "PCT", "GM", "BDG",
+            "INR", "ALT", "AST", "ALB"
+        )
         reports.flatMap { report -> report.labs.filter { it.confidence != ParseConfidence.LOW && (!keyOnly || CanonicalLabCodes.normalize(it.canonicalCode) in keyCodes) }.map { report to it } }
             .groupBy { CanonicalLabCodes.normalize(it.second.canonicalCode) }.values.forEach { rows ->
                 val datedRows = rows.mapNotNull { row -> DateNormalizer.normalize(row.first.dateSent).sortEpoch?.let { Triple(it, row.first, row.second) } }.sortedBy { it.first }
@@ -112,7 +116,7 @@ class LocalSummaryBuilder {
             .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
                 val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
-                a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
+                a.put(JSONObject().put("report_id", r.reportId).put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
                     .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
                     .put("action", "Open source report in NIMS")
                     .put("processor", r.processorName))
@@ -124,6 +128,7 @@ class LocalSummaryBuilder {
                     addAll(c.comments)
                 }
                 a.put(JSONObject()
+                    .put("report_id", report.reportId)
                     .put("collection_date", c.collectionDate.orEmpty()).put("reporting_date", c.reportingDate.orEmpty())
                     .put("lab_study_number", c.labStudyNumber.orEmpty()).put("specimen", c.specimen.orEmpty()).put("site", c.site.orEmpty())
                     .put("organism", c.organism.orEmpty()).put("organism_raw", c.organismRaw.orEmpty()).put("status", c.growthStatus.name.lowercase())

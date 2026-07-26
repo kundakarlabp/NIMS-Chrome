@@ -98,7 +98,15 @@ object RemoteReportMapper {
             susceptibility = antibioticResults(row),
             explicitResistanceMarkers = resistanceMarkerPatterns.filterValues { it.containsMatchIn(explicitText) }.keys.toSet(),
             comments = comments,
-            confidence = ParseConfidence.MEDIUM
+            confidence = ParseConfidence.MEDIUM,
+            labStudyNumber = firstNonBlank(row, "lab_study_number", "culture_no", "culture_number").ifBlank { null },
+            reportingDate = firstNonBlank(row, "reporting_date", "reported_date").ifBlank { null },
+            reportStage = firstNonBlank(row, "report_stage", "reporting_status", "report_status").ifBlank { null },
+            bottleName = firstNonBlank(row, "bottle_name").ifBlank { null },
+            setNumber = intField(row, "set_number"),
+            bottleNumber = intField(row, "bottle_number"),
+            isolateNumber = intField(row, "isolate_number"),
+            gramStain = firstNonBlank(row, "gram_stain").ifBlank { null }
         )
     }
 
@@ -130,6 +138,11 @@ object RemoteReportMapper {
         return match?.let { it.groupValues[1].toDoubleOrNull() to it.groupValues[2].toDoubleOrNull() } ?: (null to null)
     }
     private fun strings(values: JSONArray?): List<String> = buildList { if (values != null) for (i in 0 until values.length()) values.optString(i).takeIf { it.isNotBlank() }?.let(::add) }
+    private fun intField(row: JSONObject, key: String): Int? = when (val value = row.opt(key)) {
+        is Number -> value.toInt()
+        is String -> value.toIntOrNull()
+        else -> null
+    }
     private fun firstNonBlank(row: JSONObject, vararg keys: String, fallback: String = ""): String = keys.firstNotNullOfOrNull { row.optString(it).takeIf(String::isNotBlank) } ?: fallback
     private fun abnormality(value: String): Abnormality = when (value.lowercase()) { "high" -> Abnormality.HIGH; "low" -> Abnormality.LOW; "critical" -> Abnormality.CRITICAL; "normal" -> Abnormality.NORMAL; else -> Abnormality.UNKNOWN }
 }

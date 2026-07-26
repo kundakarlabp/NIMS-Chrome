@@ -15,11 +15,12 @@ object ClinicalSummaryFormatter {
             appendLine("Failed reports: ${summary.failedReportCount}")
             appendLine()
             appendLine("Key labs:")
-            summary.labTrends.take(12).forEach { appendLine("- ${labLine(it)}") }
-            if (summary.labTrends.isEmpty()) appendLine("- No lab trend data")
+            val keyLabs = summary.labTrends.filter(::isClinicallySelectedTrend).take(16)
+            keyLabs.forEach { appendLine("- ${labLine(it)}") }
+            if (keyLabs.isEmpty()) appendLine("- No selected lab trend data")
             appendLine()
             appendLine("Cultures:")
-            summary.cultures.sortedByDescending { it.status == "positive" }.take(12).forEach { appendLine("- ${cultureLine(it)}") }
+            summary.cultures.sortedByDescending { it.status == "growth_detected" }.take(12).forEach { appendLine("- ${cultureLine(it)}") }
             if (summary.cultures.isEmpty()) appendLine("- No culture data")
             appendLine()
             appendLine("Interpretation:")
@@ -45,5 +46,12 @@ object ClinicalSummaryFormatter {
         val sensitivity = if (row.sensitivitySummary.isBlank()) "" else "; ${row.sensitivitySummary}"
         val comment = if (row.comment.isBlank()) "" else "; ${row.comment}"
         return "${row.collectionDate.ifBlank { "unknown date" }} | ${row.site.ifBlank { row.specimen }} | $organism$sensitivity$comment"
+    }
+
+    private fun isClinicallySelectedTrend(row: UiLabTrendRow): Boolean {
+        val p = row.parameter.uppercase()
+        val excludedHemogram = listOf("MCV", "MCH", "MCHC", "NEUTRO", "LYMPH", "MONOCYTE", "EOSINOPHIL", "BASOPHIL", "RBC", "HCT", "PCV", "RDW", "ANC", "ALC")
+            .any { p.contains(it) }
+        return !excludedHemogram
     }
 }
