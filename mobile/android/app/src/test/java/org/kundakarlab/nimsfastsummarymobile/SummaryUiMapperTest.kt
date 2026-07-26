@@ -127,7 +127,7 @@ class SummaryUiMapperTest {
     fun mapperConsolidatesPreliminaryAndFinalCultureIntoPositiveEpisode() {
         val cultures = JSONArray()
             .put(JSONObject()
-                .put("report_id", "report_key:final")
+                .put("report_id", "report_key:preliminary")
                 .put("lab_study_number", "B100")
                 .put("collection_date", "01-Jun-2026")
                 .put("specimen", "Blood")
@@ -148,8 +148,33 @@ class SummaryUiMapperTest {
         assertEquals(1, ui.cultures.size)
         assertEquals("growth_detected", ui.cultures.single().status)
         assertEquals("Klebsiella pneumoniae", ui.cultures.single().organism)
-        assertEquals("report_key:final", ui.cultures.single().sourceKey)
+        assertEquals("report_key:preliminary", ui.cultures.single().sourceKey)
         assertEquals(2, ui.cultures.single().timeline.size)
+    }
+
+    @Test
+    fun consolidatedCultureUsesPreferredFinalSourceWhenBothStagesHaveKeys() {
+        val cultures = JSONArray()
+            .put(JSONObject()
+                .put("report_id", "report_key:preliminary")
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("report_stage", "preliminary")
+                .put("status", "pending"))
+            .put(JSONObject()
+                .put("report_id", "report_key:final")
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("report_stage", "final")
+                .put("status", "positive"))
+
+        val row = SummaryJsonMapper.parseSummaryJsonToUiSummary(
+            JSONObject().put("culture_table", cultures)
+        ).cultures.single()
+
+        assertEquals("report_key:final", row.sourceKey)
     }
 
     @Test

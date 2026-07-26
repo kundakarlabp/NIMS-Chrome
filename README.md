@@ -128,7 +128,7 @@ If opening in Android Studio, open the `mobile/android/` folder, let Gradle sync
 1. Open GitHub → **Actions**.
 2. Select the latest successful **CI** run.
 3. Open **Artifacts**.
-4. Download `nims-fast-summary-debug-apk`.
+4. Download `nims-results-0.10.1-debug-apk`.
 5. Extract the ZIP and install `app-debug.apk` on the Android device.
 6. If prompted, enable Android **Install unknown apps** for the browser or file manager used to open the APK.
 

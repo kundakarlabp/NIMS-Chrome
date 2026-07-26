@@ -110,6 +110,12 @@ object SummaryJsonMapper {
             .map { episode ->
                 val preferred = episode.maxByOrNull { stageRank(it.reportStage) } ?: episode.last()
                 preferred.copy(
+                    sourceKey = preferred.sourceKey.ifBlank {
+                        episode
+                            .sortedByDescending { stageRank(it.reportStage) }
+                            .firstNotNullOfOrNull { it.sourceKey.takeIf(String::isNotBlank) }
+                            .orEmpty()
+                    },
                     comment = episode.map { it.comment }.filter(String::isNotBlank).distinct().joinToString(" | "),
                     timeline = episode.sortedBy { stageRank(it.reportStage) }.map {
                         listOf(
