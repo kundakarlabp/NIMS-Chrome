@@ -89,7 +89,6 @@ data class ParsedReport(
         .put("culture_results", JSONArray().also { array -> cultures.forEach { culture -> array.put(culture.toJson()) } })
         .put("errors", JSONArray())
         .put("processing", JSONObject().put("processor", processorName))
-        .put("raw_text", rawText)
 }
 
 data class ProcessingSummary(
@@ -140,4 +139,3 @@ private fun ParsedCultureValue.toJson(): JSONObject = JSONObject()
     .put("explicit_resistance_markers", JSONArray(explicitResistanceMarkers.toList()))
     .put("comments", JSONArray(comments))
     .put("confidence", confidence.name.lowercase())
-    .put("raw_section_text", rawSectionText.orEmpty())

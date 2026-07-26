@@ -485,8 +485,7 @@ class ChromeModeActivity : ComponentActivity() {
                             .put("type", report.reportType)
                             .put("status", if (unsupported) "unsupported" else "parsed")
                             .put("notes", report.warnings.joinToString("; "))
-                            .put("action", if (unsupported) "Open source report in NIMS" else "")
-                            .put("raw_text", report.rawText)
+                            .put("action", "Open source report in NIMS")
                     )
                 }
             })

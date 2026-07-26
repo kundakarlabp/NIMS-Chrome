@@ -2,6 +2,7 @@ package org.kundakarlab.nimsfastsummarymobile.data.processing
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.kundakarlab.nimsfastsummarymobile.BuildConfig
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
 
 class LocalSummaryBuilder {
@@ -105,16 +106,19 @@ class LocalSummaryBuilder {
             }
         }
         return JSONObject()
+            .put("schema_version", "1.0")
+            .put("parser_version", "android-${BuildConfig.VERSION_NAME}")
+            .put("generated_at_epoch_ms", System.currentTimeMillis())
             .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
                 val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
                 a.put(JSONObject().put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
                     .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
-                    .put("action", if (r.labs.isEmpty() && r.cultures.isEmpty()) "Open source report in NIMS" else "")
-                    .put("processor", r.processorName).put("raw_text", r.rawText))
+                    .put("action", "Open source report in NIMS")
+                    .put("processor", r.processorName))
             } })
             .put("interpretation", JSONArray(lines))
-            .put("culture_table", JSONArray().also { a -> reports.flatMap { it.cultures }.forEach { c ->
+            .put("culture_table", JSONArray().also { a -> reports.forEach { report -> report.cultures.forEach { c ->
                 val commentParts = buildList {
                     if (c.explicitResistanceMarkers.isNotEmpty()) add("Markers: " + c.explicitResistanceMarkers.joinToString(", "))
                     addAll(c.comments)
@@ -123,16 +127,18 @@ class LocalSummaryBuilder {
                     .put("collection_date", c.collectionDate.orEmpty()).put("reporting_date", c.reportingDate.orEmpty())
                     .put("lab_study_number", c.labStudyNumber.orEmpty()).put("specimen", c.specimen.orEmpty()).put("site", c.site.orEmpty())
                     .put("organism", c.organism.orEmpty()).put("organism_raw", c.organismRaw.orEmpty()).put("status", c.growthStatus.name.lowercase())
+                    .put("confidence", c.confidence.name.lowercase())
                     .put("report_stage", c.reportStage.orEmpty()).put("bottle_name", c.bottleName.orEmpty())
                     .put("set_number", c.setNumber ?: JSONObject.NULL).put("bottle_number", c.bottleNumber ?: JSONObject.NULL)
                     .put("isolate_number", c.isolateNumber ?: JSONObject.NULL).put("gram_stain", c.gramStain.orEmpty())
+                    .put("report_name", report.reportName)
                     .put("susceptibility", JSONArray().also { results -> c.susceptibility.forEach { s ->
                         results.put(JSONObject().put("antibiotic", s.antibiotic).put("interpretation", s.interpretation)
                             .put("mic_value", s.micValue ?: JSONObject.NULL).put("mic_comparator", s.micComparator.orEmpty()).put("mic_unit", s.micUnit.orEmpty()))
                     } })
                     .put("sensitivity_summary", c.susceptibility.joinToString("; ") { s -> s.displayText() })
                     .put("comment", commentParts.joinToString(" | ")))
-            } })
+            } } })
             .put("lab_trend_table", JSONObject().put("columns", JSONArray(dateColumns)).put("rows", JSONArray().also { rows ->
                 rowsByCode.toSortedMap().forEach { (_, labsByDate) ->
                     val firstLab = labsByDate.values.first().lab

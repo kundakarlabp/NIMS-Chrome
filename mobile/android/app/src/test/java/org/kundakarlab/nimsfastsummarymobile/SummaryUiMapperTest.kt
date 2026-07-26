@@ -122,6 +122,33 @@ class SummaryUiMapperTest {
         assertEquals("01-06-2026", creat.previousDate)
     }
 
+    @Test
+    fun mapperConsolidatesPreliminaryAndFinalCultureIntoPositiveEpisode() {
+        val cultures = JSONArray()
+            .put(JSONObject()
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("bottle_number", 1)
+                .put("report_stage", "48-hour preliminary")
+                .put("status", "negative"))
+            .put(JSONObject()
+                .put("lab_study_number", "B100")
+                .put("collection_date", "01-Jun-2026")
+                .put("specimen", "Blood")
+                .put("bottle_number", 1)
+                .put("report_stage", "final")
+                .put("status", "positive")
+                .put("organism", "Klebsiella pneumoniae"))
+
+        val ui = SummaryJsonMapper.parseSummaryJsonToUiSummary(JSONObject().put("culture_table", cultures))
+
+        assertEquals(1, ui.cultures.size)
+        assertEquals("growth_detected", ui.cultures.single().status)
+        assertEquals("Klebsiella pneumoniae", ui.cultures.single().organism)
+        assertEquals(2, ui.cultures.single().timeline.size)
+    }
+
     private fun summaryWithTrendRows(vararg rows: JSONObject): JSONObject = JSONObject()
         .put("lab_trend_table", JSONObject()
             .put("columns", JSONArray().put("02-06-2026").put("01-06-2026").put("31-05-2026"))

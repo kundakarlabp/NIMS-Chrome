@@ -64,6 +64,16 @@ class LocalSummaryBuilderTest {
         assertEquals("Open source report in NIMS", sourceReport.getString("action"))
     }
 
+    @Test fun persistedSummaryNeverContainsTransientRawReportText() {
+        val marker = "TRANSIENT_RAW_REPORT_MARKER"
+        val parsed = report("02-06-2026", 1.4, GrowthStatus.GROWTH_DETECTED).copy(rawText = marker)
+
+        val json = LocalSummaryBuilder().build(listOf(parsed), SummaryMode.FULL).helperJson!!
+
+        assertFalse(json.toString().contains(marker))
+        assertFalse(json.toString().contains("raw_text"))
+    }
+
     @Test fun trendJsonUsesLatestToOldestAlignedColumnsAndBlanks() {
         val reports = listOf(report("31-05-2026", 1.0, GrowthStatus.NO_GROWTH), ParsedReport("mid", "Report", "01-06-2026", "lab", labs = emptyList(), processorName = "local"), report("02-06-2026", 1.4, GrowthStatus.NO_GROWTH))
         val table = LocalSummaryBuilder().build(reports.shuffled(), SummaryMode.FULL).helperJson!!.getJSONObject("lab_trend_table")

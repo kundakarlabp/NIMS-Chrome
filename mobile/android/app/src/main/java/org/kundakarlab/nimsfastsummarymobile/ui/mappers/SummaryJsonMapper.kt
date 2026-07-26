@@ -31,7 +31,7 @@ object SummaryJsonMapper {
                     status = status,
                     notes = row.optString("notes"),
                     hasError = status.equals("error", true) || status.equals("unsupported", true),
-                    rawText = row.optString("raw_text")
+                    sourceAction = row.optString("action", "Open source report in NIMS")
                 ))
             }
         }
@@ -62,7 +62,7 @@ object SummaryJsonMapper {
 
     private fun cultures(rows: JSONArray?): List<UiCultureRow> {
         if (rows == null) return emptyList()
-        return buildList {
+        val observations = buildList {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
                 add(UiCultureRow(
@@ -72,12 +72,77 @@ object SummaryJsonMapper {
                     site = firstNonBlank(row, "site", "bottle_name", "site_specimen"),
                     organism = firstNonBlank(row, "organism", "organism_name", "growth"),
                     growth = firstNonBlank(row, "growth", "growth_quantity", "result"),
-                    status = firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown"),
+                    status = normalizeCultureStatus(firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown")),
                     sensitivitySummary = susceptibilitySummary(row).ifBlank { sirSummary(row).ifBlank { stringField(row, "sensitivity_summary") } },
                     comment = cultureComment(row),
-                    sourceReportName = row.optString("report_name")
+                    sourceReportName = row.optString("report_name"),
+                    reportingDate = row.optString("reporting_date"),
+                    reportStage = row.optString("report_stage"),
+                    bottleName = row.optString("bottle_name"),
+                    setNumber = intField(row, "set_number"),
+                    bottleNumber = intField(row, "bottle_number"),
+                    isolateNumber = intField(row, "isolate_number"),
+                    gramStain = row.optString("gram_stain"),
+                    confidence = row.optString("confidence", "unknown"),
+                    antibiogramCompleteness = when {
+                        row.optJSONArray("susceptibility")?.length()?.let { it > 0 } == true -> "available"
+                        row.optString("sensitivity_summary").isNotBlank() -> "available"
+                        else -> "unavailable"
+                    }
                 ))
             }
+        }
+        return observations
+            .groupBy { row ->
+                listOf(
+                    row.cultureNo.ifBlank { row.collectionDate },
+                    row.specimen,
+                    row.site,
+                    row.setNumber?.toString().orEmpty(),
+                    row.bottleNumber?.toString().orEmpty(),
+                    row.isolateNumber?.toString().orEmpty()
+                ).joinToString("|").lowercase()
+            }
+            .values
+            .map { episode ->
+                val preferred = episode.maxByOrNull { stageRank(it.reportStage) } ?: episode.last()
+                preferred.copy(
+                    comment = episode.map { it.comment }.filter(String::isNotBlank).distinct().joinToString(" | "),
+                    timeline = episode.sortedBy { stageRank(it.reportStage) }.map {
+                        listOf(
+                            it.reportStage.ifBlank { "observation" },
+                            it.reportingDate.ifBlank { it.collectionDate },
+                            it.status.replace("_", " ")
+                        ).filter(String::isNotBlank).joinToString(" · ")
+                    }.distinct()
+                )
+            }
+            .sortedWith(compareBy<UiCultureRow>({ statusRank(it.status) }, { it.collectionDate }).reversed())
+    }
+
+    private fun stageRank(value: String): Int = when {
+        value.equals("final", true) -> 3
+        value.contains("48-hour", true) -> 2
+        value.contains("preliminary", true) -> 1
+        else -> 0
+    }
+
+    private fun statusRank(value: String): Int = when {
+        value.equals("growth_detected", true) -> 4
+        value.equals("pending", true) -> 3
+        value.equals("unknown", true) -> 2
+        value.equals("no_growth", true) -> 1
+        else -> 0
+    }
+
+    private fun normalizeCultureStatus(value: String): String {
+        val normalized = value.trim().lowercase().replace(' ', '_')
+        return when {
+            normalized in setOf("positive", "growth", "growth_present", "growth_detected", "isolated") -> "growth_detected"
+            normalized in setOf("negative", "sterile", "no_growth", "no_growth_detected") -> "no_growth"
+            normalized.contains("prelim") || normalized.contains("pending") -> "pending"
+            normalized.isBlank() -> "unknown"
+            else -> normalized
         }
     }
 

@@ -162,21 +162,22 @@ object LabTextParser {
             unit == null -> ParseConfidence.MEDIUM
             else -> ParseConfidence.HIGH
         }
-        // Determine abnormality from the reference range if we have one
+        // Try to extract reference range from the line itself (some reports print it inline)
+        val refMatch = Regex("\\(?([0-9.]+)\\s*[-–]\\s*([0-9.]+)\\)?").find(remaining.substringAfter(result.value))
+        val refLow = refMatch?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+        val refHigh = refMatch?.groupValues?.getOrNull(2)?.toDoubleOrNull()
+        val refRangeText = refMatch?.let { "${it.groupValues[1]}-${it.groupValues[2]}" }
         val abnormality = when {
-            def.refLow != null && value < def.refLow -> if (value < def.refLow * 0.6) Abnormality.CRITICAL else Abnormality.LOW
-            def.refHigh != null && value > def.refHigh -> if (value > def.refHigh * 2.0) Abnormality.CRITICAL else Abnormality.HIGH
-            def.refLow != null || def.refHigh != null -> Abnormality.NORMAL
+            refLow != null && value < refLow -> Abnormality.LOW
+            refHigh != null && value > refHigh -> Abnormality.HIGH
+            refLow != null || refHigh != null -> Abnormality.NORMAL
             else -> Abnormality.UNKNOWN
         }
-        // Try to extract reference range from the line itself (some reports print it inline)
-        val refRangeText = Regex("\\(?([0-9.]+)\\s*[-–]\\s*([0-9.]+)\\)?").find(remaining.substringAfter(result.value))
-            ?.let { "${it.groupValues[1]}-${it.groupValues[2]}" }
 
         return ParsedLabValue(
             CanonicalLabCodes.normalize(def.canonicalCode), def.displayName,
             line.substring(labelMatch.range.first, labelMatch.range.last + 1).trim(' ', ':'),
-            value, null, unit, def.refLow, def.refHigh, refRangeText, abnormality, date, confidence, comparator
+            value, null, unit, refLow, refHigh, refRangeText, abnormality, date, confidence, comparator
         )
     }
 }

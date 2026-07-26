@@ -110,6 +110,9 @@ object NimsCultureTextParser {
             gram?.takeIf { it.isNotBlank() }?.let { add("Gram stain: ${compact(it)}") }
             sections["NOTE"]?.takeIf { it.isNotBlank() }?.let { add(compact(it)) }
             sections["COMMENTS"]?.takeIf { it.isNotBlank() }?.let { add(compact(it)) }
+            if (susceptibility.isEmpty() && listOf("SENSITIVITY REPORT", "SUSCEPTIBILITY REPORT", "INTERMEDIATE REPORT", "RESISTANCE REPORT").any { !sections[it].isNullOrBlank() }) {
+                add("Antibiogram text was present but no supported antibiotic rows were recognized; verify the source report.")
+            }
             Regex("(?im)^\\s*(Highly resistant isolate|Kindly correlate clinically|Very high probability of true bacteremia[^\\n]*)").findAll(body).forEach { add(it.value.trim()) }
         }.distinct()
         val markers = resistanceMarkers.filterValues { it.containsMatchIn(body) }.keys
@@ -153,9 +156,13 @@ object NimsCultureTextParser {
                 Regex("(?i)(?<![A-Za-z])${aliasRegex(alias)}(?![A-Za-z])").findAll(text).forEach { hits += it.range.first to drug }
             }
         }
-        return hits.sortedBy { it.first }.distinctBy { it.second.canonical.lowercase() }.map { (position, drug) ->
-            val tail = text.substring(position).take(120)
-            val mic = Regex("(?i)MIC\\s*([<>=≤≥]*)\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(mcg/ml|µg/ml|ug/ml|mg/l)?").find(tail)
+        val ordered = hits.sortedBy { it.first }.distinctBy { it.second.canonical.lowercase() }
+        return ordered.mapIndexed { index, (position, drug) ->
+            val nextDrugStart = ordered.getOrNull(index + 1)?.first ?: text.length
+            val lineEnd = text.indexOf('\n', startIndex = position).let { if (it < 0) text.length else it }
+            val boundary = minOf(nextDrugStart, lineEnd)
+            val localTail = text.substring(position, boundary)
+            val mic = Regex("(?i)\\bMIC\\s*([<>=≤≥]*)\\s*([0-9]+(?:\\.[0-9]+)?)\\s*(mcg/ml|µg/ml|ug/ml|mg/l)?").find(localTail)
             AntibioticResult(
                 antibiotic = drug.canonical,
                 interpretation = interpretation,

@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "test:navigation": "node --test shared/nims-web/test/androidFrameBridge.test.mjs shared/nims-web/test/contentUtils.test.mjs shared/nims-web/test/navigationCore.test.mjs extension/test/*.test.mjs",
+    "test:navigation": "node --test shared/nims-web/test/*.test.mjs extension/test/*.test.mjs",
     "test": "npm run test:navigation"
   },
   "devDependencies": {

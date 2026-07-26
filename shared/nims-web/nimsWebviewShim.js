@@ -60,7 +60,15 @@
     return Boolean(value && /^(?:IFRAME|FRAME)$/i.test(String(value.tagName || "")));
   }
 
+  var lastLoadedNimsFrame = null;
+  w.document.addEventListener("load", function (event) {
+    var candidate = event && (event.target || event.srcElement);
+    if (isFrame(candidate)) lastLoadedNimsFrame = candidate;
+  }, true);
+
   function recentNimsFrame() {
+    if (lastLoadedNimsFrame && lastLoadedNimsFrame.isConnected !== false) return lastLoadedNimsFrame;
+    if (!w.document || typeof w.document.querySelectorAll !== "function") return null;
     var frames = w.document.querySelectorAll("iframe,frame");
     for (var i = frames.length - 1; i >= 0; i -= 1) {
       var frame = frames[i];
