@@ -235,7 +235,6 @@ private fun SourceReportsScreen(modifier: Modifier, reports: List<UiSourceReport
                     if (report.notes.isNotBlank()) {
                         Text(report.notes, style = MaterialTheme.typography.bodySmall)
                     }
-                    Text(report.sourceAction, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
