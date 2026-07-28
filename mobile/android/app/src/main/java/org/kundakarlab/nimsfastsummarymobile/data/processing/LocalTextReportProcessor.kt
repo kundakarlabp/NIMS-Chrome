@@ -59,7 +59,9 @@ class LocalTextReportProcessor(
         "no growth", "growth detected", "sensitive", "resistant", "aerobic culture",
         // Pathology / other
         "biopsy", "cytology", "smear", "staining", "gram", "acid fast", "tb",
-        "fluid", "pus", "sputum", "blood culture",
+        "fluid", "pus", "sputum", "blood culture", "histopathology", "diagnosis", "special stain",
+        // Coagulation and NIMS molecular headings
+        "esr", "aptt", "prothrombin", "gene xpert", "genexpert", "cbnaat",
         // Molecular / fungal biomarkers
         "pcr", "rt-pcr", "viral load", "galactomannan", "beta-d-glucan", "beta d glucan"
     ).any { text.contains(it, true) }
