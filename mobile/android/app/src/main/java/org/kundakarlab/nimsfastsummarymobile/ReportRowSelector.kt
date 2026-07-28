@@ -29,7 +29,9 @@ internal object ReportRowSelector {
         val chemistry = mutableMapOf("rft" to 0, "lft" to 0, "electrolytes" to 0)
         for (row in rows) {
             when {
-                row.hasTag("culture") || row.hasTag("inflammatory") -> selected += row
+                row.hasTag("culture") || row.hasTag("inflammatory") ||
+                    row.hasTag("molecular") || row.hasTag("coagulation") ||
+                    row.hasTag("pathology") -> selected += row
                 row.hasTag("cbc") && cbc < 5 -> {
                     selected += row
                     cbc += 1

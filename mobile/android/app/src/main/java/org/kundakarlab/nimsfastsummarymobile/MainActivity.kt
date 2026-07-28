@@ -24,7 +24,6 @@ import androidx.webkit.WebViewFeature
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,9 +69,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -119,6 +115,7 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 
@@ -137,11 +134,8 @@ class MainActivity : ComponentActivity() {
     // clickFirstReportForMode's comment in nimsReportCore.js for the full
     // explanation. Cleared whenever mapping/mappingValidated are cleared.
     private var discoveredTestRow: JSONObject? = null
-    // Exact report URLs contain transient NIMS arguments. They are kept only
-    // in memory for the current authenticated session so source buttons can
-    // open the matching PDF without persisting or exporting those arguments.
-    private val transientSourceUrls = mutableMapOf<String, String>()
     private var validatedReportCache: Pair<String, ParsedReport>? = null
+    private val parsedReportCache = ConcurrentHashMap<String, ParsedReport>()
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
@@ -235,8 +229,7 @@ class MainActivity : ComponentActivity() {
                     onCopySummary = { copyCleanSummary() },
                     onCopyJson = { copyText("NIMS Fast Summary JSON", sanitizedSummaryText.ifBlank { "{}" }) },
                     onExportText = { shareText("NIMS Fast Summary", cleanSummaryText()) },
-                    onClearResults = { clearResults() },
-                    onOpenSourceReport = { sourceKey -> openSourceReport(sourceKey) }
+                    onClearResults = { clearResults() }
                 )
             }
         }
@@ -448,7 +441,7 @@ class MainActivity : ComponentActivity() {
         mappingValidated = false
         discoveredTestRow = null
         validatedReportCache = null
-        transientSourceUrls.clear()
+        parsedReportCache.clear()
         clearWebViewSession(coldStartOnly = false) {
             webView.loadUrl(NIMS_LOGIN_URL)
             setState(AppState.HELPER_READY, "NIMS session cleared. Login manually.")
@@ -494,7 +487,7 @@ class MainActivity : ComponentActivity() {
         mappingValidated = false
         discoveredTestRow = null
         validatedReportCache = null
-        transientSourceUrls.clear()
+        parsedReportCache.clear()
         setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
         evaluateCore("JSON.stringify(NimsReportCore.openCrWiseResultsDirect(document))") { result ->
             when {
@@ -801,7 +794,6 @@ class MainActivity : ComponentActivity() {
                 continue
             }
             val reportId = safeReportKey(transient, row)
-            transientSourceUrls[reportId] = directUrl
             prepared.add(PreparedReportRequest(row, transient, directUrl, reportId))
         }
         if (skipped > 0 && prepared.isEmpty()) {
@@ -843,6 +835,7 @@ class MainActivity : ComponentActivity() {
                     return
                 }
                 validatedReportCache = result.reportId to result
+                parsedReportCache[result.reportId] = result
                 listOf(result)
             } else {
                 val cultureRequests = prepared.filter { request ->
@@ -860,7 +853,7 @@ class MainActivity : ComponentActivity() {
                     // reports begin immediately instead of waiting for every
                     // culture PDF to finish.
                     val cultureJob = async { processBulk(cultureRequests, concurrency = 3, onCompleted = markCompleted) }
-                    val laboratoryJob = async { processBulk(otherRequests, concurrency = 2, onCompleted = markCompleted) }
+                    val laboratoryJob = async { processBulk(otherRequests, concurrency = 3, onCompleted = markCompleted) }
                     val cultures = cultureJob.await()
                     if (cultures.isNotEmpty()) {
                         when (val partial = withContext(Dispatchers.IO) {
@@ -878,6 +871,10 @@ class MainActivity : ComponentActivity() {
                     cultures to laboratoryJob.await()
                 }
                 cultureReports + otherReports
+            }
+            if (mode == "test_direct") {
+                setState(AppState.FETCHING, "Mapping validated.")
+                return
             }
             val summaryMode = when (mode) {
                 "bulk_full" -> SummaryMode.FULL
@@ -921,11 +918,17 @@ class MainActivity : ComponentActivity() {
                 semaphore.withPermit {
                     ensureActive()
                     try {
-                        validatedReportCache
-                            ?.takeIf { it.first == request.reportId }
-                            ?.second
-                            ?.also { log("Reusing the report parsed during validation") }
-                            ?: fetchAndParseOne(request, index, prepared.size)
+                        parsedReportCache[request.reportId]
+                            ?.also { log("Reusing an in-memory parsed report") }
+                            ?: validatedReportCache
+                                ?.takeIf { it.first == request.reportId }
+                                ?.second
+                                ?.also { log("Reusing the report parsed during validation") }
+                            ?: fetchAndParseOne(request, index, prepared.size).also { parsed ->
+                                if (parsed.labs.isNotEmpty() || parsed.cultures.isNotEmpty()) {
+                                    parsedReportCache[request.reportId] = parsed
+                                }
+                            }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
@@ -976,20 +979,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun localSummaryJson(reports: List<ParsedReport>, text: String): JSONObject = JSONObject()
-        .put("source_reports", JSONArray().also { array -> reports.forEach { report -> array.put(JSONObject().put("report_id", report.reportId).put("date_sent", report.dateSent).put("report_name", report.reportName).put("type", report.reportType).put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed").put("notes", report.warnings.distinct().joinToString("; ")).put("action", "Open source report in NIMS")) } })
+        .put("source_reports", JSONArray().also { array -> reports.forEach { report ->
+            array.put(
+                JSONObject()
+                    .put("report_id", report.reportId)
+                    .put("date_sent", report.dateSent)
+                    .put("report_name", report.reportName)
+                    .put("type", report.reportType)
+                    .put("status", if (report.labs.isEmpty() && report.cultures.isEmpty()) "unsupported" else "parsed")
+                    .put("notes", report.warnings.distinct().joinToString("; "))
+                    .put("culture_count", report.cultures.size)
+            )
+        } })
         .put("interpretation", JSONArray(text.lines()))
 
-    private fun openSourceReport(sourceKey: String) {
-        val url = transientSourceUrls[sourceKey]
-        if (url.isNullOrBlank() || !NimsReportTemplate.isAllowedNimsUrl(url)) {
-            setState(AppState.ERROR, "This source link is no longer available. Return to the current CR result list and run Quick Review again.")
-            selectedTab = 0
-            return
-        }
-        selectedTab = 0
-        webView.loadUrl(url)
-        setState(AppState.HELPER_READY, "Opening the exact source report in NIMS…")
-    }
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -1180,7 +1183,7 @@ class MainActivity : ComponentActivity() {
         mappingValidated = false
         discoveredTestRow = null
         validatedReportCache = null
-        transientSourceUrls.clear()
+        parsedReportCache.clear()
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 
@@ -1281,8 +1284,7 @@ private fun NimsFastSummaryApp(
     onCopySummary: () -> Unit,
     onCopyJson: () -> Unit,
     onExportText: () -> Unit,
-    onClearResults: () -> Unit,
-    onOpenSourceReport: (String) -> Unit
+    onClearResults: () -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -1321,9 +1323,9 @@ private fun NimsFastSummaryApp(
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
-            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty(), onOpenSourceReport)
+            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
             2 -> TrendsScreen(contentModifier, summary?.labTrends.orEmpty())
-            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty(), onOpenSourceReport)
+            3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty())
             else -> SummaryScreen(
                 modifier = contentModifier,
                 summary = summary,
@@ -1467,15 +1469,17 @@ private fun NimsWebViewScreen(
 }
 
 @Composable
-private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>, onOpenSource: (String) -> Unit) {
+private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
+    var expandedIndex by remember { mutableIntStateOf(-1) }
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { SectionTitle("Source reports", "${reports.size} reports · tap to verify") }
+        item { SectionTitle("Parsed reports", "${reports.size} reports · tap for full structured details") }
         if (reports.isEmpty()) item { EmptyCard("Tap Quick Review on the NIMS tab to load reports.") }
-        items(reports) { report ->
+        itemsIndexed(reports) { index, report ->
+            val expanded = expandedIndex == index
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onOpenSource(report.sourceKey) },
+                    .clickable { expandedIndex = if (expanded) -1 else index },
                 shape = RoundedCornerShape(10.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (report.hasError) Color(0xFFFFF0EF) else MaterialTheme.colorScheme.surfaceVariant
@@ -1494,16 +1498,69 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>, onO
                     }
                         Badge(if (report.hasError) "Needs review" else report.type.uppercase(), if (report.hasError) Color(0xFFFFDAD6) else Color(0xFFE8EEF7))
                 }
-                    if (report.hasError && report.notes.isNotBlank()) {
+                    Text(
+                        when {
+                            report.results.isNotEmpty() -> "${report.results.size} parsed result(s)"
+                            report.cultureCount > 0 -> "${report.cultureCount} microbiology observation(s)"
+                            else -> "No structured result extracted"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF666666)
+                    )
+                    if (report.notes.isNotBlank()) {
                         Text(
                             report.notes.substringBefore(";").take(180),
-                            color = MaterialTheme.colorScheme.error,
+                            color = if (report.hasError) MaterialTheme.colorScheme.error else Color(0xFF666666),
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Text("Open exact report", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        if (expanded) "Hide parsed details" else "View parsed details",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    if (expanded && report.results.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        report.results.forEach { result ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(result.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                    if (result.referenceRange.isNotBlank()) {
+                                        Text(
+                                            "Reference ${result.referenceRange}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFF777777)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    listOf(result.value, result.unit).filter(String::isNotBlank).joinToString(" "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = abnormalityTextColor(result.abnormality)
+                                )
+                            }
+                        }
+                    }
+                    if (expanded && report.cultureCount > 0) {
+                        Text(
+                            "Full organism, specimen, timing and susceptibility details are shown in Cultures.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF555555)
+                        )
+                    }
+                    if (expanded) {
+                        Text(
+                            "Structured on-device extraction; verify against the NIMS source list before clinical decisions.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF777777)
+                        )
+                    }
                 }
             }
         }
@@ -1580,41 +1637,37 @@ private fun TrendsScreen(modifier: Modifier, rows: List<UiLabTrendRow>) {
                 }
                 items(groupRows) { row ->
                     val abnColor = abnormalityColor(row.abnormality)
+                    val abnTextColor = abnormalityTextColor(row.abnormality)
                     ResultCard {
-                        Row(verticalAlignment = Alignment.Top) {
-                            Column(Modifier.weight(1f)) {
-                                Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                if (row.history.size > 1) TrendChart(row.history)
-                                if (row.history.size > 1) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("History", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                                    row.history.take(10).forEach { (date, value) ->
-                                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                            Text(date, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
-                                            Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-                                        }
-                                    }
-                                }
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                // Latest value prominently with abnormality colour
-                                Text(
-                                    row.latestValue.ifBlank { "—" },
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (row.abnormality == Abnormality.NORMAL || row.abnormality == Abnormality.UNKNOWN) Color(0xFF222222) else abnColor
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(row.parameter, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            if (row.abnormality != Abnormality.NORMAL && row.abnormality != Abnormality.UNKNOWN) {
+                                Badge(
+                                    when (row.abnormality) { Abnormality.HIGH -> "HIGH"; Abnormality.LOW -> "LOW"; Abnormality.CRITICAL -> "CRITICAL"; else -> "" },
+                                    abnColor
                                 )
-                                Text(row.latestDate.ifBlank { "" }, style = MaterialTheme.typography.bodySmall, color = Color(0xFF666666))
-                                if (row.abnormality != Abnormality.NORMAL && row.abnormality != Abnormality.UNKNOWN) {
-                                    Badge(
-                                        when (row.abnormality) { Abnormality.HIGH -> "HIGH"; Abnormality.LOW -> "LOW"; Abnormality.CRITICAL -> "CRITICAL"; else -> "" },
-                                        abnColor
-                                    )
-                                }
-                                // Previous for comparison
-                                if (!row.previousValue.isNullOrBlank()) {
-                                    Text("prev: ${row.previousValue}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF888888))
-                                }
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        row.history.take(10).forEachIndexed { index, (date, value) ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    date.ifBlank { "Date unavailable" },
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF555555)
+                                )
+                                Text(
+                                    value,
+                                    style = if (index == 0) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (index == 0) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (index == 0 && row.abnormality !in setOf(Abnormality.NORMAL, Abnormality.UNKNOWN)) abnTextColor else Color(0xFF222222)
+                                )
                             }
                         }
                     }
@@ -1640,42 +1693,7 @@ private fun labPanel(parameter: String): String {
 }
 
 @Composable
-private fun TrendChart(history: List<Pair<String, String>>) {
-    val points = history.asReversed().mapNotNull { (_, raw) ->
-        Regex("[-+]?[0-9][0-9,]*(?:\\.[0-9]+)?").find(raw)?.value?.replace(",", "")?.toFloatOrNull()
-    }
-    if (points.isEmpty()) return
-    val lineColor = MaterialTheme.colorScheme.primary
-    Canvas(
-        Modifier
-            .fillMaxWidth()
-            .height(110.dp)
-            .padding(vertical = 8.dp)
-    ) {
-        val min = points.minOrNull() ?: return@Canvas
-        val max = points.maxOrNull() ?: return@Canvas
-        val span = (max - min).takeIf { it > 0f } ?: 1f
-        val left = 8.dp.toPx()
-        val right = size.width - 8.dp.toPx()
-        val top = 8.dp.toPx()
-        val bottom = size.height - 8.dp.toPx()
-        repeat(3) { index ->
-            val y = top + (bottom - top) * index / 2f
-            drawLine(Color(0xFFE1E7EF), start = androidx.compose.ui.geometry.Offset(left, y), end = androidx.compose.ui.geometry.Offset(right, y), strokeWidth = 1.dp.toPx())
-        }
-        val path = Path()
-        points.forEachIndexed { index, value ->
-            val x = if (points.size == 1) (left + right) / 2f else left + (right - left) * index / (points.size - 1f)
-            val y = bottom - (bottom - top) * (value - min) / span
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            drawCircle(lineColor, radius = 3.5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
-        }
-        if (points.size > 1) drawPath(path, lineColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
-    }
-}
-
-@Composable
-private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenSource: (String) -> Unit) {
+private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>) {
     var expandedIndex by remember { mutableIntStateOf(-1) }
     val positive = rows.count { it.status.equals("growth_detected", true) }
     val pending = rows.count { it.status.equals("pending", true) }
@@ -1706,6 +1724,8 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                 !row.organism.equals("no_growth", true) -> row.organism
                 isPositive -> "Growth detected"
                 row.status.equals("no_growth", true) -> "No growth"
+                row.gramStain.isNotBlank() -> "Gram stain report"
+                row.sourceReportName.isNotBlank() -> row.sourceReportName
                 else -> row.status.replace("_", " ").replaceFirstChar { it.uppercase() }.ifBlank { "Culture" }
             }
             val specimenDisplay = row.site.ifBlank { row.specimen }.ifBlank { null }
@@ -1789,9 +1809,6 @@ private fun CulturesScreen(modifier: Modifier, rows: List<UiCultureRow>, onOpenS
                 if (expanded && row.comment.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text("Comment: ${row.comment}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
-                }
-                if (expanded) {
-                    TextButton(onClick = { onOpenSource(row.sourceKey) }) { Text("Open exact source report") }
                 }
             }
         }
@@ -2026,6 +2043,13 @@ private fun abnormalityColor(value: Abnormality): Color {
         Abnormality.NORMAL -> Color(0xFFE6F4EA)
         Abnormality.UNKNOWN -> Color(0xFFE8EEF7)
     }
+}
+
+private fun abnormalityTextColor(value: Abnormality): Color = when (value) {
+    Abnormality.HIGH -> Color(0xFF9A3412)
+    Abnormality.LOW -> Color(0xFF3730A3)
+    Abnormality.CRITICAL -> Color(0xFFB91C1C)
+    Abnormality.NORMAL, Abnormality.UNKNOWN -> Color(0xFF222222)
 }
 
 private var webViewSessionCleaned = false

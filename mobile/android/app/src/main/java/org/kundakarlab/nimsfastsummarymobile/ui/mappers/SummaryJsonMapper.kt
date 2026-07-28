@@ -33,10 +33,32 @@ object SummaryJsonMapper {
                     status = status,
                     notes = row.optString("notes"),
                     hasError = status.equals("error", true) || status.equals("unsupported", true),
-                    sourceAction = row.optString("action", "Open source report in NIMS")
+                    results = reportResults(row.optJSONArray("results")),
+                    cultureCount = row.optInt("culture_count", 0)
                 ))
             }
         }.sortedByDescending { DateNormalizer.normalize(it.dateSent).sortEpoch ?: Long.MIN_VALUE }
+    }
+
+    private fun reportResults(rows: JSONArray?): List<org.kundakarlab.nimsfastsummarymobile.ui.models.UiReportResult> {
+        if (rows == null) return emptyList()
+        return buildList {
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                val numeric = row.opt("value").takeUnless { it == null || it == JSONObject.NULL }?.toString().orEmpty()
+                val text = row.optString("text_value")
+                add(
+                    org.kundakarlab.nimsfastsummarymobile.ui.models.UiReportResult(
+                        name = row.optString("name", "Result"),
+                        value = numeric.ifBlank { text },
+                        unit = row.optString("unit"),
+                        referenceRange = row.optString("reference_range"),
+                        abnormality = abnormality(row.optString("abnormality")),
+                        confidence = row.optString("confidence", "unknown")
+                    )
+                )
+            }
+        }
     }
 
     private fun labTrends(table: JSONObject?): List<UiLabTrendRow> {
@@ -232,10 +254,10 @@ object SummaryJsonMapper {
         val lower = value.lowercase()
         return when {
             "critical" in lower -> Abnormality.CRITICAL
-            "[high]" in lower || " high" in lower -> Abnormality.HIGH
-            "[low]" in lower || " low" in lower -> Abnormality.LOW
+            lower == "high" || "[high]" in lower || " high" in lower -> Abnormality.HIGH
+            lower == "low" || "[low]" in lower || " low" in lower -> Abnormality.LOW
             value.isBlank() -> Abnormality.UNKNOWN
-            "[normal]" in lower -> Abnormality.NORMAL
+            lower == "normal" || "[normal]" in lower -> Abnormality.NORMAL
             else -> Abnormality.UNKNOWN
         }
     }

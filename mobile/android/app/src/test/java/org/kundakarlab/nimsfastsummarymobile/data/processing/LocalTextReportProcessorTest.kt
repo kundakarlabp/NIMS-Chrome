@@ -85,6 +85,77 @@ class LocalTextReportProcessorTest {
     @Test fun pcrHeadingWithoutExplicitResultIsNotInferredNegative() {
         assertTrue(MolecularResultParser.parse("CMV DNA PCR\nSample received", "2026-01-01").isEmpty())
     }
+
+    @Test fun parsesNimsMultilineEsrAndCoagulationLayouts() {
+        val report = success(
+            """
+            Department of Biochemistry
+            Investigation Result Unit Ref. Range
+            ESR
+            72
+            mm at 1st hr
+            0 - 20
+
+            Prothrombin Time(PT)
+            Patient Result Control
+            14.7 Sec 11.7 9.0 - 13.0 Sec
+            PT INR
+            1.24
+            Plasma APTT (Patient)
+            27.4
+            Sec
+            25 - 39
+            Plasma APTT (Control)
+            32.0
+            """.trimIndent()
+        )
+
+        assertTrue(report.labs.any { it.canonicalCode == "ESR" && it.numericValue == 72.0 })
+        assertTrue(report.labs.any { it.canonicalCode == "PT" && it.numericValue == 14.7 })
+        assertTrue(report.labs.any { it.canonicalCode == "INR" && it.numericValue == 1.24 })
+        assertTrue(report.labs.any { it.canonicalCode == "APTT" && it.numericValue == 27.4 })
+    }
+
+    @Test fun parsesNimsGeneXpertMtbResultWithoutSpaceInAssayName() {
+        val report = success(
+            """
+            Department of Microbiology
+            SAMPLE CSF
+            GENEXPERT NOT DETECTED MYCOBACTERIUM
+            TUBERCULOSIS COMPLEX.
+            """.trimIndent()
+        )
+
+        val xpert = report.labs.single { it.displayName == "MTB molecular test" }
+        assertEquals("Not detected", xpert.textValue)
+        assertEquals("PCR_MTB_MOLECULAR_TEST", xpert.canonicalCode)
+    }
+
+    @Test fun retainsExplicitHistopathologyDiagnosisWithoutPersistingWholeReport() {
+        val report = success(
+            """
+            HISTOPATHOLOGY REVIEW REPORT
+            Microscopic Description:
+            Narrative not selected as a structured result.
+            Report on special stain:
+            SM stain for fungus - Highlights numerous broad aseptate fungal hyphae.
+            Diagnosis:
+            Features are consistent with Invasive Zygomycosis.
+            Comments:
+            Source-only comment.
+            """.trimIndent()
+        )
+
+        assertTrue(report.labs.any {
+            it.canonicalCode == "NARRATIVE_SPECIAL_STAIN" &&
+                it.textValue?.contains("broad aseptate fungal hyphae", true) == true
+        })
+        assertTrue(report.labs.any {
+            it.canonicalCode == "NARRATIVE_DIAGNOSIS" &&
+                it.textValue?.contains("Invasive Zygomycosis", true) == true
+        })
+    }
+
     private fun success(text: String): ParsedReport = (runSuspend { LocalTextReportProcessor().parseReport(input(text)) } as ProcessingResult.Success).value
     private fun input(text: String, type: String = "text/plain") = ReportInput("r1", "Test", "2026-01-01", "lab", type, text.toByteArray())
 }

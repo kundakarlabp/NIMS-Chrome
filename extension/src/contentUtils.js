@@ -440,7 +440,8 @@
     if (/lft|liver|bilirubin|sgot|sgpt|ast|alt|albumin|alkaline phosphatase|\balp\b/.test(lower)) tags.push("lft");
     if (/coag|prothrombin|\bpt\b|\binr\b|aptt/.test(lower)) tags.push("coagulation");
     if (/crp|c reactive protein|procalcitonin|esr|galactomannan|beta[- ]?d[- ]?glucan|\bbdg\b/.test(lower)) tags.push("inflammatory");
-    if (/\bpcr\b|rt[- ]?pcr|viral load|cbnaat|gene\s*xpert/.test(lower)) tags.push("molecular");
+    if (/\bpcr\b|rt[- ]?pcr|viral load|cbnaat|gene\s*xpert|genexpert/.test(lower)) tags.push("molecular");
+    if (/histopath|histology|biopsy|cytology|pathology/.test(lower)) tags.push("pathology");
     if (/xray|x-ray|\bct\b|mri|usg|ultrasound|radiology/.test(lower)) tags.push("radiology");
     return tags.length ? unique(tags) : ["other"];
   }

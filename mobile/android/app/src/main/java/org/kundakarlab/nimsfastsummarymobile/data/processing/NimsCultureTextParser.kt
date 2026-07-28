@@ -177,6 +177,12 @@ object NimsCultureTextParser {
         val result = linkedMapOf<String, StringBuilder>()
         var current: String? = null
         body.lines().forEach { line ->
+            if (line.contains("END OF THE REPORT", true) ||
+                line.trim().startsWith("Test results relate only", true)
+            ) {
+                current = null
+                return@forEach
+            }
             val heading = sectionHeading.matchEntire(line.trim())?.groupValues?.get(1)?.uppercase()
             if (heading != null) {
                 current = when {
@@ -189,7 +195,9 @@ object NimsCultureTextParser {
                 val after = line.substringAfter(':', "").trim()
                 if (after.isNotBlank()) result[current]!!.appendLine(after)
             } else if (current != null) {
-                if (!line.contains("END OF THE REPORT", true) && !line.startsWith("Validated By", true)) result[current]!!.appendLine(line)
+                if (!line.startsWith("Validated By", true) && !line.matches(Regex("(?i)^Page\\s+\\d+\\s+of\\s+\\d+.*"))) {
+                    result[current]!!.appendLine(line)
+                }
             }
         }
         return result.mapValues { it.value.toString().trim() }

@@ -72,6 +72,31 @@ class SummaryUiMapperTest {
     }
 
     @Test
+    fun mapperRetainsExpandableStructuredReportResults() {
+        val source = JSONObject()
+            .put("report_name", "Activated Partial Thromboplastin Time")
+            .put("date_sent", "28-Aug-2025")
+            .put("status", "parsed")
+            .put("results", JSONArray().put(
+                JSONObject()
+                    .put("name", "aPTT")
+                    .put("value", 27.4)
+                    .put("unit", "Sec")
+                    .put("reference_range", "25-39")
+                    .put("abnormality", "normal")
+                    .put("confidence", "high")
+            ))
+
+        val report = SummaryJsonMapper.parseSummaryJsonToUiSummary(
+            JSONObject().put("source_reports", JSONArray().put(source))
+        ).sourceReports.single()
+
+        assertEquals("aPTT", report.results.single().name)
+        assertEquals("27.4", report.results.single().value)
+        assertEquals(Abnormality.NORMAL, report.results.single().abnormality)
+    }
+
+    @Test
     fun mapperExcludesShorterValuesArrayThanColumns() {
         val summary = summaryWithTrendRows(
             JSONObject().put("parameter", "Hb").put("values", JSONArray().put("11 g/dL"))

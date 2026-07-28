@@ -142,4 +142,24 @@ class NimsCultureTextParserTest {
         assertTrue(result.susceptibility.any { it.antibiotic == "Colistin" && it.interpretation == "Intermediate" })
         assertTrue(result.susceptibility.any { it.antibiotic == "Meropenem" && it.interpretation == "Resistant" })
     }
+
+    @Test
+    fun commentsStopBeforeStandardReportFooter() {
+        val text = """
+            Lab/Study No. : E8105
+            Sample Processed: WOUND SWAB
+            STAINING
+            GRAMS SMEAR SHOWS GRAM NEGATIVE BACILLI
+            COMMENTS:
+            Correlate with culture.
+            ******** END OF THE REPORT ********
+            Test results relate only to item received. All reports need clinical correlation.
+            Validated By: Dr. Example
+            Page 1 of 1
+        """.trimIndent()
+
+        val result = NimsCultureTextParser.parse(text).single()
+
+        assertEquals(listOf("Correlate with culture."), result.comments)
+    }
 }

@@ -52,7 +52,7 @@ class LocalSummaryBuilderTest {
         assertTrue(text.contains("Hemoglobin increased from 10.0 g/dL to 11.0 g/dL"))
     }
 
-    @Test fun unsupportedPdfAppearsAsSourceReportWithAction() {
+    @Test fun unsupportedPdfAppearsAsSourceReportWithoutMisleadingPortalAction() {
         val reason = "PDF local parsing is not yet supported. Open the source report manually."
         val unsupported = ParsedReport("pdf", "PDF Report", "02-06-2026", "pdf", warnings = listOf(reason), processorName = "none")
         val json = LocalSummaryBuilder().build(listOf(unsupported), SummaryMode.FULL).helperJson!!
@@ -61,7 +61,46 @@ class LocalSummaryBuilderTest {
         assertEquals("02-06-2026", sourceReport.getString("date_sent"))
         assertEquals("unsupported", sourceReport.getString("status"))
         assertEquals(reason, sourceReport.getString("notes"))
-        assertEquals("Open source report in NIMS", sourceReport.getString("action"))
+        assertFalse(sourceReport.has("action"))
+    }
+
+    @Test fun sourceReportContainsSafeStructuredResultsButNeverRawText() {
+        val parsed = ParsedReport(
+            "report_key:structured",
+            "Activated Partial Thromboplastin Time",
+            "28-Aug-2025",
+            "coagulation",
+            labs = listOf(
+                ParsedLabValue("APTT", "aPTT", "Plasma APTT (Patient)", 27.4, null, "Sec", 25.0, 39.0, "25-39", Abnormality.NORMAL, "28-Aug-2025", ParseConfidence.HIGH)
+            ),
+            processorName = "On-device",
+            rawText = "TRANSIENT REPORT TEXT"
+        )
+
+        val source = LocalSummaryBuilder().build(listOf(parsed), SummaryMode.FULL).helperJson!!
+            .getJSONArray("source_reports").getJSONObject(0)
+
+        assertEquals(1, source.getJSONArray("results").length())
+        assertEquals("aPTT", source.getJSONArray("results").getJSONObject(0).getString("name"))
+        assertFalse(source.toString().contains("TRANSIENT REPORT TEXT"))
+        assertFalse(source.has("raw_text"))
+    }
+
+    @Test fun trendTableExcludesCbcIndicesButKeepsRequestedHemogramValues() {
+        val values = listOf(
+            ParsedLabValue("HB", "Hemoglobin", "Hemoglobin", 9.2, null, "g/dL", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH),
+            ParsedLabValue("WBC", "WBC/TLC", "TLC", 12600.0, null, "/cumm", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH),
+            ParsedLabValue("PLT", "Platelets", "Platelets", 180000.0, null, "/cumm", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH),
+            ParsedLabValue("MCV", "MCV", "MCV", 82.0, null, "fL", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH),
+            ParsedLabValue("BASO", "Basophils", "Basophils", 1.0, null, "%", null, null, null, Abnormality.UNKNOWN, "02-06-2026", ParseConfidence.HIGH)
+        )
+        val report = ParsedReport("cbc", "CBC", "02-06-2026", "cbc", labs = values, processorName = "local")
+
+        val rows = LocalSummaryBuilder().build(listOf(report), SummaryMode.FAST).helperJson!!
+            .getJSONObject("lab_trend_table").getJSONArray("rows")
+        val names = (0 until rows.length()).map { rows.getJSONObject(it).getString("parameter") }
+
+        assertEquals(setOf("Hemoglobin", "WBC/TLC", "Platelets"), names.toSet())
     }
 
     @Test fun persistedSummaryNeverContainsTransientRawReportText() {
