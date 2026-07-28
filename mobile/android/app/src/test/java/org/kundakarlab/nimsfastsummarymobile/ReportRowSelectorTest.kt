@@ -55,6 +55,21 @@ class ReportRowSelectorTest {
     }
 
     @Test
+    fun fastModeIncludesAllMolecularAndCoagulationReports() {
+        val rows = JSONArray()
+            .put(row("Gene Xpert", "molecular"))
+            .put(row("Activated Partial Thromboplastin Time", "coagulation"))
+            .put(row("Histopathology review", "pathology"))
+            .put(row("CBC", "cbc"))
+
+        val selected = ReportRowSelector.select(rows, NimsAnalysisMode.FAST)
+
+        assertTrue(selected.any { it.getString("report_name") == "Gene Xpert" })
+        assertTrue(selected.any { it.getString("report_name").startsWith("Activated Partial") })
+        assertTrue(selected.any { it.getString("report_name").startsWith("Histopathology") })
+    }
+
+    @Test
     fun fastModeFallsBackToOneUnknownReport() {
         val rows = JSONArray().put(row("Unknown report", "other"))
 

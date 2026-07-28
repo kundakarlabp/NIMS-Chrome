@@ -18,7 +18,17 @@ data class UiSourceReport(
     val status: String,
     val notes: String,
     val hasError: Boolean,
-    val sourceAction: String = "Open source report in NIMS"
+    val results: List<UiReportResult> = emptyList(),
+    val cultureCount: Int = 0
+)
+
+data class UiReportResult(
+    val name: String,
+    val value: String,
+    val unit: String,
+    val referenceRange: String,
+    val abnormality: Abnormality,
+    val confidence: String
 )
 
 data class UiLabTrendRow(

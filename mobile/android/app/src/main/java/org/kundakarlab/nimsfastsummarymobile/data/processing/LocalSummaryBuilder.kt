@@ -6,6 +6,14 @@ import org.kundakarlab.nimsfastsummarymobile.BuildConfig
 import org.kundakarlab.nimsfastsummarymobile.domain.model.*
 
 class LocalSummaryBuilder {
+    private val trendCodes = setOf(
+        "HB", "WBC", "PLT",
+        "UREA", "CREAT", "EGFR", "NA", "K", "CL", "HCO3", "GLUCOSE", "HBA1C",
+        "TBIL", "DBIL", "IBIL", "AST", "ALT", "ALP", "GGT", "ALB", "TP", "LDH",
+        "CRP", "HSCRP", "ESR", "PCT", "GM", "BDG",
+        "PT", "INR", "APTT", "FERR", "TROP", "BNP"
+    )
+
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
         val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() }
@@ -103,6 +111,7 @@ class LocalSummaryBuilder {
             report.labs.forEachIndexed { labIndex, lab ->
                 if (lab.confidence == ParseConfidence.LOW) return@forEachIndexed
                 val canonicalCode = CanonicalLabCodes.normalize(lab.canonicalCode)
+                if (canonicalCode !in trendCodes && !canonicalCode.startsWith("PCR_")) return@forEachIndexed
                 val byDate = rowsByCode.getOrPut(canonicalCode) { linkedMapOf() }
                 val candidate = IndexedLab(lab, reportIndex, labIndex)
                 val current = byDate[reportDate]
@@ -118,8 +127,22 @@ class LocalSummaryBuilder {
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
                 a.put(JSONObject().put("report_id", r.reportId).put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
                     .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
-                    .put("action", "Open source report in NIMS")
-                    .put("processor", r.processorName))
+                    .put("processor", r.processorName)
+                    .put("culture_count", r.cultures.size)
+                    .put("results", JSONArray().also { results ->
+                        r.labs.filter { it.confidence != ParseConfidence.LOW }.forEach { lab ->
+                            results.put(
+                                JSONObject()
+                                    .put("name", lab.displayName)
+                                    .put("value", lab.numericValue ?: JSONObject.NULL)
+                                    .put("text_value", lab.textValue.orEmpty())
+                                    .put("unit", lab.unit.orEmpty())
+                                    .put("reference_range", lab.referenceRangeText.orEmpty())
+                                    .put("abnormality", lab.abnormality.name.lowercase())
+                                    .put("confidence", lab.confidence.name.lowercase())
+                            )
+                        }
+                    }))
             } })
             .put("interpretation", JSONArray(lines))
             .put("culture_table", JSONArray().also { a -> reports.forEach { report -> report.cultures.forEach { c ->

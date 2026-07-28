@@ -611,7 +611,7 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
     assert "Run Test One Report successfully before bulk summary." in main_activity
     assert "processBulk(cultureRequests, concurrency = 3" in main_activity
-    assert "processBulk(otherRequests, concurrency = 2" in main_activity
+    assert "processBulk(otherRequests, concurrency = 3" in main_activity
     assert "Semaphore(concurrency.coerceIn(1, 4))" in main_activity
     assert "ReportFetchQueue(concurrency = 3)" not in main_activity
     assert "private var webViewUserAgent = \"\"" in main_activity

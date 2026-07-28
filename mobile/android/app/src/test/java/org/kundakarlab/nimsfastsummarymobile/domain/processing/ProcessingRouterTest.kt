@@ -61,7 +61,7 @@ class ProcessingRouterTest {
         assertEquals("02-06-2026", sourceReport.getString("date_sent"))
         assertEquals("unsupported", sourceReport.getString("status"))
         assertTrue(sourceReport.getString("notes").contains("OCR is not enabled"))
-        assertEquals("Open source report in NIMS", sourceReport.getString("action"))
+        assertFalse(sourceReport.has("action"))
         assertEquals(0, remote.parseCalls)
     }
 

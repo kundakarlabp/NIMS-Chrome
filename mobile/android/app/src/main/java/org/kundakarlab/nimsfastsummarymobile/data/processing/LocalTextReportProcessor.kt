@@ -21,7 +21,11 @@ class LocalTextReportProcessor(
         // Extract date from PDF text when row metadata doesn't have it — this is
         // the root cause of "report date unavailable" and Trends showing 0 parameters.
         val effectiveDate = input.dateSent.ifBlank { LabTextParser.extractDateFromText(text) ?: CultureTextParser.extractDateFromText(text) ?: "" }
-        val labs = (LabTextParser.parse(text, effectiveDate) + MolecularResultParser.parse(text, effectiveDate))
+        val labs = (
+            LabTextParser.parse(text, effectiveDate) +
+                MolecularResultParser.parse(text, effectiveDate) +
+                NarrativeResultParser.parse(text, effectiveDate)
+            )
             .distinctBy { listOf(it.canonicalCode, it.numericValue?.toString().orEmpty(), it.textValue.orEmpty(), it.unit.orEmpty()).joinToString("|") }
         val cultures = CultureTextParser.parse(text, effectiveDate)
         if (labs.isEmpty() && cultures.isEmpty()) return ProcessingResult.Failure("No high-confidence lab or culture rows were found.", "LOCAL_PARSE_INCOMPLETE", true)
@@ -55,7 +59,9 @@ class LocalTextReportProcessor(
         "no growth", "growth detected", "sensitive", "resistant", "aerobic culture",
         // Pathology / other
         "biopsy", "cytology", "smear", "staining", "gram", "acid fast", "tb",
-        "fluid", "pus", "sputum", "blood culture",
+        "fluid", "pus", "sputum", "blood culture", "histopathology", "diagnosis", "special stain",
+        // Coagulation and NIMS molecular headings
+        "esr", "aptt", "prothrombin", "gene xpert", "genexpert", "cbnaat",
         // Molecular / fungal biomarkers
         "pcr", "rt-pcr", "viral load", "galactomannan", "beta-d-glucan", "beta d glucan"
     ).any { text.contains(it, true) }
@@ -113,8 +119,8 @@ object LabTextParser {
         LabDefinition("HSCRP", "hsCRP", labels("hsCRP", "hs-CRP", "High Sensitivity CRP", "High Sensitivity C-Reactive Protein"), setOf("mg/L", "mg/dL"), 0.0..1000.0, null, null, "mg/L"),
         LabDefinition("CRP", "CRP", labels("CRP", "C-Reactive Protein"), setOf("mg/L", "mg/dL"), 0.0..1000.0, null, null, "mg/L"),
         LabDefinition("PCT", "Procalcitonin", labels("Procalcitonin", "PCT"), setOf("ng/mL"), 0.0..1000.0, null, 0.5, "ng/mL"),
-        LabDefinition("PT", "Prothrombin Time", labels("PT", "Prothrombin Time"), setOf("sec", "seconds"), 0.0..200.0, 11.0, 13.5, "sec"),
         LabDefinition("INR", "INR", labels("INR"), emptySet(), 0.0..20.0, 0.8, 1.2, ""),
+        LabDefinition("PT", "Prothrombin Time", labels("PT", "Prothrombin Time"), setOf("sec", "seconds"), 0.0..200.0, 11.0, 13.5, "sec"),
         LabDefinition("APTT", "aPTT", labels("aPTT", "APTT", "Activated Partial Thromboplastin"), setOf("sec", "seconds"), 0.0..300.0, 25.0, 35.0, "sec"),
         LabDefinition("ESR", "ESR", labels("ESR", "Erythrocyte Sedimentation Rate"), setOf("mm/hr", "mm/1st hour"), 0.0..150.0, null, 20.0, "mm/hr"),
         LabDefinition("GM", "Galactomannan index", labels("Galactomannan Index", "Aspergillus Galactomannan", "Galactomannan"), emptySet(), 0.0..100.0, null, null, null),
@@ -151,11 +157,46 @@ object LabTextParser {
         return null
     }
 
-    fun parse(text: String, date: String?): List<ParsedLabValue> = text.lines().mapNotNull { parseLine(it, date) }
+    fun parse(text: String, date: String?): List<ParsedLabValue> {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+        val candidates = buildList {
+            addAll(lines)
+            lines.forEachIndexed { index, line ->
+                if (defs.none { definition -> definition.labelPatterns.any { it.find(line) != null } }) return@forEachIndexed
+                val continuation = mutableListOf(line)
+                for (offset in 1..3) {
+                    val next = lines.getOrNull(index + offset) ?: break
+                    if (offset > 1 && defs.any { definition -> definition.labelPatterns.any { it.find(next) != null } }) break
+                    continuation += next
+                    add(continuation.joinToString(" "))
+                }
+            }
+        }
+        return candidates
+            .map { normalizeNimsUnits(it) }
+            .mapNotNull { parseLine(it, date) }
+            .groupBy { listOf(it.canonicalCode, it.numericValue?.toString().orEmpty(), it.textValue.orEmpty()).joinToString("|") }
+            .values
+            .map { matches -> matches.maxBy { confidenceRank(it.confidence) } }
+    }
+
+    private fun confidenceRank(value: ParseConfidence): Int = when (value) {
+        ParseConfidence.HIGH -> 2
+        ParseConfidence.MEDIUM -> 1
+        ParseConfidence.LOW -> 0
+    }
+
+    private fun normalizeNimsUnits(line: String): String = line
+        .replace(Regex("\\bmm\\s+(?:at\\s+)?1st\\s+(?:hr|hour)\\b", RegexOption.IGNORE_CASE), "mm/hr")
+        .replace(Regex("\\bmm\\s+in\\s+1\\s*(?:hr|hour)\\b", RegexOption.IGNORE_CASE), "mm/hr")
 
     private fun parseLine(line: String, date: String?): ParsedLabValue? {
         val def = defs.firstOrNull { d -> d.labelPatterns.any { it.find(line) != null } } ?: return null
         val labelMatch = def.labelPatterns.firstNotNullOfOrNull { it.find(line) } ?: return null
+        if (def.canonicalCode == "APTT" &&
+            line.contains("control", true) &&
+            !line.contains("patient", true)
+        ) return null
         val before = line.substring(0, labelMatch.range.first)
         val remaining = line.substring(labelMatch.range.last + 1)
         val result = Regex("[:=]?\\s*([<>])?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*([a-zA-Z0-9/%µ.^]+(?:/[a-zA-Z0-9.µ]+)?|lakh/cumm|cells/cumm|million/cumm|mmol/L|mEq/L|ng/mL|mg/L|mg/dL|g/dL|gm%|U/L|IU/L|mL/min|sec|seconds|pg/mL|µg/dL|ng/L|mm/hr)?", RegexOption.IGNORE_CASE).find(remaining) ?: return null
@@ -196,7 +237,7 @@ object LabTextParser {
  * or quantitative value is deliberately ignored.
  */
 object MolecularResultParser {
-    private val assayMarker = Regex("\\b(?:RT[- ]?PCR|PCR|CBNAAT|GENE\\s*XPERT|VIRAL\\s+LOAD)\\b", RegexOption.IGNORE_CASE)
+    private val assayMarker = Regex("\\b(?:RT[- ]?PCR|PCR|CBNAAT|GENE\\s*XPERT|GENEXPERT|VIRAL\\s+LOAD)\\b", RegexOption.IGNORE_CASE)
     private val qualitative = Regex("\\b(NOT\\s+DETECTED|DETECTED|NON[- ]?REACTIVE|REACTIVE|NEGATIVE|POSITIVE)\\b", RegexOption.IGNORE_CASE)
     private val quantitative = Regex("([<>])?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(IU/mL|copies/mL|copies/ml|log\\s*IU/mL|log\\s*copies/mL)", RegexOption.IGNORE_CASE)
 
@@ -256,7 +297,7 @@ object MolecularResultParser {
             Regex("\\b(?:HCV|HEPATITIS\\s+C)\\b", RegexOption.IGNORE_CASE) to "HCV PCR",
             Regex("\\bHIV(?:-?1)?\\b", RegexOption.IGNORE_CASE) to "HIV viral load",
             Regex("\\b(?:SARS[- ]?COV[- ]?2|COVID[- ]?19)\\b", RegexOption.IGNORE_CASE) to "SARS-CoV-2 PCR",
-            Regex("\\b(?:MTB|MYCOBACTERIUM\\s+TUBERCULOSIS|CBNAAT|GENE\\s*XPERT)\\b", RegexOption.IGNORE_CASE) to "MTB molecular test"
+            Regex("\\b(?:MTB|MYCOBACTERIUM\\s+TUBERCULOSIS|CBNAAT|GENE\\s*XPERT|GENEXPERT)\\b", RegexOption.IGNORE_CASE) to "MTB molecular test"
         )
         known.firstOrNull { it.first.containsMatchIn(line) }?.let { return it.second }
         val marker = assayMarker.find(line) ?: return "PCR result"
@@ -266,6 +307,56 @@ object MolecularResultParser {
             .trim()
             .takeLast(48)
         return if (prefix.length >= 2) "$prefix PCR" else "PCR result"
+    }
+}
+
+/**
+ * Keeps explicit diagnostic narrative sections available in the expandable
+ * report card without storing the complete extracted PDF text. These values
+ * are deliberately excluded from trend tables by LocalSummaryBuilder.
+ */
+object NarrativeResultParser {
+    private val sections = listOf(
+        "DIAGNOSIS" to Regex("^(?:final\\s+)?diagnosis\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE),
+        "IMPRESSION" to Regex("^impression\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE),
+        "CONCLUSION" to Regex("^conclusion\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE),
+        "SPECIAL_STAIN" to Regex("^(?:report\\s+on\\s+)?special\\s+stain\\s*:\\s*(.*)$", RegexOption.IGNORE_CASE)
+    )
+    private val heading = Regex("^[A-Za-z][A-Za-z /()'-]{2,40}:\\s*")
+
+    fun parse(text: String, date: String?): List<ParsedLabValue> {
+        val lines = text.lines().map(String::trim)
+        return buildList {
+            lines.forEachIndexed { index, line ->
+                val (code, match) = sections.firstNotNullOfOrNull { (code, pattern) ->
+                    pattern.matchEntire(line)?.let { code to it }
+                } ?: return@forEachIndexed
+                val content = buildList {
+                    match.groupValues.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)?.let(::add)
+                    for (offset in 1..5) {
+                        val next = lines.getOrNull(index + offset)?.trim().orEmpty()
+                        if (next.isBlank() || heading.containsMatchIn(next) || next.contains("END OF THE REPORT", true)) break
+                        add(next)
+                    }
+                }.joinToString(" ").replace(Regex("\\s+"), " ").trim().take(1200)
+                if (content.isBlank()) return@forEachIndexed
+                add(
+                    ParsedLabValue(
+                        canonicalCode = "NARRATIVE_$code",
+                        displayName = code.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase),
+                        sourceName = line.substringBefore(':').take(80),
+                        numericValue = null,
+                        textValue = content,
+                        unit = null,
+                        referenceLow = null,
+                        referenceHigh = null,
+                        abnormality = Abnormality.UNKNOWN,
+                        resultDate = date,
+                        confidence = ParseConfidence.HIGH
+                    )
+                )
+            }
+        }.distinctBy { it.canonicalCode }
     }
 }
 
