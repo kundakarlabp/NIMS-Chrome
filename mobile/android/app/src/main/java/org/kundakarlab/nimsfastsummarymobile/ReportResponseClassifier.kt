@@ -2,6 +2,11 @@ package org.kundakarlab.nimsfastsummarymobile
 
 object ReportResponseClassifier {
     fun classify(statusCode: Int, contentType: String, bytes: ByteArray): String {
+        // Authentication status is authoritative even when the response body is
+        // empty, generic, or mislabeled by an intermediary. Returning the same
+        // classification as login HTML lets MainActivity use its existing
+        // session-recovery path instead of showing a generic fetch error.
+        if (statusCode == 401 || statusCode == 403) return "html_login_or_session"
         if (bytes.isEmpty()) return "empty_response"
         if (statusCode in setOf(404, 405, 500)) return "wrong_endpoint"
         val lowerType = contentType.lowercase()
