@@ -46,6 +46,11 @@ object ClinicalSummaryFormatter {
             abnormal.labs.take(16).forEach { appendLine("- ${labLine(it)}") }
             if (abnormal.labs.isEmpty()) appendLine("- No abnormal structured latest result")
 
+            // Retain the established human-readable export contract while
+            // expanding it into clinically grouped panels below.
+            appendLine()
+            appendLine("Key labs:")
+            if (full.labs.isEmpty()) appendLine("- No selected lab trend data")
             appendPanel(this, "Hemogram", full.labs.filter { ClinicalReviewProjector.panelFor(it.parameter) == ClinicalPanel.HEMOGRAM })
             appendPanel(this, "Inflammatory / fungal markers", full.labs.filter { ClinicalReviewProjector.panelFor(it.parameter) == ClinicalPanel.INFLAMMATORY })
             appendPanel(this, "Renal / metabolic", full.labs.filter { ClinicalReviewProjector.panelFor(it.parameter) == ClinicalPanel.RENAL_METABOLIC })
