@@ -24,15 +24,23 @@ jobs:
           distribution: temurin
           java-version: "17"
       - name: Apply deterministic report-pipeline migration
-        run: python scripts/apply_fast_report_pipeline.py
+        run: |
+          python scripts/apply_fast_report_pipeline.py
+          python scripts/fix_fast_pipeline_generated.py
       - name: Validate generated Android implementation
         working-directory: mobile/android
         run: ./gradlew clean test lintDebug assembleDebug --console=plain
+      - name: Print failing unit-test details
+        if: failure()
+        shell: bash
+        run: |
+          find mobile/android/app/build/test-results -name '*.xml' -type f -print0 2>/dev/null \
+            | xargs -0 grep -H -A12 -B3 '<failure' || true
       - name: Commit validated implementation to PR branch
         shell: bash
         run: |
           set -euo pipefail
-          rm -f scripts/apply_fast_report_pipeline.py .github/workflows/apply-fast-report-pipeline.yml
+          rm -f scripts/apply_fast_report_pipeline.py scripts/fix_fast_pipeline_generated.py .github/workflows/apply-fast-report-pipeline.yml
           git checkout origin/main -- .github/workflows/ci.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
