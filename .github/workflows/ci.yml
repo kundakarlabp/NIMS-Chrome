@@ -98,7 +98,7 @@ jobs:
             ./gradlew connectedDebugAndroidTest --stacktrace --console=plain
       - uses: actions/upload-artifact@v4
         with:
-          name: nims-results-0.10.2-debug-apk
+          name: nims-results-0.10.3-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14

@@ -47,6 +47,20 @@ class PdfBoxAndroidTextExtractorInstrumentedTest {
         assertTrue(OnDeviceReportProcessor(LocalTextReportProcessor(), PdfBoxAndroidTextExtractor(context)).parseReport(input("application/octet-stream", textPdf(listOf("Hemoglobin 11.1 g/dL")))) is ProcessingResult.Success)
     }
 
+    @Test fun rendersExactPdfOnePageAtATimeWithoutCacheFiles() = runBlocking {
+        val before = cacheNames()
+        val bytes = textPdf(listOf("Synthetic page one", "Synthetic page two"))
+
+        val rendered = InMemoryPdfPageRenderer(context).render(bytes, 1)
+
+        assertEquals(1, rendered.pageIndex)
+        assertEquals(2, rendered.pageCount)
+        assertTrue(rendered.bitmap.width > 0)
+        assertTrue(rendered.bitmap.height > 0)
+        rendered.bitmap.recycle()
+        assertEquals(before, cacheNames())
+    }
+
     @Test fun imageOnlyEncryptedCorruptOversizedAndTooManyPagesAreClassified() = runBlocking {
         assertTrue(PdfBoxAndroidTextExtractor(context).extract(blankPdf(1)) is PdfExtractionResult.ImageOnly)
         assertTrue(PdfBoxAndroidTextExtractor(context).extract(encryptedPdf()) is PdfExtractionResult.Encrypted)
