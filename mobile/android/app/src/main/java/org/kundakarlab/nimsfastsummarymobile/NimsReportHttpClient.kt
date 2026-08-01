@@ -7,8 +7,6 @@ import okhttp3.Request
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import java.util.concurrent.TimeUnit
 
-class NimsHttpSessionExpiredException(message: String) : IllegalStateException(message)
-
 /** Shared authenticated client with connection pooling and bounded per-host requests. */
 class NimsReportHttpClient(
     private val cookieProvider: (String) -> String,
@@ -49,11 +47,18 @@ class NimsReportHttpClient(
             val bytes = buffer.readByteArray()
             val contentType = response.header("Content-Type").orEmpty()
             val classification = ReportResponseClassifier.classify(response.code, contentType, bytes)
-            val failure = failureFor(response.code, contentType, classification)
-            if (!response.isSuccessful) {
-                throw failure ?: IllegalStateException("NIMS report fetch returned ${response.code}")
+
+            // Session responses must reach MainActivity so its established
+            // NimsSessionExpiredException/handleExpiredSession path can retain
+            // completed reports and move the WebView back to manual login.
+            // Throwing a second HTTP-layer exception here bypassed that handler.
+            if (!response.isSuccessful && classification != "html_login_or_session") {
+                throw failureFor(response.code, contentType, classification)
+                    ?: IllegalStateException("NIMS report fetch returned ${response.code}")
             }
-            failure?.let { throw it }
+            if (classification != "html_login_or_session") {
+                failureFor(response.code, contentType, classification)?.let { throw it }
+            }
             return ReportFetchResult(
                 contentType = contentType,
                 statusCode = response.code,
@@ -69,8 +74,7 @@ class NimsReportHttpClient(
             contentType: String,
             classification: String
         ): IllegalStateException? = when {
-            statusCode == 401 || statusCode == 403 || classification == "html_login_or_session" ->
-                NimsHttpSessionExpiredException("NIMS session expired. Login again; completed reports were preserved.")
+            classification == "html_login_or_session" -> null
             statusCode !in 200..299 ->
                 IllegalStateException("NIMS report fetch returned $statusCode (${contentType.substringBefore(';')})")
             classification == "html_report_list" ->
