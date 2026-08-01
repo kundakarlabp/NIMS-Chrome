@@ -177,7 +177,7 @@ object ClinicalReviewProjector {
         summary.labTrends.forEach { row -> row.history.forEach { yield(DateNormalizer.normalize(it.first).sortEpoch) } }
     }.filterNotNull().maxOrNull()
 
-    private fun numeric(value: String): Double? = NUMBER.find(value.replace(',', ''))?.value?.toDoubleOrNull()
+    private fun numeric(value: String): Double? = NUMBER.find(value.replace(",", ""))?.value?.toDoubleOrNull()
 
     private fun formatNumber(value: Double): String = when {
         value % 1.0 == 0.0 -> value.toLong().toString()
