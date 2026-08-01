@@ -1,0 +1,50 @@
+name: Fix HTTP contract assertions
+
+on:
+  push:
+    branches:
+      - fix/nims-lab-culture-parsing-0103
+    paths:
+      - scripts/fix_http_contract_assertions.py
+      - .github/workflows/fix-http-contract-assertions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/nims-lab-culture-parsing-0103
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply contract correction
+        run: python scripts/fix_http_contract_assertions.py
+      - name: Run full Python test suite
+        run: |
+          pip install -r helper/requirements-dev.txt
+          python -m pytest -q
+          python -m py_compile helper/main.py helper/models.py helper/cache.py
+      - name: Run Android validation
+        working-directory: mobile/android
+        run: ./gradlew clean test lintDebug assembleDebug --console=plain
+      - name: Commit only after validation
+        run: |
+          rm -rf mobile/android/.kotlin
+          rm -f scripts/fix_http_contract_assertions.py .github/workflows/fix-http-contract-assertions.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Update HTTP fetch contract test"
+          git push origin HEAD:fix/nims-lab-culture-parsing-0103
