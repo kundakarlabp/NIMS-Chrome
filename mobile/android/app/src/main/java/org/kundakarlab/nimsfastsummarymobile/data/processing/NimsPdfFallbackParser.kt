@@ -59,7 +59,8 @@ object NimsPdfFallbackParser {
         TextDefinition("URINE_BACTERIA", "Urine bacteria", listOf("bacteria")),
         TextDefinition("URINE_CASTS", "Urine casts", listOf("casts")),
         TextDefinition("URINE_CRYSTALS", "Urine crystals", listOf("crystals")),
-        TextDefinition("URINE_YEAST", "Urine yeast", listOf("yeast cells", "yeast"))
+        TextDefinition("URINE_YEAST", "Urine yeast", listOf("yeast cells", "yeast")),
+        TextDefinition("URINE_EPI_TEXT", "Urine epithelial cells", listOf("epithelial cells"))
     )
 
     fun parseLabs(text: String, date: String?): List<ParsedLabValue> {
@@ -73,10 +74,17 @@ object NimsPdfFallbackParser {
                 }
             }
         }
-        val numeric = numericDefinitions.mapNotNull { definition ->
-            windows.firstNotNullOfOrNull { parseNumericWindow(it, definition, date) }
-        }
         val urineContext = Regex("""(?i)complete\s+urine|urine\s+examination|urinalysis|urine\s+routine""").containsMatchIn(normalized)
+        val numeric = numericDefinitions
+            .filter { urineContext || !it.code.startsWith("URINE_") }
+            .mapNotNull { definition ->
+                val contextual = when {
+                    urineContext && definition.code == "URINE_RBC" -> definition.copy(aliases = definition.aliases + "rbc")
+                    urineContext && definition.code == "URINE_WBC" -> definition.copy(aliases = definition.aliases + "wbc")
+                    else -> definition
+                }
+                windows.firstNotNullOfOrNull { parseNumericWindow(it, contextual, date) }
+            }
         val qualitative = if (urineContext) urineTextDefinitions.mapNotNull { definition ->
             windows.firstNotNullOfOrNull { parseTextWindow(it, definition, date) }
         } else emptyList()
