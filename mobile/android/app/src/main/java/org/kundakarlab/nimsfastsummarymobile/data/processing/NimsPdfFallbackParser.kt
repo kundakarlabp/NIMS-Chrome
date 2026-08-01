@@ -76,7 +76,7 @@ object NimsPdfFallbackParser {
         val numeric = numericDefinitions.mapNotNull { definition ->
             windows.firstNotNullOfOrNull { parseNumericWindow(it, definition, date) }
         }
-        val urineContext = Regex("(?i)complete\s+urine|urine\s+examination|urinalysis|urine\s+routine").containsMatchIn(normalized)
+        val urineContext = Regex("""(?i)complete\s+urine|urine\s+examination|urinalysis|urine\s+routine""").containsMatchIn(normalized)
         val qualitative = if (urineContext) urineTextDefinitions.mapNotNull { definition ->
             windows.firstNotNullOfOrNull { parseTextWindow(it, definition, date) }
         } else emptyList()
@@ -98,7 +98,7 @@ object NimsPdfFallbackParser {
                 )
             }
         }
-        if (organism == null && !Regex("(?i)growth\s+(?:detected|of)|culture\s+positive|isolated").containsMatchIn(normalized)) return emptyList()
+        if (organism == null && !Regex("""(?i)growth\s+(?:detected|of)|culture\s+positive|isolated""").containsMatchIn(normalized)) return emptyList()
         return listOf(
             ParsedCultureValue(
                 specimen = extractLabeled(normalized, listOf("sample processed", "specimen", "sample type")),
@@ -117,16 +117,20 @@ object NimsPdfFallbackParser {
     }
 
     private fun parseNumericWindow(window: String, definition: NumericDefinition, date: String?): ParsedLabValue? {
-        val alias = definition.aliases.firstOrNull { Regex("(?i)(?<![A-Za-z0-9])${Regex.escape(it)}(?![A-Za-z0-9])").containsMatchIn(window) } ?: return null
+        val alias = definition.aliases.firstOrNull {
+            Regex("""(?i)(?<![A-Za-z0-9])${Regex.escape(it)}(?![A-Za-z0-9])""").containsMatchIn(window)
+        } ?: return null
         val after = window.substringAfter(alias, "", ignoreCase = true).trim().take(120)
-        val match = Regex("(?i)[:=\-–]*\s*([<>])?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(x?10\s*\^?\s*[36912](?:/u?l)?|lakh/cumm|million/cumm|cells/cumm|/cumm|/hpf|mm/?hr|mm\s*(?:in|at)?\s*1st\s*h(?:ou)?r|mg/dl|mg/l|ng/ml|g/dl|gm%|%|fl|pg)?").find(after) ?: return null
+        val match = Regex(
+            """(?i)[:=\-–]*\s*([<>])?\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(x?10\s*\^?\s*[36912](?:/u?l)?|lakh/cumm|million/cumm|cells/cumm|/cumm|/hpf|mm/?hr|mm\s*(?:in|at)?\s*1st\s*h(?:ou)?r|mg/dl|mg/l|ng/ml|g/dl|gm%|%|fl|pg)?"""
+        ).find(after) ?: return null
         var value = match.groupValues[2].replace(",", "").toDoubleOrNull() ?: return null
-        var unit = normalizeUnit(match.groupValues.getOrNull(3)?.ifBlank { null }) ?: definition.defaultUnit
+        val unit = normalizeUnit(match.groupValues.getOrNull(3)?.ifBlank { null }) ?: definition.defaultUnit
         if (definition.code in setOf("WBC", "PLT") && value < 1000.0) {
             val local = match.value.lowercase()
             when {
                 "lakh" in local -> value *= 100000.0
-                Regex("10\s*\^?\s*3|x10\s*3").containsMatchIn(local) -> value *= 1000.0
+                Regex("""10\s*\^?\s*3|x10\s*3""").containsMatchIn(local) -> value *= 1000.0
                 definition.code == "PLT" && value in 10.0..1000.0 -> value *= 1000.0
             }
         }
@@ -153,9 +157,13 @@ object NimsPdfFallbackParser {
     }
 
     private fun parseTextWindow(window: String, definition: TextDefinition, date: String?): ParsedLabValue? {
-        val alias = definition.aliases.firstOrNull { Regex("(?i)(?<![A-Za-z0-9])${Regex.escape(it)}(?![A-Za-z0-9])").containsMatchIn(window) } ?: return null
+        val alias = definition.aliases.firstOrNull {
+            Regex("""(?i)(?<![A-Za-z0-9])${Regex.escape(it)}(?![A-Za-z0-9])""").containsMatchIn(window)
+        } ?: return null
         val after = window.substringAfter(alias, "", ignoreCase = true).trim()
-        val value = Regex("(?i)[:=\-–]*\s*(negative|positive|nil|none|absent|present|trace|few|occasional|moderate|many|clear|turbid|cloudy|pale\s+yellow|yellow|straw|amber|\+{1,4})\b").find(after)?.groupValues?.get(1)?.trim() ?: return null
+        val value = Regex(
+            """(?i)[:=\-–]*\s*(negative|positive|nil|none|absent|present|trace|few|occasional|moderate|many|clear|turbid|cloudy|pale\s+yellow|yellow|straw|amber|\+{1,4})\b"""
+        ).find(after)?.groupValues?.get(1)?.trim() ?: return null
         return ParsedLabValue(
             canonicalCode = definition.code,
             displayName = definition.name,
@@ -173,16 +181,21 @@ object NimsPdfFallbackParser {
 
     private fun extractOrganism(text: String): String? {
         val patterns = listOf(
-            Regex("(?im)^\s*(?:organism(?:\s+isolated)?|isolate(?:\s+identified)?|identification)\s*[:\-]\s*([^\n]+)"),
-            Regex("(?i)\b(?:growth\s+of|isolated\s+as|identified\s+as|culture\s+(?:grew|yielded))\s+([A-Z][A-Za-z.\-]+(?:\s+[a-z][A-Za-z.\-]+){0,3})"),
-            Regex("(?i)\b((?:methicillin[-\s]+resistant\s+)?Staphylococcus\s+aureus|Acinetobacter\s+baumannii(?:\s+complex)?|Klebsiella\s+pneumoniae|Escherichia\s+coli|E\.?\s*coli|Pseudomonas\s+aeruginosa|Enterococcus\s+(?:faecium|faecalis)|Burkholderia\s+cepacia(?:\s+complex)?|Candida\s+[A-Za-z]+|Cryptococcus\s+[A-Za-z]+)\b")
+            Regex("""(?im)^\s*(?:organism(?:\s+isolated)?|isolate(?:\s+identified)?|identification)\s*[:\-]\s*([^\n]+)"""),
+            Regex("""(?i)\b(?:growth\s+of|isolated\s+as|identified\s+as|culture\s+(?:grew|yielded))\s+([A-Z][A-Za-z.\-]+(?:\s+[a-z][A-Za-z.\-]+){0,3})"""),
+            Regex("""(?i)\b((?:methicillin[-\s]+resistant\s+)?Staphylococcus\s+aureus|Acinetobacter\s+baumannii(?:\s+complex)?|Klebsiella\s+pneumoniae|Escherichia\s+coli|E\.?\s*coli|Pseudomonas\s+aeruginosa|Enterococcus\s+(?:faecium|faecalis)|Burkholderia\s+cepacia(?:\s+complex)?|Candida\s+[A-Za-z]+|Cryptococcus\s+[A-Za-z]+)\b""")
         )
         return patterns.firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1)?.trim()?.trim('.', ':', ';') }
-            ?.takeUnless { Regex("(?i)^(growth detected|positive|organism|isolate)$").matches(it) }
+            ?.takeUnless { Regex("""(?i)^(growth detected|positive|organism|isolate)$""").matches(it) }
     }
 
-    private fun canonicalOrganism(raw: String): String = raw.replace(Regex("(?i)^methicillin[-\s]+resistant\s+"), "")
-        .replace(Regex("\s+"), " ").trim().lowercase().split(' ').joinToString(" ") { token ->
+    private fun canonicalOrganism(raw: String): String = raw
+        .replace(Regex("""(?i)^methicillin[-\s]+resistant\s+"""), "")
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+        .lowercase()
+        .split(' ')
+        .joinToString(" ") { token ->
             if (token.length <= 2 && token.endsWith('.')) token.uppercase() else token.replaceFirstChar(Char::uppercase)
         }
 
@@ -203,7 +216,9 @@ object NimsPdfFallbackParser {
 
     private fun parseAst(text: String): List<AntibioticResult> = antibioticAliases.mapNotNull { (canonical, aliases) ->
         val hit = aliases.firstNotNullOfOrNull { alias ->
-            Regex("(?i)(?<![A-Za-z])${Regex.escape(alias)}(?![A-Za-z])[^\n]{0,30}\b(S|I|R|susceptible|sensitive|intermediate|resistant)\b").find(text)
+            Regex(
+                """(?i)(?<![A-Za-z])${Regex.escape(alias)}(?![A-Za-z])[^\n]{0,30}\b(S|I|R|susceptible|sensitive|intermediate|resistant)\b"""
+            ).find(text)
         } ?: return@mapNotNull null
         val raw = hit.groupValues[1]
         val interpretation = when (raw.lowercase()) {
@@ -215,10 +230,14 @@ object NimsPdfFallbackParser {
     }
 
     private fun extractLabeled(text: String, labels: List<String>): String? = labels.firstNotNullOfOrNull { label ->
-        Regex("(?im)^\s*${Regex.escape(label)}\s*[:\-]\s*([^\n]+)").find(text)?.groupValues?.getOrNull(1)?.trim()
+        Regex("""(?im)^\s*${Regex.escape(label)}\s*[:\-]\s*([^\n]+)""")
+            .find(text)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
     }
 
-    private fun normalizeUnit(unit: String?): String? = unit?.replace(Regex("\s+"), "")?.let {
+    private fun normalizeUnit(unit: String?): String? = unit?.replace(Regex("""\s+"""), "")?.let {
         when (it.lowercase()) {
             "mmhr", "mm/hr", "mmin1sthr", "mmat1sthr" -> "mm/hr"
             "mg/dl" -> "mg/dL"
@@ -235,7 +254,8 @@ object NimsPdfFallbackParser {
         .replace('\u200B'.toString(), "")
         .replace("\r\n", "\n")
         .replace('\r', '\n')
-        .lines().joinToString("\n") { it.trim().replace(Regex("[ \t]{2,}"), " ") }
-        .replace(Regex("\n{3,}"), "\n\n")
+        .lines()
+        .joinToString("\n") { it.trim().replace(Regex("""[ \t]{2,}"""), " ") }
+        .replace(Regex("""\n{3,}"""), "\n\n")
         .trim()
 }
