@@ -10,6 +10,14 @@ enum class ParseConfidence { HIGH, MEDIUM, LOW }
 enum class Abnormality { NORMAL, HIGH, LOW, CRITICAL, UNKNOWN }
 enum class GrowthStatus { NO_GROWTH, GROWTH_DETECTED, PENDING, UNKNOWN }
 enum class NumericComparator { LESS_THAN, GREATER_THAN, EQUAL }
+enum class ReportParseStatus {
+    FULLY_PARSED,
+    PARTIALLY_PARSED,
+    UNSTRUCTURED,
+    FETCH_FAILED,
+    SESSION_EXPIRED,
+    UNSUPPORTED
+}
 
 data class ReportInput(
     val reportId: String,
@@ -79,6 +87,27 @@ data class ParsedReport(
     val processorName: String,
     val rawText: String = ""
 ) {
+    val structuredValueCount: Int
+        get() = labs.size + cultures.size
+
+    val parseStatus: ReportParseStatus
+        get() {
+            val warningText = warnings.joinToString(" ").lowercase()
+            return when {
+                "session" in warningText && ("expired" in warningText || "login" in warningText) ->
+                    ReportParseStatus.SESSION_EXPIRED
+                "unsupported" in warningText -> ReportParseStatus.UNSUPPORTED
+                structuredValueCount > 0 && warnings.isEmpty() -> ReportParseStatus.FULLY_PARSED
+                structuredValueCount > 0 -> ReportParseStatus.PARTIALLY_PARSED
+                rawText.isNotBlank() -> ReportParseStatus.UNSTRUCTURED
+                warningText.contains("fetch") ||
+                    warningText.contains("download") ||
+                    warningText.contains("http") ||
+                    warningText.contains("report failed") -> ReportParseStatus.FETCH_FAILED
+                else -> ReportParseStatus.UNSTRUCTURED
+            }
+        }
+
     fun toHelperJson(): JSONObject = JSONObject()
         .put("report_id", reportId)
         .put("report_name", reportName)
@@ -87,8 +116,18 @@ data class ParsedReport(
         .put("report_tags", JSONArray().put(if (cultures.isNotEmpty()) "culture" else "lab"))
         .put("parameters", JSONArray().also { array -> labs.forEach { lab -> array.put(lab.toJson()) } })
         .put("culture_results", JSONArray().also { array -> cultures.forEach { culture -> array.put(culture.toJson()) } })
-        .put("errors", JSONArray())
-        .put("processing", JSONObject().put("processor", processorName))
+        .put("errors", JSONArray(warnings))
+        .put(
+            "processing",
+            JSONObject()
+                .put("processor", processorName)
+                .put("parse_status", parseStatus.name.lowercase())
+                .put("structured_value_count", structuredValueCount)
+                .put("parser_warnings", JSONArray(warnings))
+                .put("source_report_id", reportId)
+                .put("source_report_name", reportName)
+                .put("source_report_date", dateSent)
+        )
 }
 
 data class ProcessingSummary(
