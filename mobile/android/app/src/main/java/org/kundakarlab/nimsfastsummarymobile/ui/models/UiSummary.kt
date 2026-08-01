@@ -1,6 +1,7 @@
 package org.kundakarlab.nimsfastsummarymobile.ui.models
 
 import org.json.JSONObject
+import org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
 
 enum class Abnormality {
     HIGH,
@@ -22,6 +23,14 @@ data class UiPatientSnapshot(
 
     val demographicLine: String
         get() = listOf(age, sex).filter(String::isNotBlank).joinToString(" · ")
+
+    val identityLine: String
+        get() = listOf(
+            name.takeIf(String::isNotBlank),
+            crNumber.takeIf(String::isNotBlank)?.let { "CR/UHID $it" },
+            demographicLine.takeIf(String::isNotBlank),
+            location.takeIf(String::isNotBlank)
+        ).filterNotNull().joinToString(" · ")
 }
 
 data class UiSourceReport(
@@ -109,11 +118,20 @@ data class UiSummary(
     val pendingCultureCount: Int get() = cultures.count { it.status == "pending" }
     val noGrowthCultureCount: Int get() = cultures.count { it.status == "no_growth" }
     val reviewCultureCount: Int get() = cultures.count { it.status !in setOf("growth_detected", "pending", "no_growth") }
-    val dateRange: String
+
+    val actionableCultures: List<UiCultureRow>
+        get() = cultures.filter { it.status in setOf("growth_detected", "pending") }
+
+    val abnormalLabTrends: List<UiLabTrendRow>
+        get() = labTrends.filter { it.abnormality in setOf(Abnormality.HIGH, Abnormality.LOW, Abnormality.CRITICAL) }
+
+    val reportsNeedingReview: List<UiSourceReport>
+        get() = sourceReports.filter { it.hasError || it.status.equals("unsupported", true) || it.status.equals("partial", true) }
+
+    val reportDateRange: String
         get() {
             val dates = sourceReports.mapNotNull { report ->
-                org.kundakarlab.nimsfastsummarymobile.data.processing.DateNormalizer
-                    .normalize(report.dateSent).sortEpoch?.let { it to report.dateSent }
+                DateNormalizer.normalize(report.dateSent).sortEpoch?.let { it to report.dateSent }
             }.distinctBy { it.first }.sortedBy { it.first }.map { it.second }
             return when {
                 dates.isEmpty() -> "No dates"
@@ -121,6 +139,17 @@ data class UiSummary(
                 else -> "${dates.first()} to ${dates.last()}"
             }
         }
+
+    /**
+     * Existing summary UI uses dateRange as its subtitle. Keep that call site
+     * compatible while surfacing the patient snapshot without duplicating PHI
+     * into logs, diagnostics, or a new persistence layer.
+     */
+    val dateRange: String
+        get() = listOf(
+            patientSnapshot.identityLine.takeIf(String::isNotBlank),
+            reportDateRange
+        ).filterNotNull().joinToString(" · ")
 
     private fun firstNonBlank(source: JSONObject, vararg keys: String): String {
         for (key in keys) {
