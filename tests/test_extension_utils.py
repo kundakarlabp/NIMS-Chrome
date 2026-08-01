@@ -610,19 +610,27 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "mappingValidated = false" in main_activity
     assert 'if (mode != "test_direct" && !mappingValidated)' in main_activity
     assert "Run Test One Report successfully before bulk summary." in main_activity
-    assert "processBulk(cultureRequests, concurrency = 3" in main_activity
-    assert "processBulk(otherRequests, concurrency = 3" in main_activity
-    assert "Semaphore(concurrency.coerceIn(1, 4))" in main_activity
+    # The optimized implementation intentionally replaced the old dual 3+3
+    # culture/laboratory queues with one clinically prioritized queue and
+    # separate bounded network/PDF stages.
+    assert "ReportRequestOptimizer.optimize(prepared)" in main_activity
+    assert "processBulk(queue)" in main_activity
+    assert "private val fetchSemaphore = Semaphore(6)" in main_activity
+    assert "private val parseSemaphore = Semaphore(2)" in main_activity
+    assert "processBulk(cultureRequests, concurrency = 3" not in main_activity
+    assert "processBulk(otherRequests, concurrency = 3" not in main_activity
     assert "ReportFetchQueue(concurrency = 3)" not in main_activity
     assert "private var webViewUserAgent = \"\"" in main_activity
     assert "webViewUserAgent = webView.settings.userAgentString" in main_activity
-    assert 'setRequestProperty("User-Agent", webViewUserAgent)' in main_activity
-    assert "setRequestProperty(\"User-Agent\", webView.settings.userAgentString)" not in main_activity
+    assert "NimsReportHttpClient(" in main_activity
+    assert "userAgentProvider = { webViewUserAgent }" in main_activity
     assert "Set Railway helper URL first." in validator
     assert "Configure Railway helper for PDF and unsupported reports." in main_activity
-    assert "responseCode >= 400" in main_activity
-    assert "errorStream" in main_activity
-    assert "ByteArrayOutputStream" in main_activity
+    http_client = (ROOT / "mobile" / "android" / "app" / "src" / "main" / "java" / "org" / "kundakarlab" / "nimsfastsummarymobile" / "NimsReportHttpClient.kt").read_text(encoding="utf-8")
+    assert "if (!response.isSuccessful)" in http_client
+    assert "response.code" in http_client
+    assert "body.source()" in http_client
+    assert "total > maxBytes" in http_client
     # Raw JSON must not be surfaced to the user as the summary. Internal parse
     # identifiers (e.g. NimsNavigationStep.fromRawJson(rawJson), JSONObject(raw))
     # are legitimate and required by live CR navigation; readability of the
