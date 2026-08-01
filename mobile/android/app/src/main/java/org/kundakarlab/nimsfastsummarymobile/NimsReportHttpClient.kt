@@ -48,13 +48,14 @@ class NimsReportHttpClient(
             val contentType = response.header("Content-Type").orEmpty()
             val classification = ReportResponseClassifier.classify(response.code, contentType, bytes)
 
-            // Session responses must reach MainActivity so its established
-            // NimsSessionExpiredException/handleExpiredSession path can retain
-            // completed reports and move the WebView back to manual login.
-            // Throwing a second HTTP-layer exception here bypassed that handler.
-            if (!response.isSuccessful && classification != "html_login_or_session") {
-                throw failureFor(response.code, contentType, classification)
-                    ?: IllegalStateException("NIMS report fetch returned ${response.code}")
+            // Preserve the explicit unsuccessful-response gate required by the
+            // repository contract. Session responses are the only exception:
+            // they must reach MainActivity's established recovery handler.
+            if (!response.isSuccessful) {
+                if (classification != "html_login_or_session") {
+                    throw failureFor(response.code, contentType, classification)
+                        ?: IllegalStateException("NIMS report fetch returned ${response.code}")
+                }
             }
             if (classification != "html_login_or_session") {
                 failureFor(response.code, contentType, classification)?.let { throw it }
