@@ -82,6 +82,7 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
 import org.kundakarlab.nimsfastsummarymobile.data.processing.RemoteReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.OnDeviceReportProcessor
+import org.kundakarlab.nimsfastsummarymobile.data.cache.ParsedReportDiskCache
 import org.kundakarlab.nimsfastsummarymobile.data.pdf.PdfBoxAndroidTextExtractor
 import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
@@ -115,6 +116,8 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
@@ -136,6 +139,15 @@ class MainActivity : ComponentActivity() {
     private var discoveredTestRow: JSONObject? = null
     private var validatedReportCache: Pair<String, ParsedReport>? = null
     private val parsedReportCache = ConcurrentHashMap<String, ParsedReport>()
+    private val parsedReportDiskCache by lazy { ParsedReportDiskCache(applicationContext) }
+    private val reportHttpClient by lazy {
+        NimsReportHttpClient(
+            cookieProvider = { url -> CookieManager.getInstance().getCookie(url).orEmpty() },
+            userAgentProvider = { webViewUserAgent }
+        )
+    }
+    private val fetchSemaphore = Semaphore(6)
+    private val parseSemaphore = Semaphore(2)
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
@@ -804,7 +816,11 @@ class MainActivity : ComponentActivity() {
         if (skipped > 0) {
             log("Prepared ${prepared.size} reports; skipped $skipped with unsupported identifiers")
         }
-        callback(prepared)
+        val optimized = ReportRequestOptimizer.optimize(prepared)
+        if (optimized.size != prepared.size) {
+            log("Optimized report queue: ${prepared.size} → ${optimized.size} unique reports")
+        }
+        callback(optimized)
     }
 
     private fun startFetchParseSummarize(mode: String, prepared: List<PreparedReportRequest>) {
@@ -838,39 +854,40 @@ class MainActivity : ComponentActivity() {
                 parsedReportCache[result.reportId] = result
                 listOf(result)
             } else {
-                val cultureRequests = prepared.filter { request ->
-                    val tags = request.row.optJSONArray("report_tags")?.toString().orEmpty()
-                    tags.contains("culture", ignoreCase = true)
-                }
-                val otherRequests = prepared.filterNot { it in cultureRequests }
+                val queue = ReportRequestOptimizer.optimize(prepared)
                 val completed = AtomicInteger(0)
-                val markCompleted = {
-                    val done = completed.incrementAndGet()
-                    setState(AppState.FETCHING, "Processing $done/${prepared.size} reports in parallel…")
-                }
-                val (cultureReports, otherReports) = coroutineScope {
-                    // Reserve more capacity for microbiology while laboratory
-                    // reports begin immediately instead of waiting for every
-                    // culture PDF to finish.
-                    val cultureJob = async { processBulk(cultureRequests, concurrency = 3, onCompleted = markCompleted) }
-                    val laboratoryJob = async { processBulk(otherRequests, concurrency = 3, onCompleted = markCompleted) }
-                    val cultures = cultureJob.await()
-                    if (cultures.isNotEmpty()) {
-                        when (val partial = withContext(Dispatchers.IO) {
-                            processingRouter.summarize(cultures, SummaryMode.CULTURES_ONLY)
-                        }) {
-                            is ProcessingResult.Success -> {
-                                val partialJson = partial.value.helperJson ?: localSummaryJson(cultures, partial.value.text)
-                                uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(partialJson, physicianNote)
-                                selectedTab = 3
-                                setState(AppState.FETCHING, "Cultures ready; laboratory trends are still processing…")
+                val lastProgressUpdate = AtomicLong(0L)
+                val cultureRequestCount = queue.count(ReportRequestOptimizer::isCulture)
+                val culturesRemaining = AtomicInteger(cultureRequestCount)
+                val completedCultures = Collections.synchronizedList(mutableListOf<ParsedReport>())
+                processBulk(queue) { request, parsed ->
+                    if (ReportRequestOptimizer.isCulture(request)) {
+                        if (parsed.cultures.isNotEmpty()) completedCultures.add(parsed)
+                        if (culturesRemaining.decrementAndGet() == 0 && completedCultures.isNotEmpty()) {
+                            val culturesSnapshot = synchronized(completedCultures) { completedCultures.toList() }
+                            when (val partial = withContext(Dispatchers.IO) {
+                                processingRouter.summarize(culturesSnapshot, SummaryMode.CULTURES_ONLY)
+                            }) {
+                                is ProcessingResult.Success -> {
+                                    val partialJson = partial.value.helperJson
+                                        ?: localSummaryJson(culturesSnapshot, partial.value.text)
+                                    uiSummary = SummaryJsonMapper.parseSummaryJsonToUiSummary(partialJson, physicianNote)
+                                    selectedTab = 3
+                                    setState(AppState.FETCHING, "Cultures ready; laboratory trends are still processing…")
+                                }
+                                else -> Unit
                             }
-                            else -> Unit
                         }
                     }
-                    cultures to laboratoryJob.await()
+                    val done = completed.incrementAndGet()
+                    val now = System.currentTimeMillis()
+                    val previous = lastProgressUpdate.get()
+                    if (done == queue.size || now - previous >= 250L) {
+                        if (lastProgressUpdate.compareAndSet(previous, now) || done == queue.size) {
+                            setState(AppState.FETCHING, "Processing $done/${queue.size} reports…")
+                        }
+                    }
                 }
-                cultureReports + otherReports
             }
             if (mode == "test_direct") {
                 setState(AppState.FETCHING, "Mapping validated.")
@@ -909,34 +926,36 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun processBulk(
         prepared: List<PreparedReportRequest>,
-        concurrency: Int,
-        onCompleted: () -> Unit
+        onCompleted: suspend (PreparedReportRequest, ParsedReport) -> Unit
     ): List<ParsedReport> = coroutineScope {
-        val semaphore = Semaphore(concurrency.coerceIn(1, 4))
         prepared.mapIndexed { index, request ->
             async(Dispatchers.IO) {
-                semaphore.withPermit {
-                    ensureActive()
-                    try {
-                        parsedReportCache[request.reportId]
-                            ?.also { log("Reusing an in-memory parsed report") }
-                            ?: validatedReportCache
-                                ?.takeIf { it.first == request.reportId }
-                                ?.second
-                                ?.also { log("Reusing the report parsed during validation") }
-                            ?: fetchAndParseOne(request, index, prepared.size).also { parsed ->
-                                if (parsed.labs.isNotEmpty() || parsed.cultures.isNotEmpty()) {
-                                    parsedReportCache[request.reportId] = parsed
-                                }
+                ensureActive()
+                val parsed = try {
+                    parsedReportCache[request.reportId]
+                        ?.also { log("Cache hit: memory") }
+                        ?: validatedReportCache
+                            ?.takeIf { it.first == request.reportId }
+                            ?.second
+                            ?.also { log("Cache hit: validation report") }
+                        ?: parsedReportDiskCache.get(request.reportId)
+                            ?.also {
+                                parsedReportCache[request.reportId] = it
+                                log("Cache hit: disk")
                             }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        errorParsedReport(request.row, error.message ?: "Report failed")
-                    } finally {
-                        onCompleted()
-                    }
+                        ?: fetchAndParseOne(request, index, prepared.size).also { result ->
+                            if (result.labs.isNotEmpty() || result.cultures.isNotEmpty()) {
+                                parsedReportCache[request.reportId] = result
+                                parsedReportDiskCache.put(result)
+                            }
+                        }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    errorParsedReport(request.row, error.message ?: "Report failed")
                 }
+                onCompleted(request, parsed)
+                parsed
             }
         }.awaitAll()
     }
@@ -946,7 +965,7 @@ class MainActivity : ComponentActivity() {
         log("Fetching selected report ${index + 1}/$total")
         val transient = request.transientArg
         val url = request.directUrl
-        val response = fetchWithWebViewCookies(url)
+        val response = fetchSemaphore.withPermit { fetchWithWebViewCookies(url) }
         val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
         if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
         if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
@@ -960,10 +979,12 @@ class MainActivity : ComponentActivity() {
             safeSource = NimsUrlPolicy.safeSourceForHelper(url)
         )
         log("Parsing report ${index + 1}/$total")
-        return when (val parsed = processingRouter.parse(input)) {
-            is ProcessingResult.Success -> parsed.value.copy(warnings = (parsed.value.warnings + parsed.warnings).distinct())
-            is ProcessingResult.Unsupported -> errorParsedReport(row, parsed.reason)
-            is ProcessingResult.Failure -> errorParsedReport(row, parsed.userMessage)
+        return parseSemaphore.withPermit {
+            when (val parsed = processingRouter.parse(input)) {
+                is ProcessingResult.Success -> parsed.value.copy(warnings = (parsed.value.warnings + parsed.warnings).distinct())
+                is ProcessingResult.Unsupported -> errorParsedReport(row, parsed.reason)
+                is ProcessingResult.Failure -> errorParsedReport(row, parsed.userMessage)
+            }
         }
     }
 
@@ -993,39 +1014,8 @@ class MainActivity : ComponentActivity() {
         } })
         .put("interpretation", JSONArray(text.lines()))
 
-    private fun fetchWithWebViewCookies(url: String): ReportFetchResult {
-        if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 45_000
-            setRequestProperty("Cookie", CookieManager.getInstance().getCookie(url).orEmpty())
-            setRequestProperty("User-Agent", webViewUserAgent)
-            setRequestProperty("Accept", "application/pdf,text/html,text/plain,*/*")
-        }
-        try {
-            val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
-            val bytes = stream?.use { input ->
-                val out = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                var total = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    total += read
-                    if (total > MAX_FETCHED_REPORT_BYTES) throw IllegalStateException("Report response exceeded 25 MB")
-                    out.write(buffer, 0, read)
-                }
-                out.toByteArray()
-            } ?: ByteArray(0)
-            if (connection.responseCode >= 400) {
-                throw IllegalStateException("NIMS report fetch returned ${connection.responseCode} (${contentType(connection.contentType.orEmpty())})")
-            }
-            return ReportFetchResult(connection.contentType.orEmpty(), connection.responseCode, SafeUrl.hostPath(connection.url.toString()), bytes)
-        } finally {
-            connection.disconnect()
-        }
-    }
+    private fun fetchWithWebViewCookies(url: String): ReportFetchResult =
+        reportHttpClient.fetch(url, MAX_FETCHED_REPORT_BYTES)
 
     private fun contentType(value: String): String = value.substringBefore(";").ifBlank { "application/octet-stream" }
 
@@ -1184,6 +1174,7 @@ class MainActivity : ComponentActivity() {
         discoveredTestRow = null
         validatedReportCache = null
         parsedReportCache.clear()
+        parsedReportDiskCache.clear()
         setState(AppState.HELPER_READY, "Results cleared.")
     }
 
