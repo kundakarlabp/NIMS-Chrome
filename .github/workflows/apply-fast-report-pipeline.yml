@@ -1,4 +1,5 @@
 name: Apply fast report pipeline
+# Triggered once to apply and validate the generated implementation.
 
 on:
   push:
