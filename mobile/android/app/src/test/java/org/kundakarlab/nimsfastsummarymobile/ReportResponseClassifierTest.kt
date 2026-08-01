@@ -26,6 +26,11 @@ class ReportResponseClassifierTest {
         assertEquals("html_login_or_session", ReportResponseClassifier.classify(200, "text/html", html.toByteArray()))
     }
 
+    @Test fun unauthorizedStatusIsSessionExpiryEvenWithEmptyBody() {
+        assertEquals("html_login_or_session", ReportResponseClassifier.classify(401, "", ByteArray(0)))
+        assertEquals("html_login_or_session", ReportResponseClassifier.classify(403, "text/plain", "Forbidden".toByteArray()))
+    }
+
     @Test fun explicitExpiryIsClassifiedWithoutCredentialFields() {
         assertTrue(ReportResponseClassifier.isLoginOrExpiredHtml("Your session has expired. Please login again."))
     }
