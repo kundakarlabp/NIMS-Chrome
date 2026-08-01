@@ -9,7 +9,7 @@ class NimsReportHttpClientFailureTest {
     @Test
     fun loginHtmlProducesTypedSessionExpiry() {
         val error = NimsReportHttpClient.failureFor(200, "text/html", "html_login_or_session")
-        assertTrue(error is NimsSessionExpiredException)
+        assertTrue(error is NimsHttpSessionExpiredException)
         assertTrue(error?.message.orEmpty().contains("completed reports were preserved"))
     }
 
@@ -17,18 +17,18 @@ class NimsReportHttpClientFailureTest {
     fun unauthorizedStatusProducesTypedSessionExpiry() {
         assertTrue(
             NimsReportHttpClient.failureFor(401, "text/html", "unsupported_content_type")
-                is NimsSessionExpiredException
+                is NimsHttpSessionExpiredException
         )
         assertTrue(
             NimsReportHttpClient.failureFor(403, "text/html", "html_report_content")
-                is NimsSessionExpiredException
+                is NimsHttpSessionExpiredException
         )
     }
 
     @Test
     fun staleReportListIsNotMisreportedAsSessionExpiry() {
         val error = NimsReportHttpClient.failureFor(200, "text/html", "html_report_list")
-        assertTrue(error !is NimsSessionExpiredException)
+        assertTrue(error !is NimsHttpSessionExpiredException)
         assertEquals("NIMS returned the report list instead of the selected report", error?.message)
     }
 
