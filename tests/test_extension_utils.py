@@ -616,7 +616,7 @@ def test_android_bulk_gating_queue_and_threading_contract() -> None:
     assert "ReportRequestOptimizer.optimize(prepared)" in main_activity
     assert "processBulk(queue)" in main_activity
     assert "private val fetchSemaphore = Semaphore(6)" in main_activity
-    assert "private val parseSemaphore = Semaphore(2)" in main_activity
+    assert "private val parseSemaphore = Semaphore(3)" in main_activity
     assert "processBulk(cultureRequests, concurrency = 3" not in main_activity
     assert "processBulk(otherRequests, concurrency = 3" not in main_activity
     assert "ReportFetchQueue(concurrency = 3)" not in main_activity

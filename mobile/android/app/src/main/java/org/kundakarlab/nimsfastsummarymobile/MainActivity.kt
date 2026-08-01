@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -24,6 +25,7 @@ import androidx.webkit.WebViewFeature
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +51,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -69,11 +72,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingRouter
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import org.kundakarlab.nimsfastsummarymobile.domain.model.SummaryMode
@@ -84,6 +91,7 @@ import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProc
 import org.kundakarlab.nimsfastsummarymobile.data.processing.OnDeviceReportProcessor
 import org.kundakarlab.nimsfastsummarymobile.data.cache.ParsedReportDiskCache
 import org.kundakarlab.nimsfastsummarymobile.data.pdf.PdfBoxAndroidTextExtractor
+import org.kundakarlab.nimsfastsummarymobile.data.pdf.InMemoryPdfPageRenderer
 import kotlinx.coroutines.withContext
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
@@ -147,7 +155,10 @@ class MainActivity : ComponentActivity() {
         )
     }
     private val fetchSemaphore = Semaphore(6)
-    private val parseSemaphore = Semaphore(2)
+    private val parseSemaphore = Semaphore(3)
+    private val exactPdfSemaphore = Semaphore(1)
+    private val exactReportSources = ConcurrentHashMap<String, String>()
+    private val pdfPageRenderer by lazy { InMemoryPdfPageRenderer(applicationContext) }
     // Token identity for runModeInternal's evaluateJavascript watchdog.
     private var activeEvaluateWatchdog: Any? = null
     private var webViewUserAgent = ""
@@ -169,6 +180,9 @@ class MainActivity : ComponentActivity() {
     private var navigationJob: Job? = null
     private var navigationGeneration = 0L
     private var navigationInProgress by mutableStateOf(false)
+    private var pdfViewerState by mutableStateOf<ExactPdfViewerState?>(null)
+    private var pdfViewerBytes: ByteArray? = null
+    private var pdfViewerJob: Job? = null
     private val safeLogBuffer = SafeLogBuffer()
     private val processingRouter by lazy {
         ProcessingRouter(
@@ -235,6 +249,7 @@ class MainActivity : ComponentActivity() {
                     onFetchReports = { log("Quick Review tapped"); runMode("bulk_fast") },
                     onCancelProcessing = { cancelActiveProcessing() },
                     summary = uiSummary,
+                    onOpenSourceReport = { report -> openExactPdf(report.sourceKey, report.reportName) },
                     physicianNote = physicianNote,
                     onPhysicianNoteChange = { updatePhysicianNote(it) },
                     logText = logText,
@@ -243,6 +258,14 @@ class MainActivity : ComponentActivity() {
                     onExportText = { shareText("NIMS Fast Summary", cleanSummaryText()) },
                     onClearResults = { clearResults() }
                 )
+                pdfViewerState?.let { viewer ->
+                    ExactPdfDialog(
+                        state = viewer,
+                        onDismiss = { dismissExactPdf() },
+                        onPrevious = { renderExactPdfPage(viewer.pageIndex - 1) },
+                        onNext = { renderExactPdfPage(viewer.pageIndex + 1) }
+                    )
+                }
             }
         }
         webView.requestFocus()
@@ -321,7 +344,11 @@ class MainActivity : ComponentActivity() {
                         if (!handled.compareAndSet(false, true)) return true
                         log("Popup -> ${SafeUrl.stripQuery(uri.toString())}")
                         when (NimsUrlPolicy.classify(uri)) {
-                            UrlClassification.ALLOWED_NIMS -> webView.loadUrl(uri.toString())
+                            // NIMS opens report PDFs through a popup. Loading that URL
+                            // into the primary WebView destroys the report-list context
+                            // and often leaves a black PDF surface. Fetch with the same
+                            // authenticated cookies and render it in memory instead.
+                            UrlClassification.ALLOWED_NIMS -> openExactPdfUrl(uri.toString(), "NIMS source report")
                             UrlClassification.EXTERNAL_HTTPS -> if (isMainFrame && isUserGesture) {
                                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                             }
@@ -373,6 +400,7 @@ class MainActivity : ComponentActivity() {
                         mapping = null
                         mappingValidated = false
                         discoveredTestRow = null
+                        exactReportSources.clear()
                     }
                 },
                 onBlockedInternalNavigation = { setState(AppState.ERROR, "Blocked internal NIMS navigation.") },
@@ -449,6 +477,8 @@ class MainActivity : ComponentActivity() {
     private fun clearNimsSession() {
         cancelActiveProcessing()
         cancelNavigation()
+        dismissExactPdf()
+        exactReportSources.clear()
         mapping = null
         mappingValidated = false
         discoveredTestRow = null
@@ -498,6 +528,7 @@ class MainActivity : ComponentActivity() {
         mapping = null
         mappingValidated = false
         discoveredTestRow = null
+        exactReportSources.clear()
         validatedReportCache = null
         parsedReportCache.clear()
         setState(AppState.HELPER_READY, "Opening CR-wise result page directly…")
@@ -820,6 +851,11 @@ class MainActivity : ComponentActivity() {
         if (optimized.size != prepared.size) {
             log("Optimized report queue: ${prepared.size} → ${optimized.size} unique reports")
         }
+        // Source references exist only for the currently rendered result list.
+        // They intentionally remain in memory and never enter summary JSON,
+        // preferences, cache, logs, diagnostics, or exports.
+        exactReportSources.clear()
+        optimized.forEach { request -> exactReportSources[request.reportId] = request.directUrl }
         callback(optimized)
     }
 
@@ -917,6 +953,8 @@ class MainActivity : ComponentActivity() {
         } catch (cancelled: CancellationException) {
             setState(AppState.HELPER_READY, "Processing stopped. Completed results were retained.")
             throw cancelled
+        } catch (_: NimsSessionExpiredException) {
+            handleExpiredSession()
         } catch (error: Exception) {
             setState(AppState.ERROR, error.message ?: "Report processing failed")
         } finally {
@@ -951,8 +989,14 @@ class MainActivity : ComponentActivity() {
                         }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
+                } catch (expired: NimsSessionExpiredException) {
+                    // Let coroutineScope cancel sibling downloads immediately.
+                    // Converting expiry to a per-report warning would cause every
+                    // remaining request to hit the expired session and mislead the
+                    // clinician with a list of unrelated failures.
+                    throw expired
                 } catch (error: Exception) {
-                    errorParsedReport(request.row, error.message ?: "Report failed")
+                    errorParsedReport(request, error.message ?: "Report failed")
                 }
                 onCompleted(request, parsed)
                 parsed
@@ -967,7 +1011,7 @@ class MainActivity : ComponentActivity() {
         val url = request.directUrl
         val response = fetchSemaphore.withPermit { fetchWithWebViewCookies(url) }
         val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
-        if (classification == "html_login_or_session") throw IllegalStateException("NIMS session appears expired. Login again in the WebView.")
+        if (classification == "html_login_or_session") throw NimsSessionExpiredException()
         if (classification !in setOf("pdf_report", "html_report_content")) throw IllegalStateException("Report fetch returned $classification")
         val input = ReportInput(
             reportId = request.reportId,
@@ -982,15 +1026,18 @@ class MainActivity : ComponentActivity() {
         return parseSemaphore.withPermit {
             when (val parsed = processingRouter.parse(input)) {
                 is ProcessingResult.Success -> parsed.value.copy(warnings = (parsed.value.warnings + parsed.warnings).distinct())
-                is ProcessingResult.Unsupported -> errorParsedReport(row, parsed.reason)
-                is ProcessingResult.Failure -> errorParsedReport(row, parsed.userMessage)
+                is ProcessingResult.Unsupported -> errorParsedReport(request, parsed.reason)
+                is ProcessingResult.Failure -> errorParsedReport(request, parsed.userMessage)
             }
         }
     }
 
-    private fun errorParsedReport(row: JSONObject, error: String): ParsedReport {
+    private fun errorParsedReport(request: PreparedReportRequest, error: String): ParsedReport {
+        val row = request.row
         return ParsedReport(
-            reportId = row.optString("report_id", "error"),
+            // Preserve the hashed identity even when parsing is unsupported so
+            // the Reports screen can still open the exact source PDF.
+            reportId = request.reportId,
             reportName = row.optString("report_name"),
             dateSent = row.optString("date_sent"),
             reportType = row.optString("report_type", "other"),
@@ -1016,6 +1063,105 @@ class MainActivity : ComponentActivity() {
 
     private fun fetchWithWebViewCookies(url: String): ReportFetchResult =
         reportHttpClient.fetch(url, MAX_FETCHED_REPORT_BYTES)
+
+    private fun openExactPdf(sourceKey: String, title: String) {
+        val url = exactReportSources[sourceKey]
+        if (url == null) {
+            pdfViewerState = ExactPdfViewerState(
+                title = title.ifBlank { "Source report" },
+                error = "This source reference is no longer active. Return to the NIMS result list and run Quick Review again."
+            )
+            return
+        }
+        openExactPdfUrl(url, title)
+    }
+
+    private fun openExactPdfUrl(url: String, title: String) {
+        if (!NimsReportTemplate.isAllowedNimsUrl(url)) {
+            setState(AppState.ERROR, "Blocked an unsupported report source.")
+            return
+        }
+        pdfViewerJob?.cancel()
+        pdfViewerBytes = null
+        pdfViewerState = ExactPdfViewerState(title = title.ifBlank { "Source report" }, loading = true)
+        pdfViewerJob = lifecycleScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    exactPdfSemaphore.withPermit { fetchWithWebViewCookies(url) }
+                }
+                when (ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)) {
+                    "html_login_or_session" -> throw NimsSessionExpiredException()
+                    "pdf_report" -> {
+                        pdfViewerBytes = response.bytes
+                        pdfViewerJob = null
+                        renderExactPdfPage(0)
+                    }
+                    else -> pdfViewerState = ExactPdfViewerState(
+                        title = title.ifBlank { "Source report" },
+                        error = "NIMS did not return a PDF for this report. Reopen the result list and try again."
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: NimsSessionExpiredException) {
+                dismissExactPdf()
+                handleExpiredSession()
+            } catch (error: Exception) {
+                pdfViewerState = ExactPdfViewerState(
+                    title = title.ifBlank { "Source report" },
+                    error = error.message ?: "The source PDF could not be opened."
+                )
+            }
+        }
+    }
+
+    private fun renderExactPdfPage(pageIndex: Int) {
+        val bytes = pdfViewerBytes ?: return
+        val current = pdfViewerState ?: return
+        if (current.pageCount > 0 && pageIndex !in 0 until current.pageCount) return
+        pdfViewerJob?.cancel()
+        pdfViewerState = current.copy(loading = true, error = null)
+        pdfViewerJob = lifecycleScope.launch {
+            try {
+                val page = exactPdfSemaphore.withPermit { pdfPageRenderer.render(bytes, pageIndex) }
+                val previousBitmap = pdfViewerState?.bitmap
+                pdfViewerState = ExactPdfViewerState(
+                    title = current.title,
+                    bitmap = page.bitmap,
+                    pageIndex = page.pageIndex,
+                    pageCount = page.pageCount
+                )
+                if (previousBitmap != null && previousBitmap !== page.bitmap) {
+                    Handler(Looper.getMainLooper()).postDelayed({ previousBitmap.recycle() }, 300L)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                pdfViewerState = current.copy(loading = false, error = error.message ?: "This PDF page could not be rendered.")
+            }
+        }
+    }
+
+    private fun dismissExactPdf() {
+        pdfViewerJob?.cancel()
+        pdfViewerJob = null
+        pdfViewerBytes = null
+        pdfViewerState?.bitmap?.recycle()
+        pdfViewerState = null
+    }
+
+    private fun handleExpiredSession() {
+        mapping = null
+        mappingValidated = false
+        discoveredTestRow = null
+        validatedReportCache = null
+        exactReportSources.clear()
+        runOnUiThread {
+            selectedTab = 0
+            if (::webView.isInitialized) webView.loadUrl(NIMS_LOGIN_URL)
+        }
+        setState(AppState.ERROR, "NIMS session expired. Login manually, reopen the CR result list, and retry.")
+    }
 
     private fun contentType(value: String): String = value.substringBefore(";").ifBlank { "application/octet-stream" }
 
@@ -1165,6 +1311,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun clearResults() {
+        dismissExactPdf()
+        exactReportSources.clear()
         settings.clearResults()
         sanitizedSummaryText = ""
         uiSummary = null
@@ -1199,6 +1347,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         cancelNavigation()
         activeProcessingJob?.cancel()
+        dismissExactPdf()
         runCatching {
             if (::webView.isInitialized) {
                 webView.stopLoading()
@@ -1269,6 +1418,7 @@ private fun NimsFastSummaryApp(
     onFetchReports: () -> Unit,
     onCancelProcessing: () -> Unit,
     summary: UiSummary?,
+    onOpenSourceReport: (UiSourceReport) -> Unit,
     physicianNote: String,
     onPhysicianNoteChange: (String) -> Unit,
     logText: String,
@@ -1314,7 +1464,7 @@ private fun NimsFastSummaryApp(
                 onCancelProcessing = onCancelProcessing,
                 logText = logText
             )
-            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty())
+            1 -> ReportsScreen(contentModifier, summary?.sourceReports.orEmpty(), onOpenSourceReport)
             2 -> TrendsScreen(contentModifier, summary?.labTrends.orEmpty())
             3 -> CulturesScreen(contentModifier, summary?.cultures.orEmpty())
             else -> SummaryScreen(
@@ -1460,7 +1610,11 @@ private fun NimsWebViewScreen(
 }
 
 @Composable
-private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
+private fun ReportsScreen(
+    modifier: Modifier,
+    reports: List<UiSourceReport>,
+    onOpenSourceReport: (UiSourceReport) -> Unit
+) {
     var expandedIndex by remember { mutableIntStateOf(-1) }
     LazyColumn(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { SectionTitle("Parsed reports", "${reports.size} reports · tap for full structured details") }
@@ -1512,6 +1666,9 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelMedium
                     )
+                    OutlinedButton(onClick = { onOpenSourceReport(report) }) {
+                        Text("Open exact PDF")
+                    }
                     if (expanded && report.results.isNotEmpty()) {
                         Spacer(Modifier.height(4.dp))
                         report.results.forEach { result ->
@@ -1551,6 +1708,69 @@ private fun ReportsScreen(modifier: Modifier, reports: List<UiSourceReport>) {
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFF777777)
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExactPdfDialog(
+    state: ExactPdfViewerState,
+    onDismiss: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(Modifier.fillMaxSize(), color = Color(0xFF111111)) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFF0F4C81)).padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        state.title,
+                        Modifier.weight(1f),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (state.pageCount > 0) {
+                        Text("${state.pageIndex + 1}/${state.pageCount}", color = Color.White)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Close", color = Color.White) }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    state.bitmap?.let { bitmap ->
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Source PDF page ${state.pageIndex + 1}",
+                            modifier = Modifier.fillMaxSize().padding(8.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                    if (state.loading) CircularProgressIndicator()
+                    state.error?.let { error ->
+                        Text(error, color = Color.White, modifier = Modifier.padding(24.dp))
+                    }
+                }
+                if (state.pageCount > 1) {
+                    Row(
+                        Modifier.fillMaxWidth().background(Color(0xFF202020)).padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        OutlinedButton(onClick = onPrevious, enabled = !state.loading && state.pageIndex > 0) {
+                            Text("Previous")
+                        }
+                        OutlinedButton(onClick = onNext, enabled = !state.loading && state.pageIndex + 1 < state.pageCount) {
+                            Text("Next")
+                        }
                     }
                 }
             }
@@ -2058,3 +2278,14 @@ data class PreparedReportRequest(
     val directUrl: String,
     val reportId: String
 )
+
+private data class ExactPdfViewerState(
+    val title: String,
+    val loading: Boolean = false,
+    val bitmap: Bitmap? = null,
+    val pageIndex: Int = 0,
+    val pageCount: Int = 0,
+    val error: String? = null
+)
+
+private class NimsSessionExpiredException : IllegalStateException("NIMS session expired")

@@ -168,11 +168,11 @@ class NimsReportTemplateTest {
     @Test
     fun reportResponseClassificationOnlyDecodesNonPdfPrefix() {
         val loginInPrefix = ByteArray(140 * 1024) { 'a'.code.toByte() }
-        "password captcha".toByteArray().copyInto(loginInPrefix, destinationOffset = 1024)
+        "<input type=password>".toByteArray().copyInto(loginInPrefix, destinationOffset = 1024)
         assertEquals("html_login_or_session", ReportResponseClassifier.classify(200, "text/plain", loginInPrefix))
 
         val loginAfterPrefix = ByteArray(140 * 1024) { 'a'.code.toByte() }
-        "password captcha".toByteArray().copyInto(loginAfterPrefix, destinationOffset = 129 * 1024)
+        "<input type=password>".toByteArray().copyInto(loginAfterPrefix, destinationOffset = 129 * 1024)
         assertEquals("unsupported_content_type", ReportResponseClassifier.classify(200, "text/plain", loginAfterPrefix))
     }
 
