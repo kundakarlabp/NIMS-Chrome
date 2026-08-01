@@ -7,7 +7,7 @@ import okhttp3.Request
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
 import java.util.concurrent.TimeUnit
 
-class NimsSessionExpiredException(message: String) : IllegalStateException(message)
+class NimsHttpSessionExpiredException(message: String) : IllegalStateException(message)
 
 /** Shared authenticated client with connection pooling and bounded per-host requests. */
 class NimsReportHttpClient(
@@ -49,7 +49,11 @@ class NimsReportHttpClient(
             val bytes = buffer.readByteArray()
             val contentType = response.header("Content-Type").orEmpty()
             val classification = ReportResponseClassifier.classify(response.code, contentType, bytes)
-            failureFor(response.code, contentType, classification)?.let { throw it }
+            val failure = failureFor(response.code, contentType, classification)
+            if (!response.isSuccessful) {
+                throw failure ?: IllegalStateException("NIMS report fetch returned ${response.code}")
+            }
+            failure?.let { throw it }
             return ReportFetchResult(
                 contentType = contentType,
                 statusCode = response.code,
@@ -66,7 +70,7 @@ class NimsReportHttpClient(
             classification: String
         ): IllegalStateException? = when {
             statusCode == 401 || statusCode == 403 || classification == "html_login_or_session" ->
-                NimsSessionExpiredException("NIMS session expired. Login again; completed reports were preserved.")
+                NimsHttpSessionExpiredException("NIMS session expired. Login again; completed reports were preserved.")
             statusCode !in 200..299 ->
                 IllegalStateException("NIMS report fetch returned $statusCode (${contentType.substringBefore(';')})")
             classification == "html_report_list" ->
