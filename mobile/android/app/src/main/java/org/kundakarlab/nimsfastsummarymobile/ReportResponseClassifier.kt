@@ -5,24 +5,45 @@ object ReportResponseClassifier {
         if (bytes.isEmpty()) return "empty_response"
         if (statusCode in setOf(404, 405, 500)) return "wrong_endpoint"
         val lowerType = contentType.lowercase()
-        if (lowerType.contains("application/pdf") || bytes.take(4).toByteArray().contentEquals("%PDF".toByteArray())) {
-            return "pdf_report"
-        }
+        if (hasPdfSignature(bytes)) return "pdf_report"
+
         val prefixSize = minOf(bytes.size, 128 * 1024)
         val text = bytes.decodeToString(endIndex = prefixSize).lowercase()
-        if (isLoginOrExpiredHtml(text)) {
-            return "html_login_or_session"
-        }
+        if (isLoginOrExpiredHtml(text)) return "html_login_or_session"
+        if (isReportListHtml(text)) return "html_report_list"
+
         val reportLike = listOf(
-            "hemoglobin", "platelet", "creatinine", "bilirubin", "culture", "report",
+            "hemoglobin", "haemoglobin", "platelet", "creatinine", "bilirubin", "culture",
             "esr", "erythrocyte sedimentation", "aptt", "prothrombin", "inr",
             "genexpert", "cbnaat", "histopathology", "diagnosis", "special stain"
-        ).any { text.contains(it) } &&
-            Regex("\\d+(?:\\.\\d+)?").containsMatchIn(text)
-        if ((lowerType.contains("text/html") || lowerType.contains("text/plain") || text.startsWith("<!doctype") || text.startsWith("<html")) && reportLike) {
-            return "html_report_content"
-        }
+        ).any(text::contains) && Regex("\\d+(?:\\.\\d+)?").containsMatchIn(text)
+        val htmlOrText = lowerType.contains("text/html") || lowerType.contains("text/plain") ||
+            text.startsWith("<!doctype") || text.startsWith("<html")
+        if (htmlOrText && reportLike) return "html_report_content"
+
+        // Do not trust a declared PDF content type without a PDF signature. NIMS
+        // can return HTML/login/list pages under a stale PDF URL, which otherwise
+        // produces a blank or black viewer.
+        if (lowerType.contains("application/pdf")) return "invalid_pdf_response"
         return "unsupported_content_type"
+    }
+
+    internal fun hasPdfSignature(bytes: ByteArray): Boolean {
+        if (bytes.size < 5) return false
+        var index = 0
+        while (index < minOf(bytes.size, 16) && bytes[index].toInt().toChar().isWhitespace()) index++
+        return index + 5 <= bytes.size &&
+            bytes.copyOfRange(index, index + 5).contentEquals("%PDF-".toByteArray())
+    }
+
+    internal fun isReportListHtml(html: String): Boolean {
+        val text = html.lowercase()
+        val hasResultTable = listOf("report_list", "printreport(", "cr no wise result", "patcrno").any(text::contains)
+        val hasMultipleReportLinks = Regex("printreport\\s*\\(", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .take(2)
+            .count() >= 2
+        return hasResultTable && (hasMultipleReportLinks || text.contains("investigation result"))
     }
 
     internal fun isLoginOrExpiredHtml(html: String): Boolean {
@@ -37,10 +58,6 @@ object ReportResponseClassifier {
             ).any(text::contains)
         ) return true
 
-        // Authenticated NIMS pages routinely contain login/logout navigation and
-        // login-related JavaScript. Treat the page as a login response only when
-        // it contains an actual credential challenge, never from the word
-        // "login" alone.
         val hasPasswordInput = Regex(
             "<input[^>]+(?:type\\s*=\\s*['\"]?password|name\\s*=\\s*['\"]?(?:password|passwd|userpassword))",
             RegexOption.IGNORE_CASE
