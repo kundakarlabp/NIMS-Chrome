@@ -10,6 +10,20 @@ enum class Abnormality {
     UNKNOWN
 }
 
+data class UiPatientSnapshot(
+    val name: String = "",
+    val crNumber: String = "",
+    val age: String = "",
+    val sex: String = "",
+    val location: String = ""
+) {
+    val isAvailable: Boolean
+        get() = name.isNotBlank() || crNumber.isNotBlank() || age.isNotBlank() || sex.isNotBlank() || location.isNotBlank()
+
+    val demographicLine: String
+        get() = listOf(age, sex).filter(String::isNotBlank).joinToString(" · ")
+}
+
 data class UiSourceReport(
     val sourceKey: String,
     val dateSent: String,
@@ -74,6 +88,21 @@ data class UiSummary(
     val editableNote: String = "",
     val rawJson: JSONObject = JSONObject()
 ) {
+    val patientSnapshot: UiPatientSnapshot
+        get() {
+            val patient = rawJson.optJSONObject("patient")
+                ?: rawJson.optJSONObject("patient_details")
+                ?: rawJson.optJSONObject("patient_demographics")
+                ?: JSONObject()
+            return UiPatientSnapshot(
+                name = firstNonBlank(patient, "name", "patient_name", "patientName"),
+                crNumber = firstNonBlank(patient, "cr_number", "cr_no", "crNumber", "uhid", "patient_id"),
+                age = firstNonBlank(patient, "age", "patient_age"),
+                sex = firstNonBlank(patient, "sex", "gender"),
+                location = firstNonBlank(patient, "location", "ward", "bed", "unit")
+            )
+        }
+
     val failedReportCount: Int get() = sourceReports.count { it.hasError }
     val parsedReportCount: Int get() = sourceReports.count { !it.hasError }
     val positiveCultureCount: Int get() = cultures.count { it.status == "growth_detected" }
@@ -92,4 +121,12 @@ data class UiSummary(
                 else -> "${dates.first()} to ${dates.last()}"
             }
         }
+
+    private fun firstNonBlank(source: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = source.optString(key).trim()
+            if (value.isNotBlank() && !value.equals("null", true)) return value
+        }
+        return ""
+    }
 }
