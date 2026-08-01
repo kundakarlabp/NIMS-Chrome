@@ -23,6 +23,7 @@ object NimsClinicalParsingEnhancer {
     private val treatmentHeading = Regex("(?im)^\\s*(TREATMENT|INITIAL\\s+INTENSIVE\\s+PHASE|ERADICATION\\s+PHASE)\\s*:")
     private val astHeading = Regex("(?im)^\\s*(SENSITIVITY|SUSCEPTIBILITY|ANTIBIOGRAM|RESISTANCE)\\s+(?:REPORT|PATTERN)?\\s*:")
     private val astEvidence = Regex("(?i)\\b(?:SENSITIVE|SUSCEPTIBLE|RESISTANT|INTERMEDIATE|MIC)\\b|\\b[SRID]\\s*[:=-]")
+    private val narrativeTerminator = Regex("(?is)-\\s*(?:ETIOLOGICAL|INFECTION|TREATMENT|HIGH\\s+PROBABILITY|NOTE|COMMENT).*$")
 
     fun enrichCultures(values: List<ParsedCultureValue>, text: String): List<ParsedCultureValue> {
         if (values.isEmpty()) return values
@@ -90,7 +91,7 @@ object NimsClinicalParsingEnhancer {
         val cultureNarrative = Regex(
             "(?is)(?:culture\\s+shows?\\s+growth\\s+of|growth\\s+of|organism\\s*(?:isolated)?\\s*[:=-])\\s*([A-Za-z][A-Za-z ._-]{2,120})"
         ).find(text)?.groupValues?.getOrNull(1)
-            ?.substringBefore(Regex("(?i)-\\s*(?:ETIOLOGICAL|INFECTION|TREATMENT|HIGH\\s+PROBABILITY|NOTE|COMMENT)"))
+            ?.replace(narrativeTerminator, "")
             ?.substringBefore('.')
             ?.trim()
 
