@@ -5,31 +5,52 @@ import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.kundakarlab.nimsfastsummarymobile.security.NimsUrlPolicy
+import java.io.IOException
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
-/** Shared authenticated client with connection pooling and bounded per-host requests. */
+/** Shared authenticated client with connection pooling, bounded requests and transient retry. */
 class NimsReportHttpClient(
     private val cookieProvider: (String) -> String,
-    private val userAgentProvider: () -> String
+    private val userAgentProvider: () -> String,
+    private val sleeper: (Long) -> Unit = Thread::sleep
 ) {
     private val client = OkHttpClient.Builder()
         .dispatcher(Dispatcher().apply {
-            maxRequests = 6
-            maxRequestsPerHost = 6
+            maxRequests = 4
+            maxRequestsPerHost = 4
         })
-        .connectionPool(ConnectionPool(6, 5, TimeUnit.MINUTES))
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(4, 5, TimeUnit.MINUTES))
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(50, TimeUnit.SECONDS)
+        .callTimeout(65, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
     fun fetch(url: String, maxBytes: Int): ReportFetchResult {
+        var lastFailure: Throwable? = null
+        for (attempt in 1..MAX_ATTEMPTS) {
+            try {
+                return execute(url, maxBytes)
+            } catch (error: Throwable) {
+                if (!isTransient(error) || attempt == MAX_ATTEMPTS) throw error
+                lastFailure = error
+                sleeper(retryDelayMs(attempt, url.hashCode()))
+            }
+        }
+        throw lastFailure ?: IllegalStateException("NIMS report fetch failed")
+    }
+
+    private fun execute(url: String, maxBytes: Int): ReportFetchResult {
         if (!NimsReportTemplate.isAllowedNimsUrl(url)) throw IllegalStateException("NIMS report URL is not allowed")
         val request = Request.Builder()
             .url(url)
             .header("Cookie", cookieProvider(url))
             .header("User-Agent", userAgentProvider())
             .header("Accept", "application/pdf,text/html,text/plain,*/*")
+            .header("Connection", "keep-alive")
             .build()
         client.newCall(request).execute().use { response ->
             val body = response.body ?: throw IllegalStateException("NIMS report response was empty")
@@ -48,9 +69,6 @@ class NimsReportHttpClient(
             val contentType = response.header("Content-Type").orEmpty()
             val classification = ReportResponseClassifier.classify(response.code, contentType, bytes)
 
-            // Preserve the explicit unsuccessful-response gate required by the
-            // repository contract. Session responses are the only exception:
-            // they must reach MainActivity's established recovery handler.
             if (!response.isSuccessful) {
                 if (classification != "html_login_or_session") {
                     throw failureFor(response.code, contentType, classification)
@@ -70,6 +88,23 @@ class NimsReportHttpClient(
     }
 
     companion object {
+        private const val MAX_ATTEMPTS = 3
+
+        internal fun retryDelayMs(attempt: Int, stableSeed: Int): Long {
+            val base = min(250L * (1L shl (attempt - 1)), 1_500L)
+            val jitter = (stableSeed.toLong().let { if (it < 0) -it else it } % 180L)
+            return base + jitter
+        }
+
+        internal fun isTransient(error: Throwable): Boolean = when (error) {
+            is SocketTimeoutException, is SocketException -> true
+            is IOException -> {
+                val message = error.message.orEmpty().lowercase()
+                listOf("failed to connect", "connection abort", "connection reset", "unexpected end", "timeout", "stream was reset").any(message::contains)
+            }
+            else -> false
+        }
+
         internal fun failureFor(
             statusCode: Int,
             contentType: String,
