@@ -46,13 +46,20 @@ class OnDeviceReportProcessor(
 
     private fun refine(result: ProcessingResult<ParsedReport>, text: String, input: ReportInput): ProcessingResult<ParsedReport> {
         val date = input.dateSent.ifBlank { LabTextParser.extractDateFromText(text) ?: CultureTextParser.extractDateFromText(text) ?: "" }
-        val fallbackLabs = NimsPdfFallbackParser.parseLabs(text, date)
+        val fallbackLabs = (NimsPdfFallbackParser.parseLabs(text, date) + NimsClinicalParsingEnhancer.recoverPriorityLabs(text, date))
+            .groupBy { it.canonicalCode }
+            .map { (_, values) -> values.maxBy { rank(it.confidence) } }
         val nimsCultures = NimsCultureMetadataEnricher.enrich(NimsCultureTextParser.parse(text, date), text)
         val existingCultures = (result as? ProcessingResult.Success)?.value?.cultures.orEmpty()
-        val cultures = NimsPdfFallbackParser.enrichCultures(nimsCultures.ifEmpty { existingCultures }, text, date)
+        val cultures = NimsClinicalParsingEnhancer.enrichCultures(
+            NimsPdfFallbackParser.enrichCultures(nimsCultures.ifEmpty { existingCultures }, text, date),
+            text
+        )
 
         if (result is ProcessingResult.Success) {
-            val labs = (result.value.labs + fallbackLabs).groupBy { it.canonicalCode }.map { (_, values) -> values.maxBy { rank(it.confidence) } }
+            val labs = (result.value.labs + fallbackLabs)
+                .groupBy { it.canonicalCode }
+                .map { (_, values) -> values.maxBy { rank(it.confidence) } }
             return ProcessingResult.Success(
                 result.value.copy(dateSent = result.value.dateSent.ifBlank { date }, labs = labs, cultures = cultures.ifEmpty { existingCultures }, rawText = text),
                 result.processorName,
