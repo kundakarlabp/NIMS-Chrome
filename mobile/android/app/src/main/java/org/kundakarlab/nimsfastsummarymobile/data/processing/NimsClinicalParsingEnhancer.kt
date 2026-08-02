@@ -30,7 +30,7 @@ object NimsClinicalParsingEnhancer {
         val treatmentGuidancePresent = treatmentHeading.containsMatchIn(text)
         val structuredAstPresent = astHeading.containsMatchIn(text) && astEvidence.containsMatchIn(text)
 
-        return values.mapNotNull { value ->
+        return values.map { value ->
             val sourceOrganism = value.organism?.takeIf(::isPlausibleOrganism)
             val recoveredOrganism = sourceOrganism ?: narrativeOrganism
             val comments = value.comments
@@ -73,7 +73,8 @@ object NimsClinicalParsingEnhancer {
         recoverNumeric(
             text, "GM_INDEX", "Galactomannan index",
             listOf("Galactomannan Index", "Aspergillus Galactomannan", "Galactomannan Ag", "GM Index"),
-            0.0..20.0, "", date, null, 0.5
+            0.0..20.0, "", date, null, 0.5,
+            allowUnitless = true
         )?.let(::add)
 
         recoverNumeric(
@@ -128,20 +129,31 @@ object NimsClinicalParsingEnhancer {
         unit: String,
         date: String?,
         refLow: Double?,
-        refHigh: Double?
+        refHigh: Double?,
+        allowUnitless: Boolean = false
     ): ParsedLabValue? {
         val lines = text.lines().map(String::trim).filter(String::isNotBlank)
         aliases.forEach { alias ->
             val label = Regex("(?i)(?:^|[^A-Za-z0-9])${Regex.escape(alias)}(?:[^A-Za-z0-9]|$)")
             lines.forEachIndexed { index, line ->
                 if (!label.containsMatchIn(line)) return@forEachIndexed
-                val candidate = listOf(line, lines.getOrNull(index + 1).orEmpty()).joinToString(" ")
-                val tail = candidate.substringAfter(alias, candidate, ignoreCase = true)
-                val valueMatch = Regex("([<>])?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(mg\\s*/?\\s*dL|mg%|pg\\s*/?\\s*mL|index)?", RegexOption.IGNORE_CASE)
-                    .find(tail) ?: return@forEachIndexed
-                val numeric = valueMatch.groupValues[2].replace(",", "").toDoubleOrNull() ?: return@forEachIndexed
+
+                val candidates = buildList {
+                    add(line.substringAfter(alias, line, ignoreCase = true))
+                    for (offset in 1..3) lines.getOrNull(index + offset)?.let(::add)
+                }
+                val match = candidates.firstNotNullOfOrNull { candidate ->
+                    val found = VALUE_PATTERN.find(candidate) ?: return@firstNotNullOfOrNull null
+                    val parsedUnit = found.groupValues[3].replace(Regex("\\s+"), "")
+                    val contextAllowsUnitless = allowUnitless &&
+                        (candidate.contains("index", true) || candidate.contains("result", true) || candidate.contains("value", true) || candidate.matches(Regex("^[<>]?\\s*[0-9].*")))
+                    if (parsedUnit.isBlank() && !contextAllowsUnitless) return@firstNotNullOfOrNull null
+                    found
+                } ?: return@forEachIndexed
+
+                val numeric = match.groupValues[2].replace(",", "").toDoubleOrNull() ?: return@forEachIndexed
                 if (numeric !in range) return@forEachIndexed
-                val parsedUnit = valueMatch.groupValues[3].replace(Regex("\\s+"), "").takeIf { it.isNotBlank() }
+                val parsedUnit = match.groupValues[3].replace(Regex("\\s+"), "").takeIf(String::isNotBlank)
                     ?.replace("mgdL", "mg/dL", true)
                     ?.replace("pgmL", "pg/mL", true)
                     ?: unit
@@ -162,7 +174,7 @@ object NimsClinicalParsingEnhancer {
                     abnormality = abnormality,
                     resultDate = date,
                     confidence = ParseConfidence.HIGH,
-                    comparator = when (valueMatch.groupValues[1]) {
+                    comparator = when (match.groupValues[1]) {
                         "<" -> NumericComparator.LESS_THAN
                         ">" -> NumericComparator.GREATER_THAN
                         else -> NumericComparator.EQUAL
@@ -182,4 +194,9 @@ object NimsClinicalParsingEnhancer {
         val index = indexOf(delimiter, ignoreCase = ignoreCase)
         return if (index < 0) missingDelimiterValue else substring(0, index)
     }
+
+    private val VALUE_PATTERN = Regex(
+        "([<>])?\\s*([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(mg\\s*/?\\s*dL|mg%|pg\\s*/?\\s*mL|index)?",
+        RegexOption.IGNORE_CASE
+    )
 }
