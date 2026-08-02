@@ -11,8 +11,8 @@ android {
         applicationId = "org.kundakarlab.nimsfastsummarymobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 42
-        versionName = "0.10.5"
+        versionCode = 43
+        versionName = "0.10.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures {
@@ -39,12 +39,7 @@ val syncNimsRuntimeAssets = tasks.register<org.gradle.api.tasks.Sync>("syncNimsR
 
 apply(from = "runtime-normalize.txt")
 
-android.sourceSets.getByName("main").apply {
-    assets.setSrcDirs(listOf(generatedNimsAssetsDir.get().asFile))
-    // Keep the proven legacy implementation in the repository for reference
-    // and contract tests, but compile the streamlined local-first activity.
-    java.exclude("**/MainActivity.kt")
-}
+android.sourceSets.getByName("main").assets.setSrcDirs(listOf(generatedNimsAssetsDir.get().asFile))
 
 tasks.register("verifyNimsRuntimeAssets") {
     dependsOn(syncNimsRuntimeAssets)
