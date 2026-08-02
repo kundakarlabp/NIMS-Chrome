@@ -31,13 +31,42 @@ object SummaryJsonMapper {
                     reportName = row.optString("report_name", "Unnamed report"),
                     type = row.optString("type", row.optString("report_type", "other")),
                     status = status,
-                    notes = row.optString("notes"),
+                    notes = userFacingReportNote(row.optString("notes")),
                     hasError = status.equals("error", true) || status.equals("unsupported", true),
                     results = reportResults(row.optJSONArray("results")),
                     cultureCount = row.optInt("culture_count", 0)
                 ))
             }
-        }.sortedByDescending { DateNormalizer.normalize(it.dateSent).sortEpoch ?: Long.MIN_VALUE }
+        }
+            .groupBy { reportIdentity(it) }
+            .values
+            .map { duplicates -> duplicates.maxByOrNull(::reportQuality) ?: duplicates.first() }
+            .sortedByDescending { DateNormalizer.normalize(it.dateSent).sortEpoch ?: Long.MIN_VALUE }
+    }
+
+    private fun reportIdentity(row: UiSourceReport): String = listOf(
+        row.sourceKey.takeIf(String::isNotBlank) ?: row.reportName,
+        row.dateSent,
+        row.type
+    ).joinToString("|").lowercase()
+
+    private fun reportQuality(row: UiSourceReport): Int = when {
+        !row.hasError && (row.results.isNotEmpty() || row.cultureCount > 0) -> 4
+        !row.hasError -> 3
+        row.status.equals("unsupported", true) -> 1
+        else -> 0
+    }
+
+    private fun userFacingReportNote(raw: String): String {
+        val lower = raw.lowercase()
+        return when {
+            raw.isBlank() -> ""
+            "failed to connect" in lower || "connection abort" in lower || "timeout" in lower -> "Connection interrupted. Retry this report."
+            "session" in lower && ("expired" in lower || "login" in lower) -> "Session expired. Login again and retry."
+            "no high-confidence" in lower || "parse incomplete" in lower -> "Result needs review."
+            "image" in lower && "ocr" in lower -> "Scanned report. Open the PDF to review."
+            else -> raw.substringBefore(';').take(140)
+        }
     }
 
     private fun reportResults(rows: JSONArray?): List<org.kundakarlab.nimsfastsummarymobile.ui.models.UiReportResult> {
@@ -47,11 +76,12 @@ object SummaryJsonMapper {
                 val row = rows.optJSONObject(index) ?: continue
                 val numeric = row.opt("value").takeUnless { it == null || it == JSONObject.NULL }?.toString().orEmpty()
                 val text = row.optString("text_value")
+                val unit = sanitizeUnit(row.optString("unit"))
                 add(
                     org.kundakarlab.nimsfastsummarymobile.ui.models.UiReportResult(
                         name = row.optString("name", "Result"),
                         value = numeric.ifBlank { text },
-                        unit = row.optString("unit"),
+                        unit = unit,
                         referenceRange = row.optString("reference_range"),
                         abnormality = abnormality(row.optString("abnormality")),
                         confidence = row.optString("confidence", "unknown")
@@ -59,6 +89,12 @@ object SummaryJsonMapper {
                 )
             }
         }
+    }
+
+    private fun sanitizeUnit(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.lowercase() in setOf("comment", "result", "interpretation", "reference", "reference range", "normal")) return ""
+        return trimmed
     }
 
     private fun labTrends(table: JSONObject?): List<UiLabTrendRow> {
@@ -89,16 +125,20 @@ object SummaryJsonMapper {
         val observations = buildList {
             for (index in 0 until rows.length()) {
                 val row = rows.optJSONObject(index) ?: continue
+                if (isBiomarkerFalseCulture(row)) continue
+                val organism = firstNonBlank(row, "organism", "organism_name", "growth")
+                    .takeIf(::plausibleOrganism).orEmpty()
+                val susceptibility = validatedSusceptibilitySummary(row)
                 add(UiCultureRow(
                     sourceKey = row.optString("report_id"),
                     collectionDate = firstNonBlank(row, "collection_date", "date_sent", "reporting_date"),
                     cultureNo = firstNonBlank(row, "lab_study_number", "culture_no", "culture_number", "specimen_no"),
                     specimen = firstNonBlank(row, "specimen", "sample_type", "site_specimen", "specimen_no"),
                     site = firstNonBlank(row, "site", "bottle_name", "site_specimen"),
-                    organism = firstNonBlank(row, "organism", "organism_name", "growth"),
+                    organism = organism,
                     growth = firstNonBlank(row, "growth", "growth_quantity", "result"),
                     status = normalizeCultureStatus(firstNonBlank(row, "result", "status", "report_status", "reporting_status", fallback = "unknown")),
-                    sensitivitySummary = susceptibilitySummary(row).ifBlank { sirSummary(row).ifBlank { stringField(row, "sensitivity_summary") } },
+                    sensitivitySummary = susceptibility,
                     comment = cultureComment(row),
                     sourceReportName = row.optString("report_name"),
                     reportingDate = row.optString("reporting_date"),
@@ -109,11 +149,7 @@ object SummaryJsonMapper {
                     isolateNumber = intField(row, "isolate_number"),
                     gramStain = row.optString("gram_stain"),
                     confidence = row.optString("confidence", "unknown"),
-                    antibiogramCompleteness = when {
-                        row.optJSONArray("susceptibility")?.length()?.let { it > 0 } == true -> "available"
-                        row.optString("sensitivity_summary").isNotBlank() -> "available"
-                        else -> "unavailable"
-                    }
+                    antibiogramCompleteness = if (susceptibility.isNotBlank()) "available" else "unavailable"
                 ))
             }
         }
@@ -133,10 +169,8 @@ object SummaryJsonMapper {
                 val preferred = episode.maxByOrNull { stageRank(it.reportStage) } ?: episode.last()
                 preferred.copy(
                     sourceKey = preferred.sourceKey.ifBlank {
-                        episode
-                            .sortedByDescending { stageRank(it.reportStage) }
-                            .firstNotNullOfOrNull { it.sourceKey.takeIf(String::isNotBlank) }
-                            .orEmpty()
+                        episode.sortedByDescending { stageRank(it.reportStage) }
+                            .firstNotNullOfOrNull { it.sourceKey.takeIf(String::isNotBlank) }.orEmpty()
                     },
                     comment = episode.map { it.comment }.filter(String::isNotBlank).distinct().joinToString(" | "),
                     timeline = episode.sortedBy { stageRank(it.reportStage) }.map {
@@ -148,10 +182,46 @@ object SummaryJsonMapper {
                     }.distinct()
                 )
             }
-            .sortedWith(
-                compareByDescending<UiCultureRow> { statusRank(it.status) }
-                    .thenByDescending { DateNormalizer.normalize(it.collectionDate).sortEpoch ?: Long.MIN_VALUE }
-            )
+            .sortedWith(compareByDescending<UiCultureRow> { statusRank(it.status) }
+                .thenByDescending { DateNormalizer.normalize(it.collectionDate).sortEpoch ?: Long.MIN_VALUE })
+    }
+
+    private fun isBiomarkerFalseCulture(row: JSONObject): Boolean {
+        val report = listOf(row.optString("report_name"), row.optString("source"), row.optString("test_name")).joinToString(" ").lowercase()
+        val biomarker = listOf("galactomannan", "aspergillus antigen", "beta d glucan", "beta-d-glucan", "fungitell", "bdg").any(report::contains)
+        val explicitCulture = listOf("culture", "growth", "isolated", "no growth").any { term ->
+            row.optString("result").contains(term, true) || row.optString("comment").contains(term, true)
+        }
+        return biomarker && !explicitCulture
+    }
+
+    private fun plausibleOrganism(value: String): Boolean {
+        val clean = value.trim()
+        if (clean.isBlank()) return false
+        val lower = clean.lowercase()
+        if (listOf("growth detected", "no growth", "aerobic culture", "urine aerobic culture", "gram negative aerobic culture", "aspergillus species", "cryptococcus neoformans").any { lower == it } && lower.contains("culture")) return false
+        if (lower in setOf("growth_detected", "no_growth", "positive", "negative")) return false
+        return clean.length <= 100
+    }
+
+    private fun validatedSusceptibilitySummary(row: JSONObject): String {
+        val structured = susceptibilitySummary(row)
+        val fallback = sirSummary(row).ifBlank { stringField(row, "sensitivity_summary") }
+        val value = structured.ifBlank { fallback }
+        if (value.isBlank()) return ""
+        val entries = value.split(';').map(String::trim).filter(String::isNotBlank)
+        if (entries.size >= 6) {
+            val states = entries.mapNotNull { entry ->
+                when {
+                    entry.contains("susceptible", true) || entry.contains("sensitive", true) -> "S"
+                    entry.contains("intermediate", true) -> "I"
+                    entry.contains("resistant", true) -> "R"
+                    else -> null
+                }
+            }
+            if (states.size == entries.size && states.distinct().size == 1 && states.first() == "I") return ""
+        }
+        return value
     }
 
     private fun stageRank(value: String): Int = when {
@@ -218,11 +288,20 @@ object SummaryJsonMapper {
     }
 
     private fun cultureComment(row: JSONObject): String {
-        val notes = buildList {
+        val raw = buildList {
             firstNonBlank(row, "comment", "microbiology_note", "note").takeIf { it.isNotBlank() }?.let(::add)
-            if (booleanField(row, "clinical_review_flag")) add("Clinical-significance review required; verify with source report and bedside context.")
+            if (booleanField(row, "clinical_review_flag")) add("Clinical review required.")
+        }.distinct().joinToString(" | ")
+        return sanitizeComment(raw)
+    }
+
+    private fun sanitizeComment(value: String): String {
+        var result = value
+        listOf("CR No", "Patient Name", "Age/Sex", "Sample Type/No", "Clinician", "Dept/Unit", "Ward", "Room/Bed", "Validated By").forEach { marker ->
+            val index = result.indexOf(marker, ignoreCase = true)
+            if (index >= 0) result = result.substring(0, index)
         }
-        return notes.distinct().joinToString(" | ")
+        return result.replace(Regex("\\s+"), " ").trim().take(240)
     }
 
     private fun intField(row: JSONObject, key: String): Int? = when (val value = row.opt(key)) {
