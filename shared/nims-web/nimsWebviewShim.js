@@ -12,10 +12,6 @@
 
   w.__nimsInjectedAt = Date.now();
 
-  // Several NIMS pages call these globals before the defining legacy script has
-  // loaded. Safe no-op fallbacks prevent the page from aborting during login,
-  // menu rendering and report-popup setup. A later page definition may replace
-  // them normally.
   if (typeof w.date_time !== "function") w.date_time = function () { return ""; };
   if (typeof w.refresh !== "function") w.refresh = function () { return undefined; };
 
@@ -60,6 +56,150 @@
     return Boolean(value && /^(?:IFRAME|FRAME)$/i.test(String(value.tagName || "")));
   }
 
+  function collectDocuments(root, output, seen, depth) {
+    if (!root || depth > 6 || seen.indexOf(root) >= 0) return;
+    seen.push(root);
+    output.push(root);
+    var frames;
+    try { frames = root.querySelectorAll("iframe,frame"); } catch (_error) { frames = []; }
+    for (var i = 0; i < frames.length; i += 1) {
+      try {
+        var child = frames[i].contentDocument || (frames[i].contentWindow && frames[i].contentWindow.document);
+        if (child) collectDocuments(child, output, seen, depth + 1);
+      } catch (_ignored) { /* same-origin frames only */ }
+    }
+  }
+
+  function allDocuments() {
+    var docs = [];
+    collectDocuments(w.document, docs, [], 0);
+    return docs;
+  }
+
+  function elementText(element) {
+    return String((element && (element.innerText || element.textContent || element.value || element.title || element.name || element.id)) || "").trim();
+  }
+
+  function findCrInput(doc) {
+    var inputs;
+    try { inputs = doc.querySelectorAll("input,textarea"); } catch (_error) { return null; }
+    var fallback = null;
+    for (var i = 0; i < inputs.length; i += 1) {
+      var input = inputs[i];
+      if (input.disabled || input.readOnly || String(input.type || "").toLowerCase() === "hidden") continue;
+      var signature = [input.id, input.name, input.placeholder, input.title, input.getAttribute && input.getAttribute("aria-label")].join(" ");
+      if (/\bcr\s*(?:no|number)?\b|crno|crnum|patcrno|cr_number/i.test(signature)) return input;
+      if (!fallback && /^(?:text|number|tel|search)?$/i.test(String(input.type || ""))) fallback = input;
+    }
+    return fallback;
+  }
+
+  function findSubmitAction(doc) {
+    var actions;
+    try { actions = doc.querySelectorAll("button,input[type=button],input[type=submit],a"); } catch (_error) { return null; }
+    var broad = null;
+    for (var i = 0; i < actions.length; i += 1) {
+      var action = actions[i];
+      if (action.disabled) continue;
+      var text = elementText(action);
+      if (/^(?:go|search|view|submit|fetch\s*results?)$/i.test(text)) return action;
+      if (!broad && /\b(?:go|search|view|submit|fetch)\b/i.test(text)) broad = action;
+    }
+    return broad;
+  }
+
+  function assignValue(input, value) {
+    try {
+      var prototype = Object.getPrototypeOf(input);
+      var descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, "value");
+      if (descriptor && typeof descriptor.set === "function") descriptor.set.call(input, value);
+      else input.value = value;
+    } catch (_ignored) {
+      input.value = value;
+    }
+    ["input", "change", "blur"].forEach(function (name) {
+      try { input.dispatchEvent(new Event(name, { bubbles: true })); } catch (_ignored) { /* continue */ }
+    });
+  }
+
+  function submitThroughDocument(doc, crNumber) {
+    var input = findCrInput(doc);
+    if (!input || input.__nimsProxyInput) return false;
+    assignValue(input, crNumber);
+    var action = findSubmitAction(doc);
+    if (action && !action.__nimsProxyAction) {
+      try { action.click(); return true; } catch (_ignoredClick) { /* try form */ }
+    }
+    var form = input.form || (input.closest && input.closest("form"));
+    if (form) {
+      try {
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else if (typeof form.submit === "function") form.submit();
+        else return false;
+        return true;
+      } catch (_ignoredForm) { /* try page functions */ }
+    }
+    var view = doc.defaultView || w;
+    var candidates = ["getCRWiseReport", "getCrWiseReport", "showCRWiseReport", "showCrWiseReport", "searchCrNo", "searchCRNo", "submitForm"];
+    for (var i = 0; i < candidates.length; i += 1) {
+      try {
+        if (typeof view[candidates[i]] === "function") {
+          view[candidates[i]]();
+          return true;
+        }
+      } catch (_ignoredFunction) { /* continue */ }
+    }
+    return false;
+  }
+
+  function submitCrNumber(crNumber) {
+    var value = String(crNumber || "").replace(/\D/g, "");
+    if (value.length < 6) return { ok: false, reason: "invalid_cr" };
+    var docs = allDocuments();
+    for (var i = docs.length - 1; i >= 0; i -= 1) {
+      if (submitThroughDocument(docs[i], value)) return { ok: true, reason: "submitted", documentCount: docs.length };
+    }
+    return { ok: false, reason: "cr_field_not_ready", documentCount: docs.length };
+  }
+
+  w.__nimsSubmitCrNumber = submitCrNumber;
+  w.__nimsCrFieldReady = function () {
+    var docs = allDocuments();
+    for (var i = 0; i < docs.length; i += 1) if (findCrInput(docs[i])) return true;
+    return false;
+  };
+
+  function installCrProxy() {
+    var doc = w.document;
+    if (!doc || !doc.documentElement || doc.getElementById("__nims_cr_proxy_input")) return;
+    var holder = doc.createElement("div");
+    holder.id = "__nims_cr_proxy_holder";
+    holder.style.cssText = "display:none!important;position:absolute!important;width:0!important;height:0!important;overflow:hidden!important";
+    var input = doc.createElement("input");
+    input.id = "__nims_cr_proxy_input";
+    input.name = "crNo";
+    input.type = "text";
+    input.__nimsProxyInput = true;
+    var button = doc.createElement("button");
+    button.id = "__nims_cr_proxy_go";
+    button.type = "button";
+    button.textContent = "Go";
+    button.__nimsProxyAction = true;
+    button.addEventListener("click", function () {
+      var attempts = 0;
+      function trySubmit() {
+        attempts += 1;
+        var result = submitCrNumber(input.value);
+        w.__nimsLastCrSubmit = result;
+        if (!result.ok && attempts < 30) w.setTimeout(trySubmit, Math.min(150 + attempts * 35, 600));
+      }
+      trySubmit();
+    });
+    holder.appendChild(input);
+    holder.appendChild(button);
+    (doc.body || doc.documentElement).appendChild(holder);
+  }
+
   var lastLoadedNimsFrame = null;
   w.document.addEventListener("load", function (event) {
     var candidate = event && (event.target || event.srcElement);
@@ -99,11 +239,6 @@
     w.ajaxCompleteTab = wrapped;
   }
 
-  // Android previously loaded the CR leaf endpoint directly when the CR menu was
-  // not yet present. That bypassed the authenticated shell/menu contract and
-  // produced an empty page (rows=0), often followed by a login-page redirect.
-  // Keep the Kotlin call successful, but drive the real NIMS navigation contract
-  // repeatedly until the Investigation menu and CR-wise tab are ready.
   function patchCrNavigation() {
     var core = w.NimsReportCore;
     if (!core || typeof core.openCrWiseResultsDirect !== "function" || core.openCrWiseResultsDirect.__nimsShellFallback) return;
@@ -137,6 +272,7 @@
   }
 
   function patch() {
+    try { installCrProxy(); } catch (_ignoredProxy) { /* body still loading */ }
     try { patchOffset(); } catch (_ignoredOffset) { /* page still loading */ }
     try { patchAjaxCompleteTab(); } catch (_ignoredTab) { /* page still loading */ }
     try { patchCrNavigation(); } catch (_ignoredNavigation) { /* core still loading */ }
