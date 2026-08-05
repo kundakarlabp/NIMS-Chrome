@@ -16,7 +16,7 @@ class LocalSummaryBuilder {
 
     fun build(reports: List<ParsedReport>, mode: SummaryMode): ProcessingSummary {
         val warnings = mutableListOf<String>()
-        val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() }
+        val unsupportedCount = reports.count { it.labs.isEmpty() && it.cultures.isEmpty() && it.rawText.isBlank() }
         val lowConfidenceLabCount = reports.sumOf { report -> report.labs.count { it.confidence == ParseConfidence.LOW } }
         val lines = mutableListOf("Auto-parsed summary. Verify with source NIMS reports before clinical decisions.")
         if (unsupportedCount > 0) lines += "Failed or unsupported reports: $unsupportedCount."
@@ -125,8 +125,9 @@ class LocalSummaryBuilder {
             .put("source_reports", JSONArray().also { a -> reports.forEach { r ->
                 val lowNote = if (r.labs.any { it.confidence == ParseConfidence.LOW }) "Low-confidence laboratory value(s) excluded; review source report." else ""
                 val notes = (r.warnings + lowNote).filter { it.isNotBlank() }.joinToString("; ")
+                val fetchedSuccessfully = r.rawText.isNotBlank() || r.labs.isNotEmpty() || r.cultures.isNotEmpty()
                 a.put(JSONObject().put("report_id", r.reportId).put("date_sent", r.dateSent).put("report_name", r.reportName).put("type", r.reportType)
-                    .put("status", if (r.labs.isEmpty() && r.cultures.isEmpty()) "unsupported" else "parsed").put("notes", notes)
+                    .put("status", if (fetchedSuccessfully) "parsed" else "unsupported").put("notes", notes)
                     .put("processor", r.processorName)
                     .put("culture_count", r.cultures.size)
                     .put("results", JSONArray().also { results ->
