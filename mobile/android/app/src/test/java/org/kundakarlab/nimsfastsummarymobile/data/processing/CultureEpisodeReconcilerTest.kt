@@ -16,13 +16,15 @@ class CultureEpisodeReconcilerTest {
             id = "prelim",
             stage = "preliminary",
             organism = null,
-            susceptibility = emptyList()
+            susceptibility = emptyList(),
+            isolate = null
         )
         val identification = report(
             id = "id",
             stage = "48-hour preliminary",
             organism = "Enterococcus faecium",
-            susceptibility = emptyList()
+            susceptibility = emptyList(),
+            isolate = null
         )
         val final = report(
             id = "final",
@@ -31,7 +33,8 @@ class CultureEpisodeReconcilerTest {
             susceptibility = listOf(
                 AntibioticResult("Vancomycin", "R", ParseConfidence.HIGH),
                 AntibioticResult("Linezolid", "Susceptible", ParseConfidence.HIGH)
-            )
+            ),
+            isolate = 1
         )
 
         val result = CultureEpisodeReconciler.reconcile(listOf(preliminary, identification, final))
@@ -40,6 +43,7 @@ class CultureEpisodeReconcilerTest {
         assertEquals(1, cultures.size)
         assertEquals("Enterococcus faecium", cultures.single().organism)
         assertEquals("final", cultures.single().reportStage)
+        assertEquals(1, cultures.single().isolateNumber)
         assertEquals(2, cultures.single().susceptibility.size)
         assertTrue(cultures.single().susceptibility.any { it.antibiotic == "Vancomycin" && it.interpretation == "Resistant" })
         assertTrue(cultures.single().susceptibility.any { it.antibiotic == "Linezolid" && it.interpretation == "Susceptible" })
@@ -55,12 +59,34 @@ class CultureEpisodeReconcilerTest {
         assertEquals(2, cultures.size)
     }
 
+    @Test
+    fun unnumberedPreliminaryObservationSupportsTwoFinalIsolatesWithoutCollapsingThem() {
+        val preliminary = report("prelim", "preliminary", null, emptyList(), isolate = null)
+        val isolateOne = report(
+            "one", "final", "Klebsiella pneumoniae",
+            listOf(AntibioticResult("Meropenem", "Resistant", ParseConfidence.HIGH)),
+            isolate = 1
+        )
+        val isolateTwo = report(
+            "two", "final", "Enterococcus faecium",
+            listOf(AntibioticResult("Linezolid", "Susceptible", ParseConfidence.HIGH)),
+            isolate = 2
+        )
+
+        val cultures = CultureEpisodeReconciler.reconcile(listOf(preliminary, isolateOne, isolateTwo)).flatMap { it.cultures }
+
+        assertEquals(2, cultures.size)
+        assertTrue(cultures.any { it.isolateNumber == 1 && it.organism == "Klebsiella pneumoniae" })
+        assertTrue(cultures.any { it.isolateNumber == 2 && it.organism == "Enterococcus faecium" })
+    }
+
     private fun report(
         id: String,
         stage: String,
         organism: String?,
         susceptibility: List<AntibioticResult>,
-        bottle: Int = 1
+        bottle: Int? = 1,
+        isolate: Int? = 1
     ): ParsedReport = ParsedReport(
         reportId = id,
         reportName = "Fan Blood Culture Final",
@@ -82,7 +108,7 @@ class CultureEpisodeReconcilerTest {
                 reportStage = stage,
                 setNumber = 1,
                 bottleNumber = bottle,
-                isolateNumber = 1,
+                isolateNumber = isolate,
                 organismRaw = organism
             )
         ),
