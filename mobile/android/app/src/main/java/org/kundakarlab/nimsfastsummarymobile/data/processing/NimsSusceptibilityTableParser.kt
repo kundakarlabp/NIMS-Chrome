@@ -92,12 +92,14 @@ object NimsSusceptibilityTableParser {
             drugs.forEach { drug ->
                 val match = findDrug(line, drug) ?: return@forEach
                 val start = (match.first - 20).coerceAtLeast(0)
-                val end = (match.second + 45).coerceAtMost(line.length)
+                val end = (match.last + 1 + 45).coerceAtMost(line.length)
                 val local = line.substring(start, end)
+                val localDrugStart = match.first - start
+                val localDrugEnd = match.last - start
                 val token = interpretationToken.findAll(local)
-                    .minByOrNull { distanceToRange(it.range.first, match.first - start, match.second - start) }
+                    .minByOrNull { distanceToRange(it.range.first, localDrugStart, localDrugEnd) }
                     ?: return@forEach
-                if (distanceToRange(token.range.first, match.first - start, match.second - start) > 24) return@forEach
+                if (distanceToRange(token.range.first, localDrugStart, localDrugEnd) > 24) return@forEach
                 val interpretation = normalizeInterpretation(token.value) ?: return@forEach
                 val mic = micPattern.find(local)
                 results += Candidate(
@@ -125,7 +127,7 @@ object NimsSusceptibilityTableParser {
             if (headingInterpretation != null) {
                 current = headingInterpretation
                 val after = line.substringAfter(':', "")
-                if (after.isNotBlank()) collectSectionDrugs(after, current!!, results)
+                if (after.isNotBlank()) collectSectionDrugs(after, headingInterpretation, results)
                 return@forEach
             }
             if (line.matches(Regex("(?i)^(culture report|comments?|note|remarks?|treatment)\\s*:?.*$"))) {
@@ -141,7 +143,7 @@ object NimsSusceptibilityTableParser {
         if (line.isBlank() || line.equals("nil", true) || line.equals("none", true)) return
         drugs.forEach { drug ->
             val match = findDrug(line, drug) ?: return@forEach
-            val local = line.substring(match.first, line.length.coerceAtMost(match.second + 45))
+            val local = line.substring(match.first, line.length.coerceAtMost(match.last + 1 + 45))
             val mic = micPattern.find(local)
             output += Candidate(
                 AntibioticResult(
