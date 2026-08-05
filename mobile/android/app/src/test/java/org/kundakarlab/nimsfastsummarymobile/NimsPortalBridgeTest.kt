@@ -23,8 +23,17 @@ class NimsPortalBridgeTest {
     }
 
     @Test
-    fun rowAndMappingScriptsTraverseNestedDocuments() {
-        assertTrue(NimsPortalBridge.resultListProbeScript.contains("selectRowsForModeFromDoc"))
+    fun resultProbeFingerprintsRowsAndChecksExpectedCr() {
+        val script = NimsPortalBridge.resultListProbeScript("3310-121-00872674")
+        assertTrue(script.contains("selectRowsForModeFromDoc"))
+        assertTrue(script.contains("signature"))
+        assertTrue(script.contains("crMatch"))
+        assertTrue(script.contains("331012100872674"))
+        assertFalse(script.contains("3310-121"))
+    }
+
+    @Test
+    fun mappingScriptsTraverseNestedDocuments() {
         assertTrue(NimsPortalBridge.prepareMappingScript.contains("clickFirstReportForMode"))
         assertTrue(NimsPortalBridge.discoverMappingScript.contains("discoverSetPdfTemplate"))
         assertTrue(NimsPortalBridge.selectRowsScript.contains("JSON.stringify(rows)"))
