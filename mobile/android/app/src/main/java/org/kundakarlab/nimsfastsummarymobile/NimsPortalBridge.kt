@@ -12,29 +12,107 @@ object NimsPortalBridge {
             let frames=[];try{frames=doc.querySelectorAll('iframe,frame');}catch(e){}
             for(const frame of frames){try{const child=frame.contentDocument||(frame.contentWindow&&frame.contentWindow.document);if(child)collect(child,out,seen,depth+1);}catch(e){}}
           }
+          function visible(el){
+            if(!el||el.disabled)return false;
+            try{
+              const style=el.ownerDocument.defaultView.getComputedStyle(el);
+              if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return false;
+              const rect=el.getBoundingClientRect();
+              return rect.width>0&&rect.height>0;
+            }catch(e){return true;}
+          }
+          function actionText(el){
+            return String((el&&((el.innerText||el.textContent||el.value||el.title||el.getAttribute&&el.getAttribute('aria-label'))))||'').replace(/\s+/g,' ').trim();
+          }
+          function hrefOf(doc){try{return String(doc.location&&doc.location.href||'');}catch(e){return '';}}
+          function actions(doc){try{return [...doc.querySelectorAll('a,button,input[type=button],input[type=submit],[role=button]')];}catch(e){return [];}}
+          function prepareLogin(docs){
+            if(window.__nimsLoginPreparationState==='login_clicked')return 'login_clicked';
+            const loginPattern=/^(?:nims\s+)?(?:user\s+|employee\s+|hospital\s+)?(?:login|log\s*in|sign\s*in)$/i;
+            for(const d of docs){
+              const direct=actions(d).find(el=>{
+                const text=actionText(el);
+                let href='';try{href=String(el.href||el.getAttribute&&el.getAttribute('href')||'');}catch(e){}
+                return visible(el)&&!/logout|sign\s*out/i.test(text)&&(
+                  loginPattern.test(text)||
+                  (/login/i.test(href)&&!/logout/i.test(href)&&!/loginLogin\.action(?:$|[?#])/i.test(href))
+                );
+              });
+              if(direct){
+                try{window.__nimsLoginPreparationState='login_clicked';direct.click();return 'login_clicked';}catch(e){}
+              }
+            }
+            for(const d of docs){
+              let togglers=[];try{togglers=[...d.querySelectorAll('.navbar-toggler,.menu-toggle,[data-bs-toggle=collapse],[data-toggle=collapse],button[aria-label*=menu i],button[title*=menu i]')];}catch(e){}
+              const toggle=togglers.find(visible)||actions(d).find(el=>visible(el)&&/^(menu|navigation|☰)$/i.test(actionText(el)));
+              if(toggle){
+                try{
+                  toggle.click();
+                  window.__nimsLoginPreparationState='menu_opened';
+                  setTimeout(function(){
+                    try{
+                      const refreshed=[];collect(document,refreshed,[],0);
+                      for(const rd of refreshed){
+                        const target=actions(rd).find(el=>visible(el)&&loginPattern.test(actionText(el))&&!/logout|sign\s*out/i.test(actionText(el)));
+                        if(target){window.__nimsLoginPreparationState='login_clicked';target.click();return;}
+                      }
+                    }catch(e){}
+                  },300);
+                  return 'menu_opened';
+                }catch(e){}
+              }
+            }
+            return 'not_found';
+          }
+
           const docs=[];collect(document,docs,[],0);
-          let loginVisible=false,crReady=false,reportRows=0,authenticatedShell=false,sessionExpired=false;
+          let passwordVisible=false,usernameVisible=false,captchaVisible=false,loginActionVisible=false;
+          let crReady=false,reportRows=0,logoutControl=false,protectedModule=false,sessionExpired=false;
+          let publicSignals=false;
           for(const d of docs){
             let body='';try{body=(d.body&&d.body.innerText)||'';}catch(e){}
             const lower=String(body).toLowerCase();
+            const href=hrefOf(d);
             let inputs=[];try{inputs=[...d.querySelectorAll('input,textarea')];}catch(e){}
-            if(inputs.some(x=>String(x.type||'').toLowerCase()==='password')||inputs.some(x=>/captcha|loginname|username|userid/i.test((x.id||'')+' '+(x.name||'')))) loginVisible=true;
-            if(inputs.some(x=>!x.disabled&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bcr\s*(?:no|number)?\b|crno|crnum|patcrno|cr_number/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||'')))) crReady=true;
-            try{reportRows=Math.max(reportRows,[...d.querySelectorAll('a,button,input')].filter(x=>/view\s*report/i.test((x.innerText||x.value||x.title||''))).length);}catch(e){}
-            if(/logout|sign\s*out|investigation|cr\s*wise\s*report/.test(lower)) authenticatedShell=true;
-            if(/session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again/.test(lower)) sessionExpired=true;
+            const pageActions=actions(d);
+
+            if(inputs.some(x=>visible(x)&&String(x.type||'').toLowerCase()==='password'))passwordVisible=true;
+            if(inputs.some(x=>visible(x)&&/loginname|username|userid|user\s*id|user_id/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||''))))usernameVisible=true;
+            if(inputs.some(x=>visible(x)&&/captcha|verification\s*code|security\s*code/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||''))))captchaVisible=true;
+            try{if([...d.querySelectorAll('img,canvas')].some(x=>visible(x)&&/captcha|verification/i.test((x.alt||'')+' '+(x.id||'')+' '+(x.className||''))))captchaVisible=true;}catch(e){}
+            if(pageActions.some(x=>visible(x)&&/^(?:login|log\s*in|sign\s*in|submit)$/i.test(actionText(x))))loginActionVisible=true;
+
+            if(inputs.some(x=>visible(x)&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bcr\s*(?:no|number)?\b|crno|crnum|patcrno|cr_number/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||''))))crReady=true;
+            try{reportRows=Math.max(reportRows,pageActions.filter(x=>/view\s*report/i.test(actionText(x))).length);}catch(e){}
+
+            if(pageActions.some(x=>/^(?:logout|log\s*out|sign\s*out)$/i.test(actionText(x))))logoutControl=true;
+            if(/\/HISInvestigationG5\//i.test(href)||/viewcrnowisereportprocess\.cnt/i.test(href)||/cr\s*wise\s*(?:result|report)/i.test(lower))protectedModule=true;
+            if(/session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again|session\s*timeout/i.test(lower))sessionExpired=true;
+            if(/\bstatistics\b/i.test(lower)&&/recommended\s+to\s+use\s+firefox|designed\s+and\s+developed\s+by\s+c-?dac/i.test(lower))publicSignals=true;
           }
+
           try{if(typeof window.__nimsCrFieldReady==='function'&&window.__nimsCrFieldReady())crReady=true;}catch(e){}
-          if(crReady||reportRows>0){
-            authenticatedShell=true;
-            loginVisible=false;
-          }
+          if(crReady||reportRows>0)protectedModule=true;
+
+          const loginVisible=passwordVisible||(usernameVisible&&(captchaVisible||loginActionVisible));
+          const publicLanding=publicSignals&&!loginVisible&&!crReady&&reportRows===0&&!logoutControl&&!protectedModule;
+          const authenticated=!sessionExpired&&!loginVisible&&!publicLanding&&(crReady||reportRows>0||logoutControl||protectedModule);
+          let loginPreparation='not_needed';
+          if(!authenticated&&!loginVisible&&!sessionExpired&&publicLanding)loginPreparation=prepareLogin(docs);
+
           return JSON.stringify({
             loginVisible:loginVisible,
+            passwordVisible:passwordVisible,
+            usernameVisible:usernameVisible,
+            captchaVisible:captchaVisible,
             crReady:crReady,
             reportRows:reportRows,
-            authenticated:authenticatedShell&&!sessionExpired,
+            logoutControl:logoutControl,
+            protectedModule:protectedModule,
+            publicLanding:publicLanding,
+            authenticated:authenticated,
             sessionExpired:sessionExpired,
+            loginPreparation:loginPreparation,
             documentCount:docs.length,
             href:String(location.href||'')
           });
