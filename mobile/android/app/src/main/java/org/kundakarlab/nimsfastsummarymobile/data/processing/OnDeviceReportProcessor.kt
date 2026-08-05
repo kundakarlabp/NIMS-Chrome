@@ -51,17 +51,29 @@ class OnDeviceReportProcessor(
             .map { (_, values) -> values.maxBy { rank(it.confidence) } }
         val nimsCultures = NimsCultureMetadataEnricher.enrich(NimsCultureTextParser.parse(text, date), text)
         val existingCultures = (result as? ProcessingResult.Success)?.value?.cultures.orEmpty()
-        val cultures = NimsClinicalParsingEnhancer.enrichCultures(
-            NimsPdfFallbackParser.enrichCultures(nimsCultures.ifEmpty { existingCultures }, text, date),
-            text
-        )
+        val biomarkerOnly = NimsClinicalParsingEnhancer.isBiomarkerOnlyReport(text)
+        val parsedCultures = if (biomarkerOnly) {
+            emptyList()
+        } else {
+            NimsClinicalParsingEnhancer.enrichCultures(
+                NimsPdfFallbackParser.enrichCultures(nimsCultures.ifEmpty { existingCultures }, text, date),
+                text
+            )
+        }
+        val genericSusceptibility = if (biomarkerOnly) emptyList() else NimsSusceptibilityTableParser.parse(text)
+        val cultures = attachValidatedSusceptibility(parsedCultures, genericSusceptibility)
 
         if (result is ProcessingResult.Success) {
             val labs = (result.value.labs + fallbackLabs)
                 .groupBy { it.canonicalCode }
                 .map { (_, values) -> values.maxBy { rank(it.confidence) } }
+            val finalCultures = when {
+                biomarkerOnly -> emptyList()
+                cultures.isNotEmpty() -> cultures
+                else -> existingCultures
+            }
             return ProcessingResult.Success(
-                result.value.copy(dateSent = result.value.dateSent.ifBlank { date }, labs = labs, cultures = cultures.ifEmpty { existingCultures }, rawText = text),
+                result.value.copy(dateSent = result.value.dateSent.ifBlank { date }, labs = labs, cultures = finalCultures, rawText = text),
                 result.processorName,
                 result.warnings
             )
@@ -73,6 +85,35 @@ class OnDeviceReportProcessor(
             name,
             warnings
         )
+    }
+
+    private fun attachValidatedSusceptibility(
+        cultures: List<ParsedCultureValue>,
+        fallback: List<AntibioticResult>
+    ): List<ParsedCultureValue> {
+        if (cultures.isEmpty() || fallback.isEmpty()) return cultures
+        val candidates = cultures.indices.filter { index ->
+            val culture = cultures[index]
+            culture.growthStatus == GrowthStatus.GROWTH_DETECTED &&
+                (!culture.organism.isNullOrBlank() || cultures.count { it.growthStatus == GrowthStatus.GROWTH_DETECTED } == 1)
+        }
+        if (candidates.size != 1) return cultures
+        val target = candidates.single()
+        return cultures.mapIndexed { index, culture ->
+            if (index != target) culture else {
+                val merged = (culture.susceptibility + fallback)
+                    .groupBy { it.antibiotic.lowercase() }
+                    .map { (_, values) -> values.maxBy { rank(it.confidence) + if (it.micValue != null) 1 else 0 } }
+                    .sortedBy { it.antibiotic.lowercase() }
+                culture.copy(
+                    susceptibility = merged,
+                    comments = culture.comments.filterNot {
+                        it.contains("no structured susceptibility", ignoreCase = true) ||
+                            it.contains("Antibiogram text was present", ignoreCase = true)
+                    }
+                )
+            }
+        }
     }
 
     private fun rank(confidence: ParseConfidence): Int = when (confidence) {
