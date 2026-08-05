@@ -17,65 +17,17 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -95,23 +47,17 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.ReportInput
 import org.kundakarlab.nimsfastsummarymobile.domain.model.SummaryMode
 import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ClinicianCorrection
-import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ReportIssue
 import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ReportIssueController
-import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ReportIssueKind
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.SummaryJsonMapper
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.UiCorrectionOverlay
-import org.kundakarlab.nimsfastsummarymobile.ui.models.Abnormality
-import org.kundakarlab.nimsfastsummarymobile.ui.models.UiCultureRow
-import org.kundakarlab.nimsfastsummarymobile.ui.models.UiLabTrendRow
-import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSourceReport
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-private enum class ProductionPhase {
+internal enum class ProductionPhase {
     LOGIN,
     OPENING_CR,
     CR_READY,
@@ -145,7 +91,7 @@ private data class FetchedProductionReport(
     val bytes: ByteArray
 )
 
-private data class ProductionPdfState(
+internal data class ProductionPdfState(
     val sourceKey: String,
     val title: String,
     val loading: Boolean = false,
@@ -156,9 +102,8 @@ private data class ProductionPdfState(
 )
 
 /**
- * Production launcher for the native-first NIMS workflow.
- * The portal WebView remains visible only for manual login/captcha and is kept
- * as a 1 dp hidden transport after authentication.
+ * Native-first launcher. The NIMS WebView is visible only for manual login and
+ * captcha; after authentication it remains attached as a hidden transport.
  */
 class ProductionWorkflowActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -203,12 +148,13 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private var processingStartedAt = 0L
     private var lastSummaryAt = 0L
     private var runtimePayload: String = ""
+    private var resultListBaseline: String = ""
+    private var lastCompletedCr: String = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(createTemporaryWebView(), true)
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -235,8 +181,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
         webView.loadUrl(NIMS_LOGIN_URL)
 
         setContent {
-            ProductionTheme {
-                ProductionApp(
+            ProductionWorkflowTheme {
+                ProductionWorkflowApp(
                     phase = phase,
                     status = status,
                     crNumber = crNumber,
@@ -264,7 +210,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     onCopyLogs = ::copyLogs,
                     onChangePatient = ::changePatient,
                     onManualCorrection = ::addManualCorrection,
-                    onUndoCorrection = ::undoCorrection
+                    onUndoCorrection = ::undoCorrection,
+                    onIgnoreIssue = ::ignoreIssue
                 )
                 pdfState?.let { state ->
                     ProductionPdfDialog(
@@ -277,8 +224,6 @@ class ProductionWorkflowActivity : ComponentActivity() {
             }
         }
     }
-
-    private fun createTemporaryWebView(): WebView = WebView(this).also { it.destroy() }
 
     private fun installRuntimeAtDocumentStart() {
         runtimePayload = buildString {
@@ -300,8 +245,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun injectRuntimeFallback() {
-        if (runtimePayload.isBlank()) return
-        webView.evaluateJavascript(runtimePayload, null)
+        if (runtimePayload.isNotBlank()) webView.evaluateJavascript(runtimePayload, null)
     }
 
     private fun probePortalSoon(delayMs: Long) {
@@ -319,44 +263,52 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 sessionExpired = json.optBoolean("sessionExpired"),
                 documentCount = json.optInt("documentCount")
             )
+            applyPortalProbe(probe, manual)
             callback?.invoke(probe)
-            when {
-                probe.sessionExpired -> {
-                    authenticated = false
-                    crModuleReady = false
-                    phase = ProductionPhase.SESSION_EXPIRED
-                    status = "NIMS session expired. Login again to resume."
+        }
+    }
+
+    private fun applyPortalProbe(probe: PortalProbe, manual: Boolean) {
+        when {
+            probe.sessionExpired -> {
+                authenticated = false
+                crModuleReady = false
+                phase = ProductionPhase.SESSION_EXPIRED
+                status = "NIMS session expired. Login again to resume."
+            }
+            probe.crReady -> {
+                authenticated = true
+                crModuleReady = true
+                if (resumeFailedAfterLogin && failedRequests.isNotEmpty()) {
+                    resumeFailedAfterLogin = false
+                    retryAllFailed()
+                } else if (phase !in setOf(ProductionPhase.PROCESSING, ProductionPhase.REVIEW)) {
+                    phase = ProductionPhase.CR_READY
+                    status = "Ready. Enter a CR number."
                 }
-                probe.loginVisible -> {
-                    authenticated = false
-                    crModuleReady = false
-                    if (phase != ProductionPhase.SESSION_EXPIRED) phase = ProductionPhase.LOGIN
-                    status = if (manual) "Complete user ID, password and captcha, then continue." else "Enter user ID, password and captcha"
-                }
-                probe.crReady -> {
-                    authenticated = true
-                    crModuleReady = true
+            }
+            probe.authenticated -> {
+                authenticated = true
+                if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED)) {
                     if (resumeFailedAfterLogin && failedRequests.isNotEmpty()) {
                         resumeFailedAfterLogin = false
                         retryAllFailed()
-                    } else if (phase !in setOf(ProductionPhase.PROCESSING, ProductionPhase.REVIEW)) {
-                        phase = ProductionPhase.CR_READY
-                        status = "Ready. Enter a CR number."
+                    } else {
+                        openCrModule()
                     }
                 }
-                probe.authenticated -> {
-                    authenticated = true
-                    if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED)) {
-                        if (resumeFailedAfterLogin && failedRequests.isNotEmpty()) {
-                            resumeFailedAfterLogin = false
-                            retryAllFailed()
-                        } else {
-                            openCrModule()
-                        }
-                    }
-                }
-                manual -> status = "NIMS login is not yet verified. Complete login and captcha."
             }
+            probe.loginVisible -> {
+                authenticated = false
+                crModuleReady = false
+                if (phase != ProductionPhase.SESSION_EXPIRED) phase = ProductionPhase.LOGIN
+                status = if (manual) {
+                    "Complete user ID, password and captcha, then continue."
+                } else {
+                    "Enter user ID, password and captcha"
+                }
+            }
+            manual -> status = "NIMS login is not yet verified. Complete login and captcha."
         }
     }
 
@@ -380,13 +332,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private fun waitForCrReady(attempt: Int, usedLeafFallback: Boolean) {
         probePortal(manual = false) { probe ->
             when {
-                probe.crReady -> Unit
-                probe.loginVisible || probe.sessionExpired -> Unit
-                attempt >= 36 -> {
+                probe.crReady || probe.loginVisible || probe.sessionExpired -> Unit
+                attempt >= CR_READY_MAX_ATTEMPTS -> {
                     phase = ProductionPhase.OPENING_CR
                     status = "The NIMS CR module did not become ready. Retry or login again."
                 }
-                attempt == 12 && !usedLeafFallback -> {
+                attempt == CR_LEAF_FALLBACK_ATTEMPT && !usedLeafFallback -> {
                     webView.loadUrl(CR_SEARCH_URL)
                     mainHandler.postDelayed({ waitForCrReady(attempt + 1, true) }, 500L)
                 }
@@ -406,8 +357,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
             return
         }
         phase = ProductionPhase.SUBMITTING_CR
-        status = "Submitting CR number…"
-        submitCrAttempt(0)
+        status = "Preparing CR submission…"
+        webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript(crNumber)) { raw ->
+            resultListBaseline = decodeObject(raw).optString("signature")
+            status = "Submitting CR number…"
+            submitCrAttempt(0)
+        }
     }
 
     private fun submitCrAttempt(attempt: Int) {
@@ -418,7 +373,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 phase = ProductionPhase.WAITING_RESULTS
                 status = "Waiting for the report list…"
                 waitForReportList(0)
-            } else if (attempt < 14) {
+            } else if (attempt < CR_SUBMIT_MAX_ATTEMPTS) {
                 mainHandler.postDelayed({ submitCrAttempt(attempt + 1) }, 350L)
             } else {
                 crModuleReady = false
@@ -430,13 +385,26 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun waitForReportList(attempt: Int) {
-        webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript) { raw ->
+        webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript(crNumber)) { raw ->
             val result = decodeObject(raw)
+            val ready = result.optBoolean("ready")
+            val signature = result.optString("signature")
+            val expectedCrVisible = result.optBoolean("crMatch")
+            val sameKnownCr = crNumber.isNotBlank() && crNumber == lastCompletedCr
+            val listConfirmed = ready && (
+                resultListBaseline.isBlank() ||
+                    signature != resultListBaseline ||
+                    expectedCrVisible ||
+                    sameKnownCr
+                )
             when {
-                result.optBoolean("ready") -> discoverAndFetch(refresh = false)
-                attempt >= 48 -> {
+                listConfirmed -> {
+                    lastCompletedCr = crNumber
+                    discoverAndFetch(refresh = false)
+                }
+                attempt >= REPORT_LIST_MAX_ATTEMPTS -> {
                     phase = ProductionPhase.CR_READY
-                    status = "No report list appeared. Check the CR number and retry."
+                    status = "No matching report list appeared. Check the CR number and retry."
                 }
                 else -> mainHandler.postDelayed({ waitForReportList(attempt + 1) }, 350L)
             }
@@ -449,11 +417,11 @@ class ProductionWorkflowActivity : ComponentActivity() {
         webView.evaluateJavascript(NimsPortalBridge.prepareMappingScript) { raw ->
             val result = decodeObject(raw)
             if (!result.optBoolean("ok")) {
-                if (refresh) {
-                    status = "The report list is not ready. Refresh the NIMS session and retry."
+                phase = if (summary == null) ProductionPhase.CR_READY else ProductionPhase.REVIEW
+                status = if (refresh) {
+                    "The report list is not ready. Refresh the NIMS session and retry."
                 } else {
-                    phase = ProductionPhase.CR_READY
-                    status = "No reports were found for this CR number."
+                    "No reports were found for this CR number."
                 }
                 return@evaluateJavascript
             }
@@ -473,7 +441,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     argumentParameterName = templateJson.optString("argumentParameterName", "fileName")
                 )
                 selectRowsAndProcess(refresh)
-            } else if (attempt < 28) {
+            } else if (attempt < MAPPING_MAX_ATTEMPTS) {
                 mainHandler.postDelayed({ pollMapping(refresh, attempt + 1) }, 250L)
             } else {
                 phase = if (summary == null) ProductionPhase.CR_READY else ProductionPhase.REVIEW
@@ -507,8 +475,19 @@ class ProductionWorkflowActivity : ComponentActivity() {
             }.distinctBy { it.transientArg }
                 .sortedBy(ProductionReportPriority::rank)
 
+            if (prepared.isEmpty()) {
+                phase = if (summary == null) ProductionPhase.CR_READY else ProductionPhase.REVIEW
+                status = "No downloadable reports were found."
+                return@evaluateJavascript
+            }
+
+            if (!refresh) sourceUrls.clear()
             sourceUrls.putAll(prepared.associate { it.reportId to it.directUrl })
-            val queue = if (refresh) prepared.filter { !successfulReports.containsKey(it.reportId) || failedRequests.containsKey(it.reportId) } else prepared
+            val queue = if (refresh) {
+                prepared.filter { !successfulReports.containsKey(it.reportId) || failedRequests.containsKey(it.reportId) }
+            } else {
+                prepared
+            }
             if (queue.isEmpty()) {
                 phase = ProductionPhase.REVIEW
                 status = "Results are up to date."
@@ -551,18 +530,35 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 val fetchers = List(FETCH_WORKERS) {
                     launch(Dispatchers.IO) {
                         for (request in fetchQueue) {
-                            if (sessionExpired.get()) break
+                            if (sessionExpired.get()) {
+                                recordFailure(request, "NIMS session expired. Login again.")
+                                onRequestFinished(completed.incrementAndGet(), requests.size, false)
+                                continue
+                            }
                             try {
                                 val response = reportClient.fetch(request.directUrl, MAX_REPORT_BYTES)
-                                val classification = ReportResponseClassifier.classify(response.statusCode, response.contentType, response.bytes)
+                                val classification = ReportResponseClassifier.classify(
+                                    response.statusCode,
+                                    response.contentType,
+                                    response.bytes
+                                )
                                 if (classification == "html_login_or_session") {
                                     sessionExpired.set(true)
                                     recordFailure(request, "NIMS session expired. Login again.")
                                     onRequestFinished(completed.incrementAndGet(), requests.size, false)
                                     continue
                                 }
-                                if (classification == "pdf_report") reportByteCache.put(request.reportId, response.bytes)
-                                parseQueue.send(FetchedProductionReport(request, response.contentType, response.finalUrlSafe, response.bytes))
+                                if (classification == "pdf_report") {
+                                    reportByteCache.put(request.reportId, response.bytes)
+                                }
+                                parseQueue.send(
+                                    FetchedProductionReport(
+                                        request,
+                                        response.contentType,
+                                        response.finalUrlSafe,
+                                        response.bytes
+                                    )
+                                )
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (error: Throwable) {
@@ -589,28 +585,30 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 parsers.joinAll()
             }
 
-            if (sessionExpired.get()) {
-                withContext(Dispatchers.Main) {
-                    isProcessing = false
-                    resumeFailedAfterLogin = true
-                    phase = ProductionPhase.SESSION_EXPIRED
-                    status = "Session expired. Login again to resume failed reports."
-                }
-                return@launch
-            }
-
-            summaryJob?.cancel()
+            summaryJob?.cancelAndJoin()
             publishSummaryNow()
+
             withContext(Dispatchers.Main) {
                 isProcessing = false
-                phase = ProductionPhase.REVIEW
-                val elapsed = (SystemClock.elapsedRealtime() - processingStartedAt) / 1000.0
-                status = if (failedRequests.isEmpty()) {
-                    "Results ready · ${"%.1f".format(elapsed)} s"
+                val durationMs = SystemClock.elapsedRealtime() - processingStartedAt
+                if (sessionExpired.get()) {
+                    resumeFailedAfterLogin = true
+                    authenticated = false
+                    crModuleReady = false
+                    phase = ProductionPhase.SESSION_EXPIRED
+                    status = "Session expired. Login again to resume failed reports."
                 } else {
-                    "Results ready · ${failedRequests.size} report(s) can be retried"
+                    phase = ProductionPhase.REVIEW
+                    status = if (failedRequests.isEmpty()) {
+                        "Results ready · ${"%.1f".format(durationMs / 1000.0)} s"
+                    } else {
+                        "Results ready · ${failedRequests.size} report(s) can be retried"
+                    }
                 }
-                addLog("PROCESS_COMPLETE total=${requests.size} success=${successfulReports.size} failed=${failedRequests.size} durationMs=${(elapsed * 1000).toLong()}")
+                addLog(
+                    "PROCESS_COMPLETE total=${requests.size} success=${successfulReports.size} " +
+                        "failed=${failedRequests.size} durationMs=$durationMs"
+                )
             }
         }
     }
@@ -650,7 +648,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
             progressTotal = total
             status = "Processed $count/$total reports"
             val now = SystemClock.elapsedRealtime()
-            val due = useful && baseSummary == null || count == 1 || count == 6 || count % 15 == 0 || now - lastSummaryAt >= 1_500L || count == total
+            val due = (useful && baseSummary == null) ||
+                count == 1 ||
+                count == 6 ||
+                count % 15 == 0 ||
+                now - lastSummaryAt >= SUMMARY_INTERVAL_MS ||
+                count == total
             if (due) {
                 lastSummaryAt = now
                 scheduleSummary()
@@ -695,6 +698,10 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun retryAllFailed() {
+        if (isProcessing) {
+            status = "Wait for the current processing cycle to finish."
+            return
+        }
         val requests = failedRequests.values.toList().sortedBy(ProductionReportPriority::rank)
         if (requests.isEmpty()) {
             status = "No failed reports to retry."
@@ -709,6 +716,10 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun retryOne(reportId: String) {
+        if (isProcessing) {
+            status = "Wait for the current processing cycle to finish."
+            return
+        }
         val request = failedRequests[reportId] ?: return
         if (!authenticated) {
             resumeFailedAfterLogin = true
@@ -732,12 +743,16 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun addManualCorrection(reportId: String, field: String, value: String, unit: String) {
         if (field.isBlank() || value.isBlank()) return
+        val resultDate = failedRequests[reportId]?.row?.optString("date_sent")
+            ?: successfulReports[reportId]?.dateSent
+            ?: ""
         issueController.addCorrection(
             ClinicianCorrection(
                 reportId = reportId,
                 field = field.trim(),
                 value = value.trim(),
-                unit = unit.trim()
+                unit = unit.trim(),
+                resultDate = resultDate
             )
         )
         summary = baseSummary?.let { UiCorrectionOverlay.apply(it, issueController.allCorrections()) }
@@ -751,6 +766,11 @@ class ProductionWorkflowActivity : ComponentActivity() {
         }
     }
 
+    private fun ignoreIssue(reportId: String) {
+        issueController.resolve(reportId)
+        status = "Issue hidden from the review list."
+    }
+
     private fun loginAgain() {
         authenticated = false
         crModuleReady = false
@@ -761,20 +781,25 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun logoutOtherSessions() {
         webView.evaluateJavascript(NimsPortalBridge.logoutOtherSessionsScript) { result ->
-            status = if (result.contains("clicked")) "Other-session logout requested." else "The NIMS page did not offer an other-session logout action."
+            status = if (result.contains("clicked")) {
+                "Other-session logout requested."
+            } else {
+                "The NIMS page did not offer an other-session logout action."
+            }
         }
     }
 
     private fun changePatient() {
         activeJob?.cancel()
         summaryJob?.cancel()
-        clearPatientState()
+        clearPatientState(clearLastCompletedCr = false)
         if (authenticated) openCrModule() else loginAgain()
     }
 
-    private fun clearPatientState() {
+    private fun clearPatientState(clearLastCompletedCr: Boolean) {
         crNumber = ""
         activeCrNumber = ""
+        resultListBaseline = ""
         mapping = null
         successfulReports.clear()
         failedRequests.clear()
@@ -786,6 +811,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         progressDone = 0
         progressTotal = 0
         isProcessing = false
+        if (clearLastCompletedCr) lastCompletedCr = ""
         closePdf()
     }
 
@@ -794,7 +820,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         summaryJob?.cancel()
         CookieManager.getInstance().removeAllCookies {
             CookieManager.getInstance().flush()
-            clearPatientState()
+            clearPatientState(clearLastCompletedCr = true)
             authenticated = false
             crModuleReady = false
             phase = ProductionPhase.LOGIN
@@ -814,14 +840,17 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun openExactPdf(sourceKey: String, title: String) {
-        val cached = reportByteCache.get(sourceKey)
-        if (cached != null) {
+        reportByteCache.get(sourceKey)?.let { cached ->
             openPdfBytes(sourceKey, title, cached)
             return
         }
         val url = sourceUrls[sourceKey]
         if (url == null) {
-            pdfState = ProductionPdfState(sourceKey, title, error = "Source reference unavailable. Refresh the patient results.")
+            pdfState = ProductionPdfState(
+                sourceKey,
+                title,
+                error = "Source reference unavailable. Refresh the patient results."
+            )
             return
         }
         pdfState = ProductionPdfState(sourceKey, title, loading = true)
@@ -835,7 +864,11 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) { openPdfBytes(sourceKey, title, response.bytes) }
             } catch (error: Throwable) {
                 withContext(Dispatchers.Main) {
-                    pdfState = ProductionPdfState(sourceKey, title, error = error.message ?: "PDF could not be opened")
+                    pdfState = ProductionPdfState(
+                        sourceKey,
+                        title,
+                        error = error.message ?: "PDF could not be opened"
+                    )
                 }
             }
         }
@@ -863,7 +896,13 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 val page = withContext(Dispatchers.IO) { pdfRenderer.render(bytes, index) }
                 pageBitmaps[index] = page.bitmap
                 trimPageCache(index)
-                pdfState = current.copy(loading = false, bitmap = page.bitmap, pageIndex = page.pageIndex, pageCount = page.pageCount, error = null)
+                pdfState = current.copy(
+                    loading = false,
+                    bitmap = page.bitmap,
+                    pageIndex = page.pageIndex,
+                    pageCount = page.pageCount,
+                    error = null
+                )
                 preRenderAdjacent(index)
             } catch (error: Throwable) {
                 pdfState = current.copy(loading = false, error = error.message ?: "Page could not be rendered")
@@ -892,7 +931,9 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun trimPageCache(currentIndex: Int) {
         val keep = setOf(currentIndex, currentIndex - 1, currentIndex + 1)
-        pageBitmaps.keys.filterNot(keep::contains).toList().forEach { key -> pageBitmaps.remove(key)?.recycle() }
+        pageBitmaps.keys.filterNot(keep::contains).toList().forEach { key ->
+            pageBitmaps.remove(key)?.recycle()
+        }
     }
 
     private fun closePdf() {
@@ -902,7 +943,9 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun recyclePageBitmaps() {
-        pageBitmaps.values.distinct().forEach { if (!it.isRecycled) it.recycle() }
+        pageBitmaps.values.distinct().forEach { bitmap ->
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
         pageBitmaps.clear()
     }
 
@@ -964,6 +1007,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
         private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
         private const val FETCH_WORKERS = 4
         private const val PARSE_WORKERS = 2
+        private const val SUMMARY_INTERVAL_MS = 1_500L
+        private const val CR_READY_MAX_ATTEMPTS = 36
+        private const val CR_LEAF_FALLBACK_ATTEMPT = 12
+        private const val CR_SUBMIT_MAX_ATTEMPTS = 14
+        private const val REPORT_LIST_MAX_ATTEMPTS = 48
+        private const val MAPPING_MAX_ATTEMPTS = 28
     }
 }
 
@@ -979,516 +1028,6 @@ private object ProductionReportPriority {
             listOf("rbs", "glucose", "sugar").any(text::contains) -> 5
             listOf("pcr", "genexpert", "cbnaat", "viral load").any(text::contains) -> 6
             else -> 10
-        }
-    }
-}
-
-@Composable
-private fun ProductionTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = Color(0xFF005A8D),
-            secondary = Color(0xFF006B5F),
-            error = Color(0xFFB3261E)
-        ),
-        content = content
-    )
-}
-
-@Composable
-private fun ProductionApp(
-    phase: ProductionPhase,
-    status: String,
-    crNumber: String,
-    activeCrNumber: String,
-    crReady: Boolean,
-    webView: WebView,
-    summary: UiSummary?,
-    selectedTab: Int,
-    onTab: (Int) -> Unit,
-    done: Int,
-    total: Int,
-    processing: Boolean,
-    issues: List<ReportIssue>,
-    corrections: List<ClinicianCorrection>,
-    onCrChange: (String) -> Unit,
-    onContinueLogin: () -> Unit,
-    onLogoutOtherSessions: () -> Unit,
-    onFetch: () -> Unit,
-    onRefresh: () -> Unit,
-    onRetryAll: () -> Unit,
-    onRetryOne: (String) -> Unit,
-    onOpenReport: (String, String) -> Unit,
-    onLoginAgain: () -> Unit,
-    onLogout: () -> Unit,
-    onCopyLogs: () -> Unit,
-    onChangePatient: () -> Unit,
-    onManualCorrection: (String, String, String, String) -> Unit,
-    onUndoCorrection: (String) -> Unit
-) {
-    var menuOpen by remember { mutableStateOf(false) }
-    val reviewVisible = summary != null && phase in setOf(ProductionPhase.REVIEW, ProductionPhase.PROCESSING)
-
-    Scaffold(
-        topBar = {
-            Row(
-                Modifier.fillMaxWidth().background(Color(0xFF171912)).padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                Box {
-                    TextButton(onClick = { menuOpen = true }) { Text("Actions", color = Color.White) }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(text = { Text("Refresh results") }, onClick = { menuOpen = false; onRefresh() })
-                        DropdownMenuItem(text = { Text("Retry failed reports") }, onClick = { menuOpen = false; onRetryAll() })
-                        DropdownMenuItem(text = { Text("Change CR number") }, onClick = { menuOpen = false; onChangePatient() })
-                        DropdownMenuItem(text = { Text("Login again") }, onClick = { menuOpen = false; onLoginAgain() })
-                        DropdownMenuItem(text = { Text("Copy diagnostic logs") }, onClick = { menuOpen = false; onCopyLogs() })
-                        DropdownMenuItem(text = { Text("Logout") }, onClick = { menuOpen = false; onLogout() })
-                    }
-                }
-            }
-        },
-        bottomBar = {
-            if (reviewVisible) {
-                NavigationBar {
-                    listOf("Overview", "Labs", "Cultures", "Reports", "Issues").forEachIndexed { index, label ->
-                        NavigationBarItem(
-                            selected = selectedTab == index,
-                            onClick = { onTab(index) },
-                            icon = { Text(label.take(1)) },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-            }
-        }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            Text(
-                "NIMS",
-                modifier = Modifier.align(Alignment.Center),
-                color = Color(0x0D005A8D),
-                style = MaterialTheme.typography.displayLarge,
-                fontWeight = FontWeight.Black
-            )
-            when {
-                phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED) -> ProductionLoginScreen(webView, status, onContinueLogin, onLogoutOtherSessions)
-                reviewVisible -> {
-                    Column(Modifier.fillMaxSize()) {
-                        ReviewStatusHeader(activeCrNumber, status, done, total, processing, issues.size)
-                        Box(Modifier.weight(1f)) {
-                            when (selectedTab) {
-                                0 -> ProductionOverview(summary, status)
-                                1 -> ProductionLabs(summary.labTrends)
-                                2 -> ProductionCultures(summary.cultures, onOpenReport)
-                                3 -> ProductionReports(summary.sourceReports, issues, corrections, onRetryOne, onOpenReport, onManualCorrection, onUndoCorrection)
-                                else -> ProductionIssues(issues, corrections, onRetryOne, onRetryAll, onLoginAgain, onOpenReport, onUndoCorrection)
-                            }
-                        }
-                        HiddenTransport(webView)
-                    }
-                }
-                phase == ProductionPhase.PROCESSING -> ProductionProcessing(done, total, status, issues.size, onRetryAll, webView)
-                else -> ProductionCrScreen(crNumber, onCrChange, status, crReady, onFetch, onLoginAgain, onCopyLogs, webView)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProductionLoginScreen(webView: WebView, status: String, onContinue: () -> Unit, onLogoutOthers: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("NIMS login", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Enter user ID, password and captcha. Credentials are not stored by this app.")
-        AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Continue") }
-            OutlinedButton(onClick = onLogoutOthers, modifier = Modifier.weight(1f)) { Text("Logout other sessions") }
-        }
-    }
-}
-
-@Composable
-private fun ProductionCrScreen(
-    cr: String,
-    onChange: (String) -> Unit,
-    status: String,
-    ready: Boolean,
-    onFetch: () -> Unit,
-    onLoginAgain: () -> Unit,
-    onCopyLogs: () -> Unit,
-    webView: WebView
-) {
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Spacer(Modifier.height(28.dp))
-        Text("Patient results", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(if (ready) "NIMS session ready" else "Preparing the authenticated CR module…", color = if (ready) MaterialTheme.colorScheme.secondary else Color.DarkGray)
-        if (!ready) LinearProgressIndicator(Modifier.fillMaxWidth())
-        OutlinedTextField(value = cr, onValueChange = onChange, label = { Text("CR number") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Button(onClick = onFetch, enabled = ready && cr.length >= 6, modifier = Modifier.fillMaxWidth()) { Text("Fetch results") }
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { OutlinedButton(onClick = onLoginAgain) { Text("Login again") } }
-            item { OutlinedButton(onClick = onCopyLogs) { Text("Copy logs") } }
-        }
-        HiddenTransport(webView)
-    }
-}
-
-@Composable
-private fun ProductionProcessing(done: Int, total: Int, status: String, failed: Int, onRetry: () -> Unit, webView: WebView) {
-    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        CircularProgressIndicator()
-        Spacer(Modifier.height(16.dp))
-        Text(status, fontWeight = FontWeight.Bold)
-        Text(if (total > 0) "$done of $total reports" else "Preparing reports")
-        if (total > 0) LinearProgressIndicator(progress = { done.toFloat() / total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
-        if (failed > 0) OutlinedButton(onClick = onRetry, modifier = Modifier.padding(top = 12.dp)) { Text("Retry failed ($failed)") }
-        HiddenTransport(webView)
-    }
-}
-
-@Composable
-private fun HiddenTransport(webView: WebView) {
-    AndroidView(factory = { webView }, modifier = Modifier.size(1.dp).alpha(0.01f))
-}
-
-@Composable
-private fun ReviewStatusHeader(activeCr: String, status: String, done: Int, total: Int, processing: Boolean, issueCount: Int) {
-    Column(Modifier.fillMaxWidth().background(Color(0xFFF3F6FA)).padding(horizontal = 14.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (activeCr.isBlank()) "Patient review" else "CR $activeCr", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            if (issueCount > 0) Text("$issueCount issue(s)", color = MaterialTheme.colorScheme.error)
-        }
-        Text(status, style = MaterialTheme.typography.bodySmall)
-        if (processing && total > 0) {
-            LinearProgressIndicator(progress = { done.toFloat() / total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth().padding(top = 5.dp))
-        }
-    }
-}
-
-@Composable
-private fun ProductionOverview(summary: UiSummary, status: String) {
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("Overview", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        item {
-            ProductionCard {
-                Text(summary.patientSnapshot.identityLine.ifBlank { "Patient identity will appear when available" }, fontWeight = FontWeight.Bold)
-                Text(status, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MetricCard("Positive cultures", summary.positiveCultureCount.toString(), Modifier.weight(1f))
-                MetricCard("Abnormal labs", summary.abnormalLabTrends.size.toString(), Modifier.weight(1f))
-                MetricCard("Reports", summary.parsedReportCount.toString(), Modifier.weight(1f))
-            }
-        }
-        summary.actionableCultures.take(4).forEach { culture -> item { CompactCultureCard(culture, null) } }
-        summary.abnormalLabTrends.take(8).forEach { lab -> item { CompactLabCard(lab) } }
-    }
-}
-
-@Composable
-private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = RoundedCornerShape(12.dp)) {
-        Column(Modifier.padding(10.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(label, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun ProductionLabs(rows: List<UiLabTrendRow>) {
-    var panel by remember { mutableStateOf("All") }
-    val filtered = rows.filter { panel == "All" || productionPanel(it.parameter) == panel }
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("Laboratory results", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(listOf("All", "Hemogram", "Renal", "Liver", "Inflammatory", "Molecular", "Other")) { value ->
-                    OutlinedButton(onClick = { panel = value }) { Text((if (panel == value) "✓ " else "") + value) }
-                }
-            }
-        }
-        if (filtered.isEmpty()) item { ProductionCard { Text("No results in this panel") } }
-        items(filtered) { CompactLabCard(it) }
-    }
-}
-
-@Composable
-private fun CompactLabCard(row: UiLabTrendRow) {
-    ProductionCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(row.parameter, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(
-                row.latestValue,
-                fontWeight = FontWeight.Bold,
-                color = if (row.abnormality in setOf(Abnormality.HIGH, Abnormality.LOW, Abnormality.CRITICAL)) MaterialTheme.colorScheme.error else Color.Unspecified
-            )
-        }
-        Text(row.latestDate, style = MaterialTheme.typography.bodySmall)
-        if (row.previousValue != null) Text("Previous ${row.previousValue} · ${row.trendText}", style = MaterialTheme.typography.bodySmall)
-        if (row.history.size > 2) Text("${row.history.size} dated values available", style = MaterialTheme.typography.bodySmall)
-    }
-}
-
-@Composable
-private fun ProductionCultures(rows: List<UiCultureRow>, onOpenReport: (String, String) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("Cultures", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        if (rows.isEmpty()) item { ProductionCard { Text("No culture observations were parsed") } }
-        items(rows) { row -> CompactCultureCard(row) { onOpenReport(row.sourceKey, row.sourceReportName.ifBlank { row.organism.ifBlank { "Culture report" } }) } }
-    }
-}
-
-@Composable
-private fun CompactCultureCard(row: UiCultureRow, onOpen: (() -> Unit)?) {
-    ProductionCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(row.organism.ifBlank { row.growth.ifBlank { row.status.replace('_', ' ') } }, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text(row.status.replace('_', ' '), fontWeight = FontWeight.Bold, color = if (row.status == "growth_detected") MaterialTheme.colorScheme.error else Color.Unspecified)
-        }
-        Text(listOf(row.site.ifBlank { row.specimen }, row.collectionDate, row.reportStage).filter(String::isNotBlank).joinToString(" · "))
-        sensitivityGroups(row.sensitivitySummary).forEach { (label, value) ->
-            Text("$label: $value", style = MaterialTheme.typography.bodySmall, color = when (label) { "R" -> MaterialTheme.colorScheme.error; "S" -> Color(0xFF1B6E2C); else -> Color(0xFF9A5A00) })
-        }
-        if (row.comment.isNotBlank()) Text(row.comment, style = MaterialTheme.typography.bodySmall)
-        if (onOpen != null && row.sourceKey.isNotBlank()) OutlinedButton(onClick = onOpen) { Text("Open report") }
-    }
-}
-
-@Composable
-private fun ProductionReports(
-    reports: List<UiSourceReport>,
-    issues: List<ReportIssue>,
-    corrections: List<ClinicianCorrection>,
-    onRetry: (String) -> Unit,
-    onOpen: (String, String) -> Unit,
-    onCorrection: (String, String, String, String) -> Unit,
-    onUndo: (String) -> Unit
-) {
-    val issueById = issues.associateBy { it.reportId }
-    val reportIds = reports.map { it.sourceKey }.toSet()
-    val issueOnly = issues.filterNot { it.reportId in reportIds }
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Reports", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("${reports.size} available")
-            }
-        }
-        items(reports) { report ->
-            ReportCard(report, issueById[report.sourceKey], corrections.filter { it.reportId == report.sourceKey }, onRetry, onOpen, onCorrection, onUndo)
-        }
-        items(issueOnly) { issue ->
-            IssueOnlyReportCard(issue, corrections.filter { it.reportId == issue.reportId }, onRetry, onOpen, onCorrection, onUndo)
-        }
-    }
-}
-
-@Composable
-private fun ReportCard(
-    report: UiSourceReport,
-    issue: ReportIssue?,
-    corrections: List<ClinicianCorrection>,
-    onRetry: (String) -> Unit,
-    onOpen: (String, String) -> Unit,
-    onCorrection: (String, String, String, String) -> Unit,
-    onUndo: (String) -> Unit
-) {
-    var correcting by remember(report.sourceKey) { mutableStateOf(false) }
-    var field by remember(report.sourceKey) { mutableStateOf("") }
-    var value by remember(report.sourceKey) { mutableStateOf("") }
-    var unit by remember(report.sourceKey) { mutableStateOf("") }
-    ProductionCard(container = if (issue != null) Color(0xFFFFF2F0) else MaterialTheme.colorScheme.surfaceVariant) {
-        Row {
-            Column(Modifier.weight(1f)) {
-                Text(report.reportName, fontWeight = FontWeight.Bold)
-                Text(report.dateSent, style = MaterialTheme.typography.bodySmall)
-            }
-            Text(if (issue != null) "Needs attention" else report.type.uppercase(), style = MaterialTheme.typography.labelMedium)
-        }
-        Text(issue?.userMessage ?: when {
-            report.results.isNotEmpty() -> "${report.results.size} structured result(s)"
-            report.cultureCount > 0 -> "${report.cultureCount} culture observation(s)"
-            else -> "Report available"
-        })
-        corrections.forEach { Text("Clinician entered · ${it.field}: ${it.value} ${it.unit}".trim(), color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall) }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            item { OutlinedButton(onClick = { onOpen(report.sourceKey, report.reportName) }) { Text("Open report") } }
-            if (issue?.retryable == true) item { Button(onClick = { onRetry(report.sourceKey) }) { Text("Retry") } }
-            if (issue != null) item { OutlinedButton(onClick = { correcting = !correcting }) { Text("Enter result") } }
-            if (corrections.isNotEmpty()) item { TextButton(onClick = { onUndo(report.sourceKey) }) { Text("Undo correction") } }
-        }
-        if (correcting) CorrectionForm(field, value, unit, { field = it }, { value = it }, { unit = it }) {
-            onCorrection(report.sourceKey, field, value, unit)
-            correcting = false
-        }
-    }
-}
-
-@Composable
-private fun IssueOnlyReportCard(
-    issue: ReportIssue,
-    corrections: List<ClinicianCorrection>,
-    onRetry: (String) -> Unit,
-    onOpen: (String, String) -> Unit,
-    onCorrection: (String, String, String, String) -> Unit,
-    onUndo: (String) -> Unit
-) {
-    var correcting by remember(issue.reportId) { mutableStateOf(false) }
-    var field by remember(issue.reportId) { mutableStateOf("") }
-    var value by remember(issue.reportId) { mutableStateOf("") }
-    var unit by remember(issue.reportId) { mutableStateOf("") }
-    ProductionCard(container = Color(0xFFFFF2F0)) {
-        Text(issue.reportName, fontWeight = FontWeight.Bold)
-        Text(issue.dateSent, style = MaterialTheme.typography.bodySmall)
-        Text(issue.userMessage)
-        corrections.forEach { Text("Clinician entered · ${it.field}: ${it.value} ${it.unit}".trim(), color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall) }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (issue.retryable) item { Button(onClick = { onRetry(issue.reportId) }) { Text("Retry") } }
-            item { OutlinedButton(onClick = { onOpen(issue.reportId, issue.reportName) }) { Text("Open report") } }
-            item { OutlinedButton(onClick = { correcting = !correcting }) { Text("Enter result") } }
-            if (corrections.isNotEmpty()) item { TextButton(onClick = { onUndo(issue.reportId) }) { Text("Undo correction") } }
-        }
-        if (correcting) CorrectionForm(field, value, unit, { field = it }, { value = it }, { unit = it }) {
-            onCorrection(issue.reportId, field, value, unit)
-            correcting = false
-        }
-    }
-}
-
-@Composable
-private fun CorrectionForm(
-    field: String,
-    value: String,
-    unit: String,
-    onField: (String) -> Unit,
-    onValue: (String) -> Unit,
-    onUnit: (String) -> Unit,
-    onSave: () -> Unit
-) {
-    HorizontalDivider()
-    Text("Clinician-entered local correction", fontWeight = FontWeight.Bold)
-    OutlinedTextField(field, onField, label = { Text("Test / field") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(value, onValue, label = { Text("Value") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(unit, onUnit, label = { Text("Unit, optional") }, modifier = Modifier.fillMaxWidth())
-    Button(onClick = onSave, enabled = field.isNotBlank() && value.isNotBlank()) { Text("Save") }
-}
-
-@Composable
-private fun ProductionIssues(
-    issues: List<ReportIssue>,
-    corrections: List<ClinicianCorrection>,
-    onRetry: (String) -> Unit,
-    onRetryAll: () -> Unit,
-    onLoginAgain: () -> Unit,
-    onOpen: (String, String) -> Unit,
-    onUndo: (String) -> Unit
-) {
-    val grouped = issues.groupBy { it.kind }
-    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Issues", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Button(onClick = onRetryAll, enabled = issues.any { it.retryable }) { Text("Retry all") }
-            }
-        }
-        if (issues.isEmpty()) item { ProductionCard { Text("No unresolved report issues") } }
-        grouped.forEach { (kind, entries) ->
-            item { Text(issueHeading(kind), fontWeight = FontWeight.Bold) }
-            items(entries) { issue ->
-                ProductionCard(container = Color(0xFFFFF2F0)) {
-                    Text(issue.reportName, fontWeight = FontWeight.Bold)
-                    Text(issue.userMessage)
-                    Text("Attempt ${issue.attempts}", style = MaterialTheme.typography.bodySmall)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (issue.retryable) item { Button(onClick = { onRetry(issue.reportId) }) { Text("Retry") } }
-                        item { OutlinedButton(onClick = { onOpen(issue.reportId, issue.reportName) }) { Text("Open report") } }
-                        if (issue.kind == ReportIssueKind.SESSION_EXPIRED) item { OutlinedButton(onClick = onLoginAgain) { Text("Login again") } }
-                        if (corrections.any { it.reportId == issue.reportId }) item { TextButton(onClick = { onUndo(issue.reportId) }) { Text("Undo correction") } }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProductionCard(container: Color = MaterialTheme.colorScheme.surfaceVariant, content: @Composable ColumnScope.() -> Unit) {
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = container)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp), content = content)
-    }
-}
-
-private fun productionPanel(parameter: String): String {
-    val value = parameter.uppercase()
-    return when {
-        listOf("HEMOGLOBIN", "WBC", "TLC", "PLATELET", "NEUTROPHIL", "LYMPHOCYTE").any(value::contains) -> "Hemogram"
-        listOf("CREATININE", "UREA", "SODIUM", "POTASSIUM", "CHLORIDE", "BICARBONATE", "GLUCOSE").any(value::contains) -> "Renal"
-        listOf("BILIRUBIN", "AST", "ALT", "SGOT", "SGPT", "ALP", "GGT", "ALBUMIN", "PROTEIN").any(value::contains) -> "Liver"
-        listOf("CRP", "ESR", "PROCALCITONIN", "GALACTOMANNAN", "GLUCAN", "BDG", "FERRITIN").any(value::contains) -> "Inflammatory"
-        listOf("PCR", "MOLECULAR", "CBNAAT", "GENEXPERT", "VIRAL LOAD").any(value::contains) -> "Molecular"
-        else -> "Other"
-    }
-}
-
-private fun sensitivityGroups(summary: String): List<Pair<String, String>> {
-    if (summary.isBlank()) return emptyList()
-    val groups = linkedMapOf("S" to mutableListOf<String>(), "I" to mutableListOf(), "R" to mutableListOf())
-    summary.split(';').map(String::trim).filter(String::isNotBlank).forEach { entry ->
-        when {
-            entry.startsWith("S:", true) -> groups.getValue("S") += entry.substringAfter(':').trim()
-            entry.startsWith("I:", true) -> groups.getValue("I") += entry.substringAfter(':').trim()
-            entry.startsWith("R:", true) -> groups.getValue("R") += entry.substringAfter(':').trim()
-            entry.contains("susceptible", true) || entry.contains("sensitive", true) -> groups.getValue("S") += entry.replace(Regex("(?i)\\s+(susceptible|sensitive)$"), "")
-            entry.contains("intermediate", true) -> groups.getValue("I") += entry.replace(Regex("(?i)\\s+intermediate$"), "")
-            entry.contains("resistant", true) -> groups.getValue("R") += entry.replace(Regex("(?i)\\s+resistant$"), "")
-        }
-    }
-    return groups.mapNotNull { (label, values) -> values.distinct().takeIf { it.isNotEmpty() }?.let { label to it.joinToString(", ") } }
-}
-
-private fun issueHeading(kind: ReportIssueKind): String = when (kind) {
-    ReportIssueKind.TRANSIENT_NETWORK -> "Could not retrieve"
-    ReportIssueKind.SESSION_EXPIRED -> "Session expired"
-    ReportIssueKind.PARSE_INCOMPLETE -> "Needs interpretation"
-    ReportIssueKind.UNSUPPORTED -> "Unsupported or scanned"
-    ReportIssueKind.DUPLICATE -> "Duplicate"
-    ReportIssueKind.UNKNOWN -> "Other"
-}
-
-@Composable
-private fun ProductionPdfDialog(
-    state: ProductionPdfState,
-    onClose: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit
-) {
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color(0xFF111111)) {
-            Column {
-                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primary).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(state.title, color = Color.White, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (state.pageCount > 0) Text("${state.pageIndex + 1}/${state.pageCount}", color = Color.White)
-                    TextButton(onClick = onClose) { Text("Close", color = Color.White) }
-                }
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    state.bitmap?.let { Image(it.asImageBitmap(), "PDF page", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
-                    if (state.loading) CircularProgressIndicator()
-                    state.error?.let { Text(it, color = Color.White, modifier = Modifier.padding(20.dp)) }
-                }
-                if (state.pageCount > 1) {
-                    Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        OutlinedButton(onClick = onPrevious, enabled = state.pageIndex > 0) { Text("Previous") }
-                        OutlinedButton(onClick = onNext, enabled = state.pageIndex + 1 < state.pageCount) { Text("Next") }
-                    }
-                }
-            }
         }
     }
 }
