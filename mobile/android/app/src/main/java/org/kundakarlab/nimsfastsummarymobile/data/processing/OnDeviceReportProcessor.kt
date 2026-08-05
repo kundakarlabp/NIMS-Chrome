@@ -55,10 +55,11 @@ class OnDeviceReportProcessor(
         val parsedCultures = if (biomarkerOnly) {
             emptyList()
         } else {
-            NimsClinicalParsingEnhancer.enrichCultures(
+            val base = NimsClinicalParsingEnhancer.enrichCultures(
                 NimsPdfFallbackParser.enrichCultures(nimsCultures.ifEmpty { existingCultures }, text, date),
                 text
             )
+            NimsOrganismRecovery.enrich(base, text)
         }
         val genericSusceptibility = if (biomarkerOnly) emptyList() else NimsSusceptibilityTableParser.parse(text)
         val cultures = attachValidatedSusceptibility(parsedCultures, genericSusceptibility)
