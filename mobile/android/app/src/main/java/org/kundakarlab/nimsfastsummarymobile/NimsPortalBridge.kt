@@ -25,12 +25,18 @@ object NimsPortalBridge {
             if(/session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again/.test(lower)) sessionExpired=true;
           }
           try{if(typeof window.__nimsCrFieldReady==='function'&&window.__nimsCrFieldReady())crReady=true;}catch(e){}
-          if(crReady||reportRows>0)authenticatedShell=true;
+          if(crReady||reportRows>0){
+            authenticatedShell=true;
+            // Some NIMS shells retain a hidden login frame after successful
+            // authentication. Functional CR/report capability is stronger
+            // evidence than that stale form and must win.
+            loginVisible=false;
+          }
           return JSON.stringify({
             loginVisible:loginVisible,
             crReady:crReady,
             reportRows:reportRows,
-            authenticated:authenticatedShell&&!loginVisible&&!sessionExpired,
+            authenticated:authenticatedShell&&!sessionExpired,
             sessionExpired:sessionExpired,
             documentCount:docs.length,
             href:String(location.href||'')
