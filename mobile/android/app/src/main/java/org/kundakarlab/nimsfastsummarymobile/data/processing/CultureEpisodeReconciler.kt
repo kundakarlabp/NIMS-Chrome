@@ -169,7 +169,7 @@ object CultureEpisodeReconciler {
         if (lab.isNotBlank()) return "lab:$lab"
 
         val specimen = normalize(culture.specimen ?: culture.site)
-        val date = DateNormalizer.normalize(culture.collectionDate ?: located.report.dateSent).sortEpoch
+        val date = normalizeDate(culture.collectionDate ?: located.report.dateSent)
         if (specimen.isNotBlank() && date != null) return "fallback:$specimen|$date"
 
         return "unique:${located.report.reportId}:${located.cultureIndex}"
@@ -204,16 +204,21 @@ object CultureEpisodeReconciler {
         ?.key
 
     private fun earliestDateText(values: List<String?>): String? = values
-        .mapNotNull { value -> DateNormalizer.normalize(value).sortEpoch?.let { it to value } }
+        .mapNotNull { value -> normalizeDate(value)?.let { it to value } }
         .minByOrNull { it.first }?.second
         ?: firstNonBlank(values)
 
     private fun latestDateText(values: List<String?>): String? = values
-        .mapNotNull { value -> DateNormalizer.normalize(value).sortEpoch?.let { it to value } }
+        .mapNotNull { value -> normalizeDate(value)?.let { it to value } }
         .maxByOrNull { it.first }?.second
         ?: firstNonBlank(values)
 
-    private fun dateRank(value: String?): Long = DateNormalizer.normalize(value).sortEpoch ?: Long.MIN_VALUE
+    private fun normalizeDate(value: String?): Long? = value
+        ?.takeIf(String::isNotBlank)
+        ?.let(DateNormalizer::normalize)
+        ?.sortEpoch
+
+    private fun dateRank(value: String?): Long = normalizeDate(value) ?: Long.MIN_VALUE
 
     private fun stageRank(value: String?): Int = when {
         value.orEmpty().contains("final", ignoreCase = true) -> 4
