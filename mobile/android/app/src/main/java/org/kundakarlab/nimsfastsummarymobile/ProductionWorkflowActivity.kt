@@ -101,10 +101,7 @@ internal data class ProductionPdfState(
     val error: String? = null
 )
 
-/**
- * Native-first launcher. The NIMS WebView is visible only for manual login and
- * captcha; after authentication it remains attached as a hidden transport.
- */
+/** Native-first launcher with manual NIMS login and a hidden authenticated transport. */
 class ProductionWorkflowActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -125,6 +122,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private val sourceUrls = ConcurrentHashMap<String, String>()
     private val successfulReports = ConcurrentHashMap<String, ParsedReport>()
     private val failedRequests = ConcurrentHashMap<String, ProductionReportRequest>()
+    private val ignoredReportIds = ConcurrentHashMap.newKeySet<String>()
     private val pageBitmaps = linkedMapOf<Int, Bitmap>()
 
     private var phase by mutableStateOf(ProductionPhase.LOGIN)
@@ -155,7 +153,6 @@ class ProductionWorkflowActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CookieManager.getInstance().setAcceptCookie(true)
-
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -168,7 +165,6 @@ class ProductionWorkflowActivity : ComponentActivity() {
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
-
                 override fun onPageFinished(view: WebView, url: String) {
                     injectRuntimeFallback()
                     probePortalSoon(120L)
@@ -279,7 +275,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             probe.crReady -> {
                 authenticated = true
                 crModuleReady = true
-                if (resumeFailedAfterLogin && failedRequests.isNotEmpty()) {
+                if (resumeFailedAfterLogin && retryableFailedRequests().isNotEmpty()) {
                     resumeFailedAfterLogin = false
                     retryAllFailed()
                 } else if (phase !in setOf(ProductionPhase.PROCESSING, ProductionPhase.REVIEW)) {
@@ -290,7 +286,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             probe.authenticated -> {
                 authenticated = true
                 if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED)) {
-                    if (resumeFailedAfterLogin && failedRequests.isNotEmpty()) {
+                    if (resumeFailedAfterLogin && retryableFailedRequests().isNotEmpty()) {
                         resumeFailedAfterLogin = false
                         retryAllFailed()
                     } else {
@@ -316,20 +312,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
         phase = ProductionPhase.OPENING_CR
         crModuleReady = false
         status = "Opening the CR results module…"
-        val script = """
-            (function(){
-              try{
-                if(window.NimsReportCore&&typeof window.NimsReportCore.openCrWiseResultsDirect==='function'){
-                  return JSON.stringify(window.NimsReportCore.openCrWiseResultsDirect(document));
-                }
-              }catch(e){}
-              return JSON.stringify({ok:false,errorCode:'core_not_ready'});
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(script) { waitForCrReady(0, false) }
+        webView.evaluateJavascript(NimsPortalNavigationScripts.openCrModule) {
+            waitForCrReady(0)
+        }
     }
 
-    private fun waitForCrReady(attempt: Int, usedLeafFallback: Boolean) {
+    private fun waitForCrReady(attempt: Int) {
         probePortal(manual = false) { probe ->
             when {
                 probe.crReady || probe.loginVisible || probe.sessionExpired -> Unit
@@ -337,11 +325,12 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     phase = ProductionPhase.OPENING_CR
                     status = "The NIMS CR module did not become ready. Retry or login again."
                 }
-                attempt == CR_LEAF_FALLBACK_ATTEMPT && !usedLeafFallback -> {
-                    webView.loadUrl(CR_SEARCH_URL)
-                    mainHandler.postDelayed({ waitForCrReady(attempt + 1, true) }, 500L)
+                attempt > 0 && attempt % CR_NAVIGATION_NUDGE_INTERVAL == 0 -> {
+                    webView.evaluateJavascript(NimsPortalNavigationScripts.openCrModule) {
+                        mainHandler.postDelayed({ waitForCrReady(attempt + 1) }, 350L)
+                    }
                 }
-                else -> mainHandler.postDelayed({ waitForCrReady(attempt + 1, usedLeafFallback) }, 350L)
+                else -> mainHandler.postDelayed({ waitForCrReady(attempt + 1) }, 350L)
             }
         }
     }
@@ -353,7 +342,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         }
         if (!crModuleReady) {
             status = "Preparing the CR module. Please wait."
-            waitForCrReady(0, false)
+            waitForCrReady(0)
             return
         }
         phase = ProductionPhase.SUBMITTING_CR
@@ -484,7 +473,10 @@ class ProductionWorkflowActivity : ComponentActivity() {
             if (!refresh) sourceUrls.clear()
             sourceUrls.putAll(prepared.associate { it.reportId to it.directUrl })
             val queue = if (refresh) {
-                prepared.filter { !successfulReports.containsKey(it.reportId) || failedRequests.containsKey(it.reportId) }
+                prepared.filter {
+                    it.reportId !in ignoredReportIds &&
+                        (!successfulReports.containsKey(it.reportId) || failedRequests.containsKey(it.reportId))
+                }
             } else {
                 prepared
             }
@@ -503,6 +495,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         if (replaceExisting) {
             successfulReports.clear()
             failedRequests.clear()
+            ignoredReportIds.clear()
             issueController.clear()
             reportByteCache.clear()
             baseSummary = null
@@ -599,10 +592,10 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     status = "Session expired. Login again to resume failed reports."
                 } else {
                     phase = ProductionPhase.REVIEW
-                    status = if (failedRequests.isEmpty()) {
+                    status = if (retryableFailedRequests().isEmpty()) {
                         "Results ready · ${"%.1f".format(durationMs / 1000.0)} s"
                     } else {
-                        "Results ready · ${failedRequests.size} report(s) can be retried"
+                        "Results ready · ${retryableFailedRequests().size} report(s) can be retried"
                     }
                 }
                 addLog(
@@ -628,6 +621,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             is ProcessingResult.Success -> {
                 successfulReports[request.reportId] = parsed.value
                 failedRequests.remove(request.reportId)
+                ignoredReportIds.remove(request.reportId)
                 issueController.resolve(request.reportId)
                 parsed.value.structuredValueCount > 0
             }
@@ -689,20 +683,26 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun recordFailure(request: ProductionReportRequest, message: String) {
         failedRequests[request.reportId] = request
-        issueController.recordFailure(
-            request.reportId,
-            request.row.optString("report_name", "Report"),
-            request.row.optString("date_sent"),
-            message
-        )
+        if (request.reportId !in ignoredReportIds) {
+            issueController.recordFailure(
+                request.reportId,
+                request.row.optString("report_name", "Report"),
+                request.row.optString("date_sent"),
+                message
+            )
+        }
     }
+
+    private fun retryableFailedRequests(): List<ProductionReportRequest> = failedRequests.values
+        .filterNot { it.reportId in ignoredReportIds }
+        .sortedBy(ProductionReportPriority::rank)
 
     private fun retryAllFailed() {
         if (isProcessing) {
             status = "Wait for the current processing cycle to finish."
             return
         }
-        val requests = failedRequests.values.toList().sortedBy(ProductionReportPriority::rank)
+        val requests = retryableFailedRequests()
         if (requests.isEmpty()) {
             status = "No failed reports to retry."
             return
@@ -721,6 +721,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             return
         }
         val request = failedRequests[reportId] ?: return
+        ignoredReportIds.remove(reportId)
         if (!authenticated) {
             resumeFailedAfterLogin = true
             loginAgain()
@@ -746,6 +747,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         val resultDate = failedRequests[reportId]?.row?.optString("date_sent")
             ?: successfulReports[reportId]?.dateSent
             ?: ""
+        ignoredReportIds.add(reportId)
         issueController.addCorrection(
             ClinicianCorrection(
                 reportId = reportId,
@@ -761,12 +763,14 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun undoCorrection(reportId: String) {
         if (issueController.undoLastCorrection(reportId) != null) {
+            if (issueController.correctionsFor(reportId).isEmpty()) ignoredReportIds.remove(reportId)
             summary = baseSummary?.let { UiCorrectionOverlay.apply(it, issueController.allCorrections()) }
             status = "Last clinician correction removed."
         }
     }
 
     private fun ignoreIssue(reportId: String) {
+        ignoredReportIds.add(reportId)
         issueController.resolve(reportId)
         status = "Issue hidden from the review list."
     }
@@ -803,6 +807,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         mapping = null
         successfulReports.clear()
         failedRequests.clear()
+        ignoredReportIds.clear()
         sourceUrls.clear()
         issueController.clear()
         reportByteCache.clear()
@@ -1002,14 +1007,13 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
-        private const val CR_SEARCH_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
         private const val DESKTOP_CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
         private const val FETCH_WORKERS = 4
         private const val PARSE_WORKERS = 2
-        private const val SUMMARY_INTERVAL_MS = 1_500L
+        private const val SUMMARY_INTERVAL_MS = 2_000L
         private const val CR_READY_MAX_ATTEMPTS = 36
-        private const val CR_LEAF_FALLBACK_ATTEMPT = 12
+        private const val CR_NAVIGATION_NUDGE_INTERVAL = 8
         private const val CR_SUBMIT_MAX_ATTEMPTS = 14
         private const val REPORT_LIST_MAX_ATTEMPTS = 48
         private const val MAPPING_MAX_ATTEMPTS = 28
