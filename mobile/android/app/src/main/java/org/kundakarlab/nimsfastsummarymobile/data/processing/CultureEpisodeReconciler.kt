@@ -8,9 +8,10 @@ import org.kundakarlab.nimsfastsummarymobile.domain.model.ParsedReport
 
 /**
  * Joins preliminary, identification and final susceptibility observations that
- * belong to the same laboratory episode. This is deliberately conservative:
- * a laboratory number is preferred, and fallback grouping keeps specimen/date
- * and bottle/isolate identity so unrelated cultures are not collapsed.
+ * belong to the same laboratory episode. Laboratory number is the strongest
+ * identity. Bottle/isolate identifiers partition a laboratory episode only when
+ * there are genuinely multiple explicit identities; unnumbered staged reports
+ * are attached to the appropriate explicit subgroup.
  */
 object CultureEpisodeReconciler {
     private data class LocatedCulture(
@@ -20,6 +21,8 @@ object CultureEpisodeReconciler {
         val culture: ParsedCultureValue
     )
 
+    private data class BottleIdentity(val set: Int?, val bottle: Int?)
+
     fun reconcile(reports: List<ParsedReport>): List<ParsedReport> {
         if (reports.none { it.cultures.isNotEmpty() }) return reports
 
@@ -28,10 +31,12 @@ object CultureEpisodeReconciler {
                 LocatedCulture(reportIndex, cultureIndex, report, culture)
             }
         }
-        val groups = located.groupBy(::episodeKey)
+        val episodes = located.groupBy(::primaryEpisodeKey)
+            .values
+            .flatMap(::partitionBottleAndIsolate)
         val culturesByReport = mutableMapOf<Int, MutableList<ParsedCultureValue>>()
 
-        groups.values.forEach { episode ->
+        episodes.forEach { episode ->
             val representative = episode.maxWithOrNull(
                 compareBy<LocatedCulture>(
                     { stageRank(it.culture.reportStage) },
@@ -51,6 +56,37 @@ object CultureEpisodeReconciler {
         }
     }
 
+    private fun partitionBottleAndIsolate(group: List<LocatedCulture>): List<List<LocatedCulture>> {
+        val explicitBottles = group.mapNotNull { located ->
+            located.bottleIdentity().takeIf { it.set != null || it.bottle != null }
+        }.distinct()
+
+        val bottleGroups = when {
+            explicitBottles.size <= 1 -> listOf(group)
+            else -> explicitBottles.map { identity ->
+                group.filter { located ->
+                    val candidate = located.bottleIdentity()
+                    (candidate.set == null && candidate.bottle == null) || candidate == identity
+                }
+            }
+        }
+
+        return bottleGroups.flatMap { bottleGroup ->
+            val isolates = bottleGroup.mapNotNull { it.culture.isolateNumber }.distinct().sorted()
+            when {
+                isolates.size <= 1 -> listOf(bottleGroup)
+                else -> isolates.map { isolate ->
+                    bottleGroup.filter { located ->
+                        located.culture.isolateNumber == null || located.culture.isolateNumber == isolate
+                    }
+                }
+            }
+        }.filter { it.isNotEmpty() }
+    }
+
+    private fun LocatedCulture.bottleIdentity(): BottleIdentity =
+        BottleIdentity(culture.setNumber, culture.bottleNumber)
+
     private fun mergeEpisode(
         episode: List<LocatedCulture>,
         representative: ParsedCultureValue
@@ -68,6 +104,7 @@ object CultureEpisodeReconciler {
             .filter(String::isNotBlank)
             .filterNot { it.contains("organism not extracted", ignoreCase = true) && organismSource != null }
             .filterNot { it.contains("no structured susceptibility", ignoreCase = true) && susceptibility.isNotEmpty() }
+            .filterNot { it.contains("Antibiogram text was present", ignoreCase = true) && susceptibility.isNotEmpty() }
             .distinct()
 
         val status = when {
@@ -93,9 +130,9 @@ object CultureEpisodeReconciler {
             reportingDate = latestDateText(ranked.map { it.culture.reportingDate ?: it.report.dateSent }),
             reportStage = ranked.maxByOrNull { stageRank(it.culture.reportStage) }?.culture?.reportStage,
             bottleName = firstNonBlank(ranked.map { it.culture.bottleName }),
-            setNumber = ranked.firstNotNullOfOrNull { it.culture.setNumber },
-            bottleNumber = ranked.firstNotNullOfOrNull { it.culture.bottleNumber },
-            isolateNumber = ranked.firstNotNullOfOrNull { it.culture.isolateNumber },
+            setNumber = mostSpecificNumber(ranked.map { it.culture.setNumber }),
+            bottleNumber = mostSpecificNumber(ranked.map { it.culture.bottleNumber }),
+            isolateNumber = mostSpecificNumber(ranked.map { it.culture.isolateNumber }),
             gramStain = firstNonBlank(ranked.map { it.culture.gramStain })
         )
     }
@@ -126,19 +163,14 @@ object CultureEpisodeReconciler {
         return stage + confidence + mic + date
     }
 
-    private fun episodeKey(located: LocatedCulture): String {
+    private fun primaryEpisodeKey(located: LocatedCulture): String {
         val culture = located.culture
         val lab = culture.labStudyNumber.orEmpty().filter(Char::isLetterOrDigit).lowercase()
-        val bottleIdentity = listOf(
-            culture.setNumber?.toString().orEmpty(),
-            culture.bottleNumber?.toString().orEmpty(),
-            culture.isolateNumber?.toString().orEmpty()
-        ).joinToString("-")
-        if (lab.isNotBlank()) return "lab:$lab|$bottleIdentity"
+        if (lab.isNotBlank()) return "lab:$lab"
 
         val specimen = normalize(culture.specimen ?: culture.site)
         val date = DateNormalizer.normalize(culture.collectionDate ?: located.report.dateSent).sortEpoch
-        if (specimen.isNotBlank() && date != null) return "fallback:$specimen|$date|$bottleIdentity"
+        if (specimen.isNotBlank() && date != null) return "fallback:$specimen|$date"
 
         return "unique:${located.report.reportId}:${located.cultureIndex}"
     }
@@ -164,6 +196,12 @@ object CultureEpisodeReconciler {
     }
 
     private fun firstNonBlank(values: List<String?>): String? = values.firstOrNull { !it.isNullOrBlank() }?.trim()
+
+    private fun mostSpecificNumber(values: List<Int?>): Int? = values.filterNotNull()
+        .groupingBy { it }
+        .eachCount()
+        .maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { it.key })
+        ?.key
 
     private fun earliestDateText(values: List<String?>): String? = values
         .mapNotNull { value -> DateNormalizer.normalize(value).sortEpoch?.let { it to value } }
