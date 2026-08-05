@@ -27,9 +27,6 @@ object NimsPortalBridge {
           try{if(typeof window.__nimsCrFieldReady==='function'&&window.__nimsCrFieldReady())crReady=true;}catch(e){}
           if(crReady||reportRows>0){
             authenticatedShell=true;
-            // Some NIMS shells retain a hidden login frame after successful
-            // authentication. Functional CR/report capability is stronger
-            // evidence than that stale form and must win.
             loginVisible=false;
           }
           return JSON.stringify({
@@ -60,28 +57,65 @@ object NimsPortalBridge {
         """.trimIndent()
     }
 
-    val resultListProbeScript: String = """
-        (function(){
-          function collect(doc,out,seen,depth){
-            if(!doc||depth>7||seen.indexOf(doc)>=0)return;
-            seen.push(doc);out.push(doc);
-            let frames=[];try{frames=doc.querySelectorAll('iframe,frame');}catch(e){}
-            for(const frame of frames){try{const child=frame.contentDocument||(frame.contentWindow&&frame.contentWindow.document);if(child)collect(child,out,seen,depth+1);}catch(e){}}
-          }
-          const docs=[];collect(document,docs,[],0);
-          let best=0;
-          for(const d of docs){
-            try{
-              if(window.NimsReportCore&&typeof window.NimsReportCore.selectRowsForModeFromDoc==='function'){
-                const rows=window.NimsReportCore.selectRowsForModeFromDoc('bulk_fast',d)||[];
-                best=Math.max(best,rows.length||0);
+    fun resultListProbeScript(expectedCr: String = ""): String {
+        val escapedCr = JSONObject.quote(expectedCr.filter(Char::isDigit))
+        return """
+            (function(){
+              const expectedCr=$escapedCr;
+              function collect(doc,out,seen,depth){
+                if(!doc||depth>7||seen.indexOf(doc)>=0)return;
+                seen.push(doc);out.push(doc);
+                let frames=[];try{frames=doc.querySelectorAll('iframe,frame');}catch(e){}
+                for(const frame of frames){try{const child=frame.contentDocument||(frame.contentWindow&&frame.contentWindow.document);if(child)collect(child,out,seen,depth+1);}catch(e){}}
               }
-            }catch(e){}
-            try{best=Math.max(best,[...d.querySelectorAll('a,button,input')].filter(x=>/view\s*report/i.test((x.innerText||x.value||x.title||''))).length);}catch(e){}
-          }
-          return JSON.stringify({ready:best>0,rowCount:best,documentCount:docs.length});
-        })();
-    """.trimIndent()
+              function hash(value){
+                let h=2166136261;
+                for(let i=0;i<value.length;i++){h^=value.charCodeAt(i);h=Math.imul(h,16777619);}
+                return (h>>>0).toString(16);
+              }
+              function rowIdentity(row){
+                if(!row)return '';
+                return [
+                  row.transientPrintReportArg||row.fileName||row.reportArg||'',
+                  row.report_name||row.reportName||row.investigation||row.testName||'',
+                  row.date_sent||row.dateSent||row.reportDate||''
+                ].join('|');
+              }
+              const docs=[];collect(document,docs,[],0);
+              let bestRows=[];
+              let bestFallback=0;
+              let crMatch=false;
+              for(const d of docs){
+                try{
+                  if(window.NimsReportCore&&typeof window.NimsReportCore.selectRowsForModeFromDoc==='function'){
+                    const rows=window.NimsReportCore.selectRowsForModeFromDoc('bulk_fast',d)||[];
+                    if(rows.length>bestRows.length)bestRows=rows;
+                  }
+                }catch(e){}
+                try{bestFallback=Math.max(bestFallback,[...d.querySelectorAll('a,button,input')].filter(x=>/view\s*report/i.test((x.innerText||x.value||x.title||''))).length);}catch(e){}
+                if(expectedCr){
+                  try{
+                    const inputs=[...d.querySelectorAll('input,textarea')];
+                    if(inputs.some(x=>String(x.value||'').replace(/\D/g,'')===expectedCr))crMatch=true;
+                  }catch(e){}
+                  try{
+                    const digits=String((d.body&&d.body.innerText)||'').replace(/\D/g,'');
+                    if(digits.indexOf(expectedCr)>=0)crMatch=true;
+                  }catch(e){}
+                }
+              }
+              const count=Math.max(bestRows.length,bestFallback);
+              const raw=bestRows.slice(0,8).map(rowIdentity).join('||')+'#'+bestRows.length;
+              return JSON.stringify({
+                ready:count>0,
+                rowCount:count,
+                documentCount:docs.length,
+                signature:bestRows.length?hash(raw):'',
+                crMatch:crMatch
+              });
+            })();
+        """.trimIndent()
+    }
 
     val prepareMappingScript: String = """
         (function(){
