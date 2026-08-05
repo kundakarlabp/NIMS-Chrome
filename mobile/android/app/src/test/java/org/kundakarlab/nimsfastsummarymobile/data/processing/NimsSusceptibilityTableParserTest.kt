@@ -1,6 +1,5 @@
 package org.kundakarlab.nimsfastsummarymobile.data.processing
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,7 +46,7 @@ class NimsSusceptibilityTableParserTest {
             Ceftazidime or Meropenem or Imipenem may be used.
         """.trimIndent()
 
-        assertEquals(emptyList<Any>(), NimsSusceptibilityTableParser.parse(text))
+        assertTrue(NimsSusceptibilityTableParser.parse(text).isEmpty())
     }
 
     @Test
