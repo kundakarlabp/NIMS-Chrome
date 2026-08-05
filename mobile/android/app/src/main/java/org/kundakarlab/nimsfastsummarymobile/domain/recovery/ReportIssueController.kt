@@ -69,6 +69,10 @@ class ReportIssueController {
     fun correctionsFor(reportId: String): List<ClinicianCorrection> =
         corrections[reportId]?.toList().orEmpty()
 
+    fun allCorrections(): List<ClinicianCorrection> = corrections.values
+        .flatMap { it.toList() }
+        .sortedBy { it.enteredAtEpochMs }
+
     fun undoLastCorrection(reportId: String): ClinicianCorrection? {
         val values = corrections[reportId] ?: return null
         if (values.isEmpty()) return null

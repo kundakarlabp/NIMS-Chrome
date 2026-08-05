@@ -2,7 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application android:allowBackup="false" android:label="NIMS Results" android:supportsRtl="true" android:usesCleartextTraffic="false">
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <!-- Retained for stability-contract and explicit non-exported fallback; not a launcher. -->
+        <activity android:name=".MainActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".ProductionWorkflowActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
