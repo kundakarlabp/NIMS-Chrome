@@ -4,7 +4,8 @@
     <application android:allowBackup="false" android:label="NIMS Results" android:supportsRtl="true" android:usesCleartextTraffic="false">
         <!-- Retained for stability-contract and explicit non-exported fallback; not a launcher. -->
         <activity android:name=".MainActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".ProductionWorkflowActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+        <activity android:name=".ProductionWorkflowActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".LoginGateActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
