@@ -43,11 +43,12 @@ import org.json.JSONObject
 /**
  * Manual-login launcher gate.
  *
- * The gate deliberately does not submit credentials, read credentials, or force
- * navigation to a protected NIMS endpoint while the portal is authenticating.
- * A user-visible login form must be observed during this app launch and NIMS
- * must then naturally leave that login route (or expose strong authenticated
- * evidence) before the results workflow can start.
+ * Credentials and captcha are entered only into NIMS. The app never reads or
+ * stores them. NIMS's login form is allowed to submit normally; once the form
+ * disappears, the app deliberately verifies the resulting cookie session by
+ * opening the protected CR-results endpoint. That verification is user-driven
+ * (Continue to results) and also starts automatically after a short settle
+ * period, avoiding both the old premature redirect and the newer infinite wait.
  */
 class LoginGateActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -56,6 +57,8 @@ class LoginGateActivity : ComponentActivity() {
 
     private var status by mutableStateOf("Opening NIMS login…")
     private var loginFormSeen = false
+    private var loginFormGoneAt = 0L
+    private var protectedVerificationStarted = false
     private var launched = false
     private var lastFinishedUrl = ""
     private var lastLoginNavigationAt = 0L
@@ -72,7 +75,7 @@ class LoginGateActivity : ComponentActivity() {
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
             settings.setSupportMultipleWindows(false)
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
@@ -80,7 +83,7 @@ class LoginGateActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     lastFinishedUrl = url
                     log("PAGE ${safeStage(url)}")
-                    handler.postDelayed({ inspectAndAdvance(0) }, 180L)
+                    handler.postDelayed({ inspectAndAdvance(0) }, 220L)
                 }
             }
         }
@@ -108,6 +111,8 @@ class LoginGateActivity : ComponentActivity() {
     private fun beginFreshLogin() {
         if (launched) return
         loginFormSeen = false
+        loginFormGoneAt = 0L
+        protectedVerificationStarted = false
         lastFinishedUrl = ""
         lastLoginNavigationAt = 0L
         status = "Opening the NIMS login page…"
@@ -143,18 +148,33 @@ class LoginGateActivity : ComponentActivity() {
             val logoutVisible = probe.optBoolean("logoutVisible")
             val sessionExpired = probe.optBoolean("sessionExpired")
             val leftLoginRoute = isAllowedNimsUrl(lastFinishedUrl) && !isLoginRoute(lastFinishedUrl)
+            val protectedRoute = isCrResultsRoute(lastFinishedUrl)
 
             log(
                 "AUTH login=$loginVisible public=$publicLanding leftLogin=$leftLoginRoute " +
+                    "protected=$protectedRoute verify=$protectedVerificationStarted " +
                     "cr=$crReady rows=$reportRows logout=$logoutVisible expired=$sessionExpired"
             )
 
+            if (sessionExpired) {
+                protectedVerificationStarted = false
+                loginFormGoneAt = 0L
+                status = "NIMS session expired. Reload login and sign in again."
+                return@evaluateJavascript
+            }
+
             if (loginVisible) {
                 loginFormSeen = true
-                status = if (userRequestedVerification) {
-                    "Enter user ID, password and captcha, submit the NIMS form, then wait."
+                loginFormGoneAt = 0L
+                if (protectedVerificationStarted) {
+                    protectedVerificationStarted = false
+                    status = "NIMS did not accept the session. Check user ID, password and captcha, then login again."
                 } else {
-                    "Enter user ID, password and captcha, then submit the NIMS form."
+                    status = if (userRequestedVerification) {
+                        "Submit the NIMS login form first, then tap Continue to results."
+                    } else {
+                        "Enter user ID, password and captcha, then submit the NIMS form."
+                    }
                 }
                 return@evaluateJavascript
             }
@@ -175,26 +195,46 @@ class LoginGateActivity : ComponentActivity() {
                 return@evaluateJavascript
             }
 
-            if (sessionExpired) {
-                status = "NIMS session expired. Reload login and sign in again."
+            if (protectedVerificationStarted) {
+                if (
+                    LoginGatePolicy.canAcceptProtectedVerification(
+                        loginFormSeen = loginFormSeen,
+                        loginVisible = loginVisible,
+                        sessionExpired = sessionExpired,
+                        verificationStarted = protectedVerificationStarted,
+                        protectedRoute = protectedRoute
+                    ) && attempt >= PROTECTED_ROUTE_SETTLE_PROBES
+                ) {
+                    log("AUTH protected CR route accepted")
+                    openResultsWorkflow()
+                    return@evaluateJavascript
+                }
+
+                if (attempt < MAX_PROTECTED_VERIFY_ATTEMPTS) {
+                    status = "Verifying the NIMS session…"
+                    handler.postDelayed(
+                        { inspectAndAdvance(attempt + 1, userRequestedVerification = true) },
+                        450L
+                    )
+                } else {
+                    protectedVerificationStarted = false
+                    status = "NIMS session verification did not complete. Tap Reload login and sign in again."
+                }
                 return@evaluateJavascript
             }
 
             if (loginFormSeen) {
-                // Important: never force-load the CR endpoint here. NIMS may be
-                // completing its own SSO redirect and session initialization.
-                status = if (isLoginRoute(lastFinishedUrl)) {
-                    "Login submitted. Waiting for NIMS to complete authentication…"
+                if (loginFormGoneAt == 0L) loginFormGoneAt = SystemClock.elapsedRealtime()
+                val settledFor = SystemClock.elapsedRealtime() - loginFormGoneAt
+                status = "Login submitted. Finalizing the NIMS session…"
+
+                if (userRequestedVerification || settledFor >= POST_LOGIN_SETTLE_MS) {
+                    beginProtectedVerification()
                 } else {
-                    "NIMS login is being verified…"
-                }
-                if (attempt < MAX_POST_LOGIN_WAIT_ATTEMPTS) {
                     handler.postDelayed(
                         { inspectAndAdvance(attempt + 1, userRequestedVerification) },
-                        if (attempt < 5) 450L else 750L
+                        350L
                     )
-                } else {
-                    status = "NIMS did not complete the login transition. Check the captcha or reload login."
                 }
                 return@evaluateJavascript
             }
@@ -215,6 +255,16 @@ class LoginGateActivity : ComponentActivity() {
                 status = "The NIMS login form did not open. Tap Reload login."
             }
         }
+    }
+
+    private fun beginProtectedVerification() {
+        if (launched || protectedVerificationStarted) return
+        protectedVerificationStarted = true
+        status = "Verifying the NIMS session…"
+        CookieManager.getInstance().flush()
+        log("AUTH verify protected CR module")
+        webView.loadUrl(CR_RESULTS_URL)
+        handler.postDelayed({ inspectAndAdvance(0, userRequestedVerification = true) }, 700L)
     }
 
     private fun openPortalLoginNavigationIfDue() {
@@ -260,15 +310,18 @@ class LoginGateActivity : ComponentActivity() {
 
     private fun log(message: String) {
         if (diagnostics.isNotEmpty()) diagnostics.append('\n')
-        diagnostics.append(message.take(260))
+        diagnostics.append(message.take(280))
     }
 
     private fun safeStage(url: String): String = when {
-        url.contains("viewcrnowisereportprocess", ignoreCase = true) -> "cr_module"
+        isCrResultsRoute(url) -> "cr_module"
         isLoginRoute(url) -> "login_route"
         isAllowedNimsUrl(url) -> "nims_page"
         else -> "other"
     }
+
+    private fun isCrResultsRoute(url: String): Boolean =
+        url.contains("viewcrnowisereportprocess.cnt", ignoreCase = true)
 
     private fun isLoginRoute(url: String): Boolean = url.contains("loginLogin.action", ignoreCase = true)
 
@@ -296,9 +349,12 @@ class LoginGateActivity : ComponentActivity() {
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
+        private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
         private const val DESKTOP_CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_LOGIN_NAVIGATION_ATTEMPTS = 24
-        private const val MAX_POST_LOGIN_WAIT_ATTEMPTS = 30
+        private const val MAX_PROTECTED_VERIFY_ATTEMPTS = 24
+        private const val PROTECTED_ROUTE_SETTLE_PROBES = 2
+        private const val POST_LOGIN_SETTLE_MS = 1_500L
         private const val LOGIN_NAVIGATION_COOLDOWN_MS = 1_500L
 
         internal val LOGIN_GATE_SCRIPT: String = """
@@ -385,6 +441,18 @@ internal object LoginGatePolicy {
         !publicLanding &&
         !sessionExpired &&
         (leftLoginRoute || crReady || reportRows > 0 || logoutVisible)
+
+    fun canAcceptProtectedVerification(
+        loginFormSeen: Boolean,
+        loginVisible: Boolean,
+        sessionExpired: Boolean,
+        verificationStarted: Boolean,
+        protectedRoute: Boolean
+    ): Boolean = loginFormSeen &&
+        verificationStarted &&
+        protectedRoute &&
+        !loginVisible &&
+        !sessionExpired
 }
 
 @Composable
@@ -408,7 +476,7 @@ private fun LoginGateScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Button(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Check login") }
+            Button(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Continue to results") }
             OutlinedButton(onClick = onReloadLogin, modifier = Modifier.weight(1f)) { Text("Reload login") }
         }
         Row(
