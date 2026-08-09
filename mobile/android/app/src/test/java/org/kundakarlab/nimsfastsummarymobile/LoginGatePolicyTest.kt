@@ -86,6 +86,45 @@ class LoginGatePolicyTest {
     }
 
     @Test
+    fun explicitlyVerifiedProtectedCrRouteMayEnterResultsEvenBeforeCrDomIsReady() {
+        assertTrue(
+            LoginGatePolicy.canAcceptProtectedVerification(
+                loginFormSeen = true,
+                loginVisible = false,
+                sessionExpired = false,
+                verificationStarted = true,
+                protectedRoute = true
+            )
+        )
+    }
+
+    @Test
+    fun unrequestedProtectedRouteCannotBypassLoginGate() {
+        assertFalse(
+            LoginGatePolicy.canAcceptProtectedVerification(
+                loginFormSeen = true,
+                loginVisible = false,
+                sessionExpired = false,
+                verificationStarted = false,
+                protectedRoute = true
+            )
+        )
+    }
+
+    @Test
+    fun protectedRouteCannotPassIfLoginFormReturned() {
+        assertFalse(
+            LoginGatePolicy.canAcceptProtectedVerification(
+                loginFormSeen = true,
+                loginVisible = true,
+                sessionExpired = false,
+                verificationStarted = true,
+                protectedRoute = true
+            )
+        )
+    }
+
+    @Test
     fun expiredSessionCannotEnterResults() {
         assertFalse(
             LoginGatePolicy.canEnterResults(
@@ -99,14 +138,22 @@ class LoginGatePolicyTest {
                 logoutVisible = true
             )
         )
+        assertFalse(
+            LoginGatePolicy.canAcceptProtectedVerification(
+                loginFormSeen = true,
+                loginVisible = false,
+                sessionExpired = true,
+                verificationStarted = true,
+                protectedRoute = true
+            )
+        )
     }
 
     @Test
-    fun gateProbeIsReadOnlyAndDoesNotForceProtectedCrRoute() {
+    fun gateProbeRemainsReadOnly() {
         val script = LoginGateActivity.LOGIN_GATE_SCRIPT
         assertTrue(script.contains("String(x.type||'').toLowerCase()==='password'"))
         assertTrue(script.contains("sessionExpired"))
-        assertFalse(script.contains("viewcrnowisereportprocess.cnt"))
         assertFalse(script.contains(".click()"))
     }
 
