@@ -161,7 +161,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
             settings.setSupportMultipleWindows(false)
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
@@ -174,7 +174,17 @@ class ProductionWorkflowActivity : ComponentActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
         installRuntimeAtDocumentStart()
         addLog("BUILD versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
-        webView.loadUrl(NIMS_LOGIN_URL)
+        val verifiedHandoff = intent.getBooleanExtra(LoginGateActivity.EXTRA_VERIFIED_LOGIN, false)
+        if (verifiedHandoff) {
+            phase = ProductionPhase.OPENING_CR
+            status = "Opening the CR results module…"
+            addLog("SESSION_HANDOFF verified=true target=cr_module")
+            CookieManager.getInstance().flush()
+            webView.loadUrl(CR_RESULTS_URL)
+        } else {
+            addLog("SESSION_HANDOFF verified=false target=login")
+            webView.loadUrl(NIMS_LOGIN_URL)
+        }
 
         setContent {
             ProductionWorkflowTheme {
@@ -285,7 +295,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             }
             probe.authenticated -> {
                 authenticated = true
-                if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED)) {
+                if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED, ProductionPhase.OPENING_CR)) {
                     if (resumeFailedAfterLogin && retryableFailedRequests().isNotEmpty()) {
                         resumeFailedAfterLogin = false
                         retryAllFailed()
@@ -1007,6 +1017,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     companion object {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
+        private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
         private const val DESKTOP_CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
         private const val FETCH_WORKERS = 4
