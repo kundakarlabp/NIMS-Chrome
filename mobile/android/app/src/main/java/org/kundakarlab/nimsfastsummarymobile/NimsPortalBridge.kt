@@ -82,7 +82,7 @@ object NimsPortalBridge {
             try{if([...d.querySelectorAll('img,canvas')].some(x=>visible(x)&&/captcha|verification/i.test((x.alt||'')+' '+(x.id||'')+' '+(x.className||''))))captchaVisible=true;}catch(e){}
             if(pageActions.some(x=>visible(x)&&/^(?:login|log\s*in|sign\s*in|submit)$/i.test(actionText(x))))loginActionVisible=true;
 
-            if(inputs.some(x=>visible(x)&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bcr\s*(?:no|number)?\b|crno|crnum|patcrno|cr_number/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||''))))crReady=true;
+            if(inputs.some(x=>visible(x)&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bpatcrno\b|\bcr\s*(?:no|number)?\b|crno|crnum|cr_number/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||''))))crReady=true;
             try{reportRows=Math.max(reportRows,pageActions.filter(x=>/view\s*report/i.test(actionText(x))).length);}catch(e){}
 
             if(pageActions.some(x=>/^(?:logout|log\s*out|sign\s*out)$/i.test(actionText(x))))logoutControl=true;
@@ -96,7 +96,9 @@ object NimsPortalBridge {
 
           const loginVisible=passwordVisible||(usernameVisible&&(captchaVisible||loginActionVisible));
           const publicLanding=publicSignals&&!loginVisible&&!crReady&&reportRows===0&&!logoutControl&&!protectedModule;
-          const authenticated=!sessionExpired&&!loginVisible&&!publicLanding&&(crReady||reportRows>0||logoutControl||protectedModule);
+          // A protected URL by itself is not enough to call the page authenticated.
+          // The CR endpoint can exist before its dynamic form has actually rendered.
+          const authenticated=!sessionExpired&&!loginVisible&&!publicLanding&&(crReady||reportRows>0||logoutControl);
           let loginPreparation='not_needed';
           if(!authenticated&&!loginVisible&&!sessionExpired&&publicLanding)loginPreparation=prepareLogin(docs);
 
@@ -124,13 +126,67 @@ object NimsPortalBridge {
         return """
             (function(){
               const value=$escaped;
+              function collect(doc,out,seen,depth){
+                if(!doc||depth>7||seen.indexOf(doc)>=0)return;
+                seen.push(doc);out.push(doc);
+                let frames=[];try{frames=doc.querySelectorAll('iframe,frame');}catch(e){}
+                for(const frame of frames){try{const child=frame.contentDocument||(frame.contentWindow&&frame.contentWindow.document);if(child)collect(child,out,seen,depth+1);}catch(e){}}
+              }
+              function setValue(input,next){
+                try{
+                  const proto=Object.getPrototypeOf(input);
+                  const desc=proto&&Object.getOwnPropertyDescriptor(proto,'value');
+                  if(desc&&typeof desc.set==='function')desc.set.call(input,next);else input.value=next;
+                }catch(e){input.value=next;}
+                for(const name of ['input','change','blur']){try{input.dispatchEvent(new Event(name,{bubbles:true}));}catch(e){}}
+              }
+              function text(el){return String((el&&((el.innerText||el.textContent||el.value||el.title)||(el.getAttribute&&el.getAttribute('aria-label'))))||'').replace(/\s+/g,' ').trim();}
+              function findInput(doc){
+                let inputs=[];try{inputs=[...doc.querySelectorAll('input,textarea')];}catch(e){return null;}
+                let exact=inputs.find(x=>!x.disabled&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bpatcrno\b/i.test((x.id||'')+' '+(x.name||'')));
+                if(exact)return exact;
+                exact=inputs.find(x=>!x.disabled&&!x.readOnly&&String(x.type||'').toLowerCase()!=='hidden'&&/\bcr\s*(?:no|number)?\b|crno|crnum|cr_number/i.test((x.id||'')+' '+(x.name||'')+' '+(x.placeholder||'')+' '+(x.title||'')));
+                if(exact)return exact;
+                let form=null;try{form=doc.querySelector('form[name="viewExternalInvFB"],form#viewExternalInvFB,form[action*="viewcrnowisereportprocess.cnt"]');}catch(e){}
+                if(!form)return null;
+                let candidates=[];try{candidates=[...form.querySelectorAll('input:not([type="hidden"]),textarea')].filter(x=>!x.disabled&&!x.readOnly);}catch(e){}
+                return candidates.length===1?candidates[0]:null;
+              }
+              function submitDoc(doc){
+                const input=findInput(doc);if(!input)return null;
+                setValue(input,value);
+                let form=input.form||(input.closest&&input.closest('form'));
+                if(form){
+                  let hmode=null;try{hmode=form.querySelector('input[name="hmode"],input#hmode');}catch(e){}
+                  if(hmode&&!String(hmode.value||'').trim())hmode.value='SHOWPATDETAILS';
+                  let actions=[];try{actions=[...form.querySelectorAll('button,input[type=button],input[type=submit],a')];}catch(e){}
+                  const action=actions.find(x=>!x.disabled&&/^(?:go|search|submit|fetch\s*results?)$/i.test(text(x)))||actions.find(x=>!x.disabled&&/\b(?:go|search|submit|fetch)\b/i.test(text(x)));
+                  if(action){try{action.click();return {ok:true,reason:'clicked_cr_submit'};}catch(e){}}
+                }
+                const view=doc.defaultView||window;
+                for(const name of ['getCRWiseReport','getCrWiseReport','showCRWiseReport','showCrWiseReport','searchCrNo','searchCRNo','getPatientDetails','showPatientDetails']){
+                  try{if(typeof view[name]==='function'){try{view[name]();}catch(first){view[name](value);}return {ok:true,reason:'called_cr_function',functionName:name};}}catch(e){}
+                }
+                if(form){try{if(typeof form.requestSubmit==='function')form.requestSubmit();else if(typeof form.submit==='function')form.submit();else return null;return {ok:true,reason:'submitted_cr_form'};}catch(e){}}
+                return null;
+              }
+
               try{
-                if(typeof window.__nimsSubmitCrNumber==='function') return JSON.stringify(window.__nimsSubmitCrNumber(value));
+                if(typeof window.__nimsSubmitCrNumber==='function'){
+                  const bridged=window.__nimsSubmitCrNumber(value);
+                  if(bridged&&bridged.ok)return JSON.stringify(bridged);
+                }
               }catch(e){}
+
+              const docs=[];collect(document,docs,[],0);
+              for(let i=docs.length-1;i>=0;i--){
+                try{const result=submitDoc(docs[i]);if(result&&result.ok){result.documentCount=docs.length;return JSON.stringify(result);}}catch(e){}
+              }
+
               const proxy=document.getElementById('__nims_cr_proxy_input');
               const go=document.getElementById('__nims_cr_proxy_go');
-              if(proxy&&go){proxy.value=value;go.click();return JSON.stringify({ok:true,reason:'proxy_started'});}
-              return JSON.stringify({ok:false,reason:'bridge_not_ready'});
+              if(proxy&&go){proxy.value=value;go.click();return JSON.stringify({ok:true,reason:'proxy_started',documentCount:docs.length});}
+              return JSON.stringify({ok:false,reason:'cr_field_not_ready',documentCount:docs.length});
             })();
         """.trimIndent()
     }

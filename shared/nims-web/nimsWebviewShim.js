@@ -80,32 +80,80 @@
     return String((element && (element.innerText || element.textContent || element.value || element.title || element.name || element.id)) || "").trim();
   }
 
+  function documentHref(doc) {
+    try { return String(doc && doc.location && doc.location.href || ""); } catch (_error) { return ""; }
+  }
+
+  function isCrContext(doc) {
+    var href = documentHref(doc);
+    if (/\/HISInvestigationG5\/new_investigation\/viewcrnowisereportprocess\.cnt/i.test(href)) return true;
+    try {
+      if (doc.querySelector('form[name="viewExternalInvFB"],form#viewExternalInvFB,form[action*="viewcrnowisereportprocess.cnt"]')) return true;
+    } catch (_error) { /* continue */ }
+    var text = "";
+    try { text = String((doc.body && doc.body.innerText) || ""); } catch (_error2) { text = ""; }
+    return /CR\s*(?:No|Number)|CR\s*Wise\s*Result\s*Report/i.test(text);
+  }
+
   function findCrInput(doc) {
     var inputs;
     try { inputs = doc.querySelectorAll("input,textarea"); } catch (_error) { return null; }
-    var fallback = null;
+
+    // The live G5 CR form uses patCrNo. Prefer that exact contract first.
     for (var i = 0; i < inputs.length; i += 1) {
-      var input = inputs[i];
+      var exact = inputs[i];
+      if (exact.disabled || exact.readOnly || String(exact.type || "").toLowerCase() === "hidden") continue;
+      var exactSignature = [exact.id, exact.name].join(" ");
+      if (/\bpatcrno\b/i.test(exactSignature)) return exact;
+    }
+
+    for (var j = 0; j < inputs.length; j += 1) {
+      var input = inputs[j];
       if (input.disabled || input.readOnly || String(input.type || "").toLowerCase() === "hidden") continue;
       var signature = [input.id, input.name, input.placeholder, input.title, input.getAttribute && input.getAttribute("aria-label")].join(" ");
-      if (/\bcr\s*(?:no|number)?\b|crno|crnum|patcrno|cr_number/i.test(signature)) return input;
-      if (!fallback && /^(?:text|number|tel|search)?$/i.test(String(input.type || ""))) fallback = input;
+      if (/\bcr\s*(?:no|number)?\b|crno|crnum|cr_number/i.test(signature)) return input;
     }
-    return fallback;
+
+    // Never accept an arbitrary text field outside a validated CR-search form.
+    if (!isCrContext(doc)) return null;
+    var form = null;
+    try { form = doc.querySelector('form[name="viewExternalInvFB"],form#viewExternalInvFB,form[action*="viewcrnowisereportprocess.cnt"]'); } catch (_error3) { form = null; }
+    if (!form) return null;
+    var formInputs;
+    try { formInputs = form.querySelectorAll('input:not([type="hidden"]),textarea'); } catch (_error4) { return null; }
+    if (formInputs.length !== 1) return null;
+    var candidate = formInputs[0];
+    if (candidate.disabled || candidate.readOnly) return null;
+    return candidate;
   }
 
-  function findSubmitAction(doc) {
-    var actions;
-    try { actions = doc.querySelectorAll("button,input[type=button],input[type=submit],a"); } catch (_error) { return null; }
-    var broad = null;
-    for (var i = 0; i < actions.length; i += 1) {
-      var action = actions[i];
-      if (action.disabled) continue;
-      var text = elementText(action);
-      if (/^(?:go|search|view|submit|fetch\s*results?)$/i.test(text)) return action;
-      if (!broad && /\b(?:go|search|view|submit|fetch)\b/i.test(text)) broad = action;
+  function findSubmitAction(doc, input) {
+    var form = input && (input.form || (input.closest && input.closest("form")));
+    var actions = [];
+    if (form) {
+      try { actions = form.querySelectorAll("button,input[type=button],input[type=submit],a"); } catch (_error) { actions = []; }
+      for (var i = 0; i < actions.length; i += 1) {
+        var local = actions[i];
+        if (local.disabled || local.__nimsProxyAction) continue;
+        if (/^(?:go|search|submit|fetch\s*results?)$/i.test(elementText(local))) return local;
+      }
+      for (var j = 0; j < actions.length; j += 1) {
+        var localBroad = actions[j];
+        if (localBroad.disabled || localBroad.__nimsProxyAction) continue;
+        if (/\b(?:go|search|submit|fetch)\b/i.test(elementText(localBroad))) return localBroad;
+      }
     }
-    return broad;
+
+    // Global fallback is permitted only inside a validated CR context and never
+    // uses generic "View" actions, which can belong to report rows.
+    if (!isCrContext(doc)) return null;
+    try { actions = doc.querySelectorAll("button,input[type=button],input[type=submit],a"); } catch (_error2) { return null; }
+    for (var k = 0; k < actions.length; k += 1) {
+      var action = actions[k];
+      if (action.disabled || action.__nimsProxyAction) continue;
+      if (/^(?:go|search|submit|fetch\s*results?)$/i.test(elementText(action))) return action;
+    }
+    return null;
   }
 
   function assignValue(input, value) {
@@ -122,34 +170,60 @@
     });
   }
 
+  function ensureCrMode(doc, input) {
+    var form = input && (input.form || (input.closest && input.closest("form")));
+    if (!form) return;
+    var hmode = null;
+    try { hmode = form.querySelector('input[name="hmode"],input#hmode'); } catch (_error) { hmode = null; }
+    if (hmode && !String(hmode.value || "").trim()) hmode.value = "SHOWPATDETAILS";
+  }
+
+  function invokeKnownCrFunction(doc, input) {
+    var view = doc.defaultView || w;
+    var candidates = [
+      "getCRWiseReport", "getCrWiseReport", "showCRWiseReport", "showCrWiseReport",
+      "searchCrNo", "searchCRNo", "getPatientDetails", "showPatientDetails"
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      try {
+        if (typeof view[candidates[i]] === "function") {
+          // Most G5 functions read patCrNo from the DOM, so call with no
+          // arguments first; a harmless value argument is used only as fallback.
+          try { view[candidates[i]](); } catch (_first) { view[candidates[i]](String(input.value || "")); }
+          return candidates[i];
+        }
+      } catch (_ignoredFunction) { /* continue */ }
+    }
+    return "";
+  }
+
   function submitThroughDocument(doc, crNumber) {
     var input = findCrInput(doc);
-    if (!input || input.__nimsProxyInput) return false;
+    if (!input || input.__nimsProxyInput) return null;
     assignValue(input, crNumber);
-    var action = findSubmitAction(doc);
+    ensureCrMode(doc, input);
+
+    var action = findSubmitAction(doc, input);
     if (action && !action.__nimsProxyAction) {
-      try { action.click(); return true; } catch (_ignoredClick) { /* try form */ }
+      try {
+        action.click();
+        return { ok: true, reason: "clicked_cr_submit", field: /patcrno/i.test(String(input.name || input.id || "")) ? "patCrNo" : "cr" };
+      } catch (_ignoredClick) { /* try function/form */ }
     }
+
+    var functionName = invokeKnownCrFunction(doc, input);
+    if (functionName) return { ok: true, reason: "called_cr_function", functionName: functionName };
+
     var form = input.form || (input.closest && input.closest("form"));
     if (form) {
       try {
         if (typeof form.requestSubmit === "function") form.requestSubmit();
         else if (typeof form.submit === "function") form.submit();
-        else return false;
-        return true;
-      } catch (_ignoredForm) { /* try page functions */ }
+        else return null;
+        return { ok: true, reason: "submitted_cr_form" };
+      } catch (_ignoredForm) { /* no more fallbacks */ }
     }
-    var view = doc.defaultView || w;
-    var candidates = ["getCRWiseReport", "getCrWiseReport", "showCRWiseReport", "showCrWiseReport", "searchCrNo", "searchCRNo", "submitForm"];
-    for (var i = 0; i < candidates.length; i += 1) {
-      try {
-        if (typeof view[candidates[i]] === "function") {
-          view[candidates[i]]();
-          return true;
-        }
-      } catch (_ignoredFunction) { /* continue */ }
-    }
-    return false;
+    return null;
   }
 
   function submitCrNumber(crNumber) {
@@ -157,7 +231,11 @@
     if (value.length < 6) return { ok: false, reason: "invalid_cr" };
     var docs = allDocuments();
     for (var i = docs.length - 1; i >= 0; i -= 1) {
-      if (submitThroughDocument(docs[i], value)) return { ok: true, reason: "submitted", documentCount: docs.length };
+      var result = submitThroughDocument(docs[i], value);
+      if (result && result.ok) {
+        result.documentCount = docs.length;
+        return result;
+      }
     }
     return { ok: false, reason: "cr_field_not_ready", documentCount: docs.length };
   }
@@ -165,7 +243,10 @@
   w.__nimsSubmitCrNumber = submitCrNumber;
   w.__nimsCrFieldReady = function () {
     var docs = allDocuments();
-    for (var i = 0; i < docs.length; i += 1) if (findCrInput(docs[i])) return true;
+    for (var i = docs.length - 1; i >= 0; i -= 1) {
+      var input = findCrInput(docs[i]);
+      if (input && !input.__nimsProxyInput) return true;
+    }
     return false;
   };
 

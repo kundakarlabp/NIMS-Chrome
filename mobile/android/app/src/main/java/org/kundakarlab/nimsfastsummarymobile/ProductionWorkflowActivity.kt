@@ -148,6 +148,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private var runtimePayload: String = ""
     private var resultListBaseline: String = ""
     private var lastCompletedCr: String = ""
+    private var crReadinessPollActive = false
+    private var pendingCrSubmitAfterReady = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,7 +169,11 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
                 override fun onPageFinished(view: WebView, url: String) {
                     injectRuntimeFallback()
-                    probePortalSoon(120L)
+                    if (phase == ProductionPhase.OPENING_CR) {
+                        mainHandler.postDelayed({ waitForCrReady(0) }, 120L)
+                    } else {
+                        probePortalSoon(120L)
+                    }
                 }
             }
         }
@@ -269,6 +275,18 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 sessionExpired = json.optBoolean("sessionExpired"),
                 documentCount = json.optInt("documentCount")
             )
+            if (phase in setOf(
+                    ProductionPhase.OPENING_CR,
+                    ProductionPhase.CR_READY,
+                    ProductionPhase.SUBMITTING_CR,
+                    ProductionPhase.WAITING_RESULTS
+                )
+            ) {
+                addLog(
+                    "CR_PROBE phase=${phase.name} ready=${probe.crReady} rows=${probe.reportRows} " +
+                        "auth=${probe.authenticated} expired=${probe.sessionExpired} docs=${probe.documentCount}"
+                )
+            }
             applyPortalProbe(probe, manual)
             callback?.invoke(probe)
         }
@@ -277,6 +295,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private fun applyPortalProbe(probe: PortalProbe, manual: Boolean) {
         when {
             probe.sessionExpired -> {
+                crReadinessPollActive = false
+                pendingCrSubmitAfterReady = false
                 authenticated = false
                 crModuleReady = false
                 phase = ProductionPhase.SESSION_EXPIRED
@@ -295,7 +315,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             }
             probe.authenticated -> {
                 authenticated = true
-                if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED, ProductionPhase.OPENING_CR)) {
+                if (phase in setOf(ProductionPhase.LOGIN, ProductionPhase.SESSION_EXPIRED)) {
                     if (resumeFailedAfterLogin && retryableFailedRequests().isNotEmpty()) {
                         resumeFailedAfterLogin = false
                         retryAllFailed()
@@ -305,6 +325,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
                 }
             }
             probe.loginVisible -> {
+                crReadinessPollActive = false
+                pendingCrSubmitAfterReady = false
                 authenticated = false
                 crModuleReady = false
                 if (phase != ProductionPhase.SESSION_EXPIRED) phase = ProductionPhase.LOGIN
@@ -327,20 +349,39 @@ class ProductionWorkflowActivity : ComponentActivity() {
         }
     }
 
-    private fun waitForCrReady(attempt: Int) {
+    private fun waitForCrReady(attempt: Int, submitWhenReady: Boolean = false) {
+        if (attempt == 0) {
+            if (crReadinessPollActive) {
+                if (submitWhenReady) pendingCrSubmitAfterReady = true
+                return
+            }
+            crReadinessPollActive = true
+            if (submitWhenReady) pendingCrSubmitAfterReady = true
+        }
         probePortal(manual = false) { probe ->
             when {
-                probe.crReady || probe.loginVisible || probe.sessionExpired -> Unit
+                probe.crReady -> {
+                    crReadinessPollActive = false
+                    if (submitWhenReady || pendingCrSubmitAfterReady) {
+                        pendingCrSubmitAfterReady = false
+                        beginCrSubmission()
+                    }
+                }
+                probe.loginVisible || probe.sessionExpired -> {
+                    crReadinessPollActive = false
+                    pendingCrSubmitAfterReady = false
+                }
                 attempt >= CR_READY_MAX_ATTEMPTS -> {
+                    crReadinessPollActive = false
                     phase = ProductionPhase.OPENING_CR
                     status = "The NIMS CR module did not become ready. Retry or login again."
                 }
                 attempt > 0 && attempt % CR_NAVIGATION_NUDGE_INTERVAL == 0 -> {
                     webView.evaluateJavascript(NimsPortalNavigationScripts.openCrModule) {
-                        mainHandler.postDelayed({ waitForCrReady(attempt + 1) }, 350L)
+                        mainHandler.postDelayed({ waitForCrReady(attempt + 1, submitWhenReady) }, 350L)
                     }
                 }
-                else -> mainHandler.postDelayed({ waitForCrReady(attempt + 1) }, 350L)
+                else -> mainHandler.postDelayed({ waitForCrReady(attempt + 1, submitWhenReady) }, 350L)
             }
         }
     }
@@ -351,10 +392,16 @@ class ProductionWorkflowActivity : ComponentActivity() {
             return
         }
         if (!crModuleReady) {
-            status = "Preparing the CR module. Please wait."
-            waitForCrReady(0)
+            pendingCrSubmitAfterReady = true
+            status = "Preparing the CR module. Fetch will continue automatically."
+            waitForCrReady(0, submitWhenReady = true)
             return
         }
+        beginCrSubmission()
+    }
+
+    private fun beginCrSubmission() {
+        if (crNumber.length < 6 || phase in setOf(ProductionPhase.SUBMITTING_CR, ProductionPhase.WAITING_RESULTS, ProductionPhase.PROCESSING)) return
         phase = ProductionPhase.SUBMITTING_CR
         status = "Preparing CR submission…"
         webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript(crNumber)) { raw ->
@@ -367,7 +414,11 @@ class ProductionWorkflowActivity : ComponentActivity() {
     private fun submitCrAttempt(attempt: Int) {
         webView.evaluateJavascript(NimsPortalBridge.submitCrScript(crNumber)) { raw ->
             val result = decodeObject(raw)
-            if (result.optBoolean("ok")) {
+            val ok = result.optBoolean("ok")
+            val reason = result.optString("reason", "unknown").take(48)
+            val docs = result.optInt("documentCount", 0)
+            addLog("CR_SUBMIT attempt=$attempt ok=$ok reason=$reason docs=$docs")
+            if (ok) {
                 activeCrNumber = crNumber
                 phase = ProductionPhase.WAITING_RESULTS
                 status = "Waiting for the report list…"
@@ -375,6 +426,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
             } else if (attempt < CR_SUBMIT_MAX_ATTEMPTS) {
                 mainHandler.postDelayed({ submitCrAttempt(attempt + 1) }, 350L)
             } else {
+                pendingCrSubmitAfterReady = true
                 crModuleReady = false
                 phase = ProductionPhase.OPENING_CR
                 status = "The CR field is not ready. Reopening the NIMS CR module…"
@@ -387,15 +439,21 @@ class ProductionWorkflowActivity : ComponentActivity() {
         webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript(crNumber)) { raw ->
             val result = decodeObject(raw)
             val ready = result.optBoolean("ready")
+            val rowCount = result.optInt("rowCount", 0)
             val signature = result.optString("signature")
             val expectedCrVisible = result.optBoolean("crMatch")
             val sameKnownCr = crNumber.isNotBlank() && crNumber == lastCompletedCr
+            val changed = resultListBaseline.isBlank() || signature != resultListBaseline
             val listConfirmed = ready && (
-                resultListBaseline.isBlank() ||
-                    signature != resultListBaseline ||
+                changed ||
                     expectedCrVisible ||
                     sameKnownCr
                 )
+            if (attempt == 0 || attempt % 8 == 0 || ready) {
+                addLog(
+                    "CR_LIST attempt=$attempt ready=$ready rows=$rowCount crMatch=$expectedCrVisible changed=$changed"
+                )
+            }
             when {
                 listConfirmed -> {
                     lastCompletedCr = crNumber
@@ -786,6 +844,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun loginAgain() {
+        crReadinessPollActive = false
+        pendingCrSubmitAfterReady = false
         authenticated = false
         crModuleReady = false
         phase = ProductionPhase.LOGIN
@@ -826,6 +886,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
         progressDone = 0
         progressTotal = 0
         isProcessing = false
+        crReadinessPollActive = false
+        pendingCrSubmitAfterReady = false
         if (clearLastCompletedCr) lastCompletedCr = ""
         closePdf()
     }
@@ -1009,6 +1071,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
         activeJob?.cancel()
         summaryJob?.cancel()
         mainHandler.removeCallbacksAndMessages(null)
+        crReadinessPollActive = false
+        pendingCrSubmitAfterReady = false
         closePdf()
         reportByteCache.clear()
         runCatching { webView.destroy() }

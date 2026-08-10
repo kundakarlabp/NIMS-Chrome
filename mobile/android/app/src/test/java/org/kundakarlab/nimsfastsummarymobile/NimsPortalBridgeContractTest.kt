@@ -11,7 +11,8 @@ class NimsPortalBridgeContractTest {
 
         assertTrue(script.contains("const publicLanding=publicSignals"))
         assertTrue(script.contains("const authenticated=!sessionExpired&&!loginVisible&&!publicLanding"))
-        assertTrue(script.contains("crReady||reportRows>0||logoutControl||protectedModule"))
+        assertTrue(script.contains("crReady||reportRows>0||logoutControl"))
+        assertFalse(script.contains("crReady||reportRows>0||logoutControl||protectedModule"))
         assertFalse(
             script.contains(
                 "if(/logout|sign\\s*out|investigation|cr\\s*wise\\s*report/.test(lower)) authenticatedShell=true;"
