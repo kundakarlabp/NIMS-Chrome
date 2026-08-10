@@ -14,12 +14,24 @@ class NimsPortalBridgeTest {
     }
 
     @Test
-    fun crSubmissionUsesInjectedBridgeAndRemovesNonDigits() {
+    fun protectedUrlAloneIsNotAuthenticatedCrReadiness() {
+        val script = NimsPortalBridge.probeScript
+        assertTrue(script.contains("protectedModule"))
+        assertTrue(script.contains("crReady||reportRows>0||logoutControl"))
+        assertFalse(script.contains("crReady||reportRows>0||logoutControl||protectedModule"))
+    }
+
+    @Test
+    fun crSubmissionUsesInjectedBridgeAndExactDirectFallback() {
         val script = NimsPortalBridge.submitCrScript("3310-121-00872674")
         assertTrue(script.contains("331012100872674"))
         assertTrue(script.contains("__nimsSubmitCrNumber"))
-        assertTrue(script.contains("__nims_cr_proxy_input"))
+        assertTrue(script.contains("patcrno"))
+        assertTrue(script.contains("viewExternalInvFB"))
+        assertTrue(script.contains("clicked_cr_submit"))
+        assertTrue(script.contains("SHOWPATDETAILS"))
         assertFalse(script.contains("3310-121"))
+        assertFalse(script.contains("/view\\s*report/"))
     }
 
     @Test
