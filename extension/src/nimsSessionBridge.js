@@ -172,13 +172,67 @@
     return { ok: true, patient: patientIdentity(), reports, reportCount: rows.length };
   }
 
+  async function readSummaryState() {
+    const data = await chrome.storage.local.get("nimsFastSummaryState");
+    return data.nimsFastSummaryState || null;
+  }
+
+  async function mappingIsValidated() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "NIMS_GET_MAPPING_SUMMARY" });
+      const summary = response && response.summary;
+      return Boolean(
+        response && response.ok
+        && summary
+        && summary.status === "validated"
+        && summary.lastTestDirectFetch
+        && summary.lastTestDirectFetch.ok === true
+        && summary.lastTestDirectFetch.parsed === true
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function prepareDirectMapping() {
+    if (await mappingIsValidated()) return { ok: true, reused: true };
+    if (!window.NimsFastSummary || typeof window.NimsFastSummary.discoverMapping !== "function") {
+      return { ok: false, error: "NIMS report mapping discovery is not ready." };
+    }
+    const discovery = await window.NimsFastSummary.discoverMapping();
+    if (!discovery || discovery.ok === false) {
+      return { ok: false, error: (discovery && discovery.error) || "Unable to learn the NIMS report request." };
+    }
+    await window.NimsFastSummary.runSummary("test_direct");
+    const testState = await readSummaryState();
+    if (!testState || /^Error:/i.test(String(testState.progress || ""))) {
+      return {
+        ok: false,
+        error: testState && testState.progress
+          ? testState.progress.replace(/^Error:\s*/i, "")
+          : "NIMS direct report validation failed."
+      };
+    }
+    if (!(await mappingIsValidated())) {
+      const firstError = testState.parsedReports && testState.parsedReports[0] && testState.parsedReports[0].errors
+        ? testState.parsedReports[0].errors[0]
+        : "";
+      return { ok: false, error: firstError || "NIMS report mapping could not be validated." };
+    }
+    return { ok: true, reused: false };
+  }
+
   async function runSummary(mode) {
     if (!window.NimsFastSummary || typeof window.NimsFastSummary.runSummary !== "function") {
       return { ok: false, error: "NIMS result processor is not ready." };
     }
-    await window.NimsFastSummary.runSummary(mode || "bulk_full");
-    const data = await chrome.storage.local.get("nimsFastSummaryState");
-    const state = data.nimsFastSummaryState || null;
+    const requestedMode = mode || "bulk_full";
+    if (requestedMode === "bulk_fast" || requestedMode === "bulk_full" || requestedMode === "bulk_cultures_only") {
+      const prepared = await prepareDirectMapping();
+      if (!prepared.ok) return prepared;
+    }
+    await window.NimsFastSummary.runSummary(requestedMode);
+    const state = await readSummaryState();
     if (!state || /^Error:/i.test(String(state.progress || ""))) {
       return { ok: false, error: state && state.progress ? state.progress.replace(/^Error:\s*/i, "") : "NIMS result processing failed.", state };
     }
