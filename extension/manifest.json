@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIMS Fast Summary",
-  "version": "0.4.1",
+  "version": "0.4.0",
   "description": "Local fast summary tables for NIMS HIS reports after manual login.",
   "permissions": [
     "storage",
@@ -27,8 +27,7 @@
     "https://www.nimsts.edu.in/HBIMS/*",
     "http://127.0.0.1:8765/*",
     "https://*.railway.app/*",
-    "https://*.up.railway.app/*",
-    "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
+    "https://*.up.railway.app/*"
   ],
   "content_scripts": [
     {
@@ -55,38 +54,6 @@
       ],
       "css": [
         "src/styles.css"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
-    },
-    {
-      "matches": [
-        "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
-      ],
-      "js": [
-        "src/dashboardBridge.js"
-      ],
-      "run_at": "document_start"
-    },
-    {
-      "matches": [
-        "https://nimsts.edu.in/AHIMSG5/*",
-        "https://nimsts.edu.in/HISInvestigationG5/*",
-        "https://nimsts.edu.in/HIS/*",
-        "https://nimsts.edu.in/hislogin/*",
-        "https://nimsts.edu.in/HISUtilities/*",
-        "https://nimsts.edu.in/HBIMS/*",
-        "https://www.nimsts.edu.in/AHIMSG5/*",
-        "https://www.nimsts.edu.in/HISInvestigationG5/*",
-        "https://www.nimsts.edu.in/HIS/*",
-        "https://www.nimsts.edu.in/hislogin/*",
-        "https://www.nimsts.edu.in/HISUtilities/*",
-        "https://www.nimsts.edu.in/HBIMS/*"
-      ],
-      "js": [
-        "src/nimsSessionBridge.js"
       ],
       "run_at": "document_idle",
       "all_frames": true,
