@@ -62,6 +62,7 @@
     const href = String(location.href || "");
     const body = text(document.body).slice(0, 12000);
     const loginForm = Boolean(document.querySelector('input[type="password"]')) && /login|sign\s*in|captcha|user\s*name/i.test(body);
+    const sessionExpired = /session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again|session\s*timeout/i.test(body);
     const crFieldReady = Boolean(findCrInput());
     const rows = reportRows();
     const protectedModule = /\/HISInvestigationG5\//i.test(href)
@@ -72,7 +73,8 @@
     return {
       href,
       loginForm,
-      authenticated: Boolean(!loginForm && protectedModule),
+      authenticated: Boolean(!loginForm && !sessionExpired && protectedModule),
+      sessionExpired,
       crFieldReady,
       reportRows: rows.length,
       patient: patientIdentity()
