@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIMS Fast Summary",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local fast summary tables for NIMS HIS reports after manual login.",
   "permissions": [
     "storage",
@@ -27,7 +27,8 @@
     "https://www.nimsts.edu.in/HBIMS/*",
     "http://127.0.0.1:8765/*",
     "https://*.railway.app/*",
-    "https://*.up.railway.app/*"
+    "https://*.up.railway.app/*",
+    "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
   ],
   "content_scripts": [
     {
@@ -50,7 +51,8 @@
         "src/contentUtils.js",
         "src/contentScript.js",
         "src/manualAnalysisUtils.js",
-        "src/manualAnalysis.js"
+        "src/manualAnalysis.js",
+        "src/nimsSessionBridge.js"
       ],
       "css": [
         "src/styles.css"
@@ -59,6 +61,15 @@
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
+      ],
+      "js": [
+        "src/dashboardBridge.js"
+      ],
+      "run_at": "document_start"
     }
   ],
   "background": {
