@@ -124,6 +124,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "NIMS_SESSION_STATE") {
+    handleDashboardSessionState(message.state || {}, sender).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === "NIMS_DASHBOARD_STATUS") {
+    getDashboardSessionStatus().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_DASHBOARD_LOGIN") {
+    openDashboardLogin(sender).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "NIMS_DASHBOARD_FETCH_CR") {
+    fetchCrForDashboard(message.crNo, sender).then(sendResponse);
+    return true;
+  }
+
   return false;
 });
 
@@ -1021,3 +1041,268 @@ async function detectHtmlAuthFailure(buffer, contentType) {
   return "HTML response is not a recognizable report";
 }
 
+
+
+const DASHBOARD_URL_PATTERN = "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*";
+const NIMS_LOGIN_URL_DASHBOARD = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action";
+let dashboardLoginWindowId = null;
+let dashboardHostWindowId = null;
+let dashboardWorkerTabId = null;
+let dashboardLastAuthenticated = null;
+
+async function pushDashboardEvent(eventType, payload) {
+  const tabs = await chrome.tabs.query({ url: [DASHBOARD_URL_PATTERN] }).catch(() => []);
+  await Promise.all(tabs.map(tab => tab.id
+    ? chrome.tabs.sendMessage(tab.id, { type: "NIMS_DASHBOARD_EVENT", eventType, payload: payload || {} }).catch(() => {})
+    : Promise.resolve()));
+}
+
+async function handleDashboardSessionState(state, sender) {
+  const tab = sender && sender.tab;
+  if (!tab || !tab.id) return;
+  if (state && state.authenticated) {
+    dashboardWorkerTabId = tab.id;
+    dashboardLastAuthenticated = {
+      tabId: tab.id,
+      frameId: typeof sender.frameId === "number" ? sender.frameId : 0,
+      patient: state.patient || {},
+      updatedAt: Date.now()
+    };
+    if (dashboardLoginWindowId && tab.windowId === dashboardLoginWindowId && dashboardHostWindowId) {
+      try {
+        await chrome.tabs.move(tab.id, { windowId: dashboardHostWindowId, index: -1 });
+        await chrome.tabs.update(tab.id, { active: false });
+      } catch {}
+      try { await chrome.windows.remove(dashboardLoginWindowId); } catch {}
+      dashboardLoginWindowId = null;
+    }
+    await pushDashboardEvent("KBP_NIMS_STATUS", { ok: true, loggedIn: true, state: "logged_in" });
+  }
+}
+
+async function frameIdsForTab(tabId) {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => []);
+  const ids = frames.map(frame => frame.frameId);
+  return ids.length ? ids : [0];
+}
+
+async function messageFrames(tabId, message) {
+  const frameIds = await frameIdsForTab(tabId);
+  const out = [];
+  for (const frameId of frameIds) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, message, { frameId });
+      if (response) out.push({ frameId, response });
+    } catch {}
+  }
+  return out;
+}
+
+async function probeNimsTab(tabId) {
+  const responses = await messageFrames(tabId, { type: "NIMS_BRIDGE_PROBE" });
+  const states = responses.map(item => ({ frameId: item.frameId, ...(item.response.state || {}) }));
+  return {
+    tabId,
+    states,
+    authenticated: states.some(state => state.authenticated),
+    crFrame: states.find(state => state.crFieldReady) || null,
+    reportFrame: states.find(state => Number(state.reportRows || 0) > 0) || null
+  };
+}
+
+async function getDashboardSessionStatus() {
+  const tabs = await chrome.tabs.query({
+    url: [
+      "https://nimsts.edu.in/AHIMSG5/*",
+      "https://www.nimsts.edu.in/AHIMSG5/*",
+      "https://nimsts.edu.in/HISInvestigationG5/*",
+      "https://www.nimsts.edu.in/HISInvestigationG5/*",
+      "https://nimsts.edu.in/hislogin/*",
+      "https://www.nimsts.edu.in/hislogin/*"
+    ]
+  }).catch(() => []);
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const probe = await probeNimsTab(tab.id);
+    if (probe.authenticated) {
+      dashboardWorkerTabId = tab.id;
+      dashboardLastAuthenticated = { tabId: tab.id, frameId: 0, updatedAt: Date.now() };
+      return { ok: true, loggedIn: true, state: "logged_in" };
+    }
+  }
+  return { ok: true, loggedIn: false, state: dashboardLoginWindowId ? "signing_in" : "logged_out" };
+}
+
+async function openDashboardLogin(sender) {
+  const current = await getDashboardSessionStatus();
+  if (current.loggedIn) return current;
+  dashboardHostWindowId = sender && sender.tab ? sender.tab.windowId : null;
+  if (dashboardLoginWindowId) {
+    try {
+      await chrome.windows.update(dashboardLoginWindowId, { focused: true });
+      return { ok: true, loggedIn: false, state: "signing_in" };
+    } catch {
+      dashboardLoginWindowId = null;
+    }
+  }
+  const created = await chrome.windows.create({
+    url: NIMS_LOGIN_URL_DASHBOARD,
+    type: "popup",
+    width: 1160,
+    height: 820,
+    focused: true
+  });
+  dashboardLoginWindowId = created.id || null;
+  await pushDashboardEvent("KBP_NIMS_STATUS", { ok: true, loggedIn: false, state: "signing_in" });
+  return { ok: true, loggedIn: false, state: "signing_in" };
+}
+
+async function waitForTabCompleteSafe(tabId, timeoutMs = 15000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === "complete") return true;
+    } catch { return false; }
+    await delay(250);
+  }
+  return false;
+}
+
+async function ensureDashboardWorkerTab() {
+  if (dashboardWorkerTabId) {
+    try {
+      await chrome.tabs.get(dashboardWorkerTabId);
+      const probe = await probeNimsTab(dashboardWorkerTabId);
+      if (probe.authenticated) return dashboardWorkerTabId;
+    } catch {}
+  }
+  const status = await getDashboardSessionStatus();
+  if (status.loggedIn && dashboardWorkerTabId) return dashboardWorkerTabId;
+  const created = await chrome.tabs.create({ url: NIMS_LOGIN_URL_DASHBOARD, active: false });
+  if (!created.id) throw new Error("Unable to open authenticated NIMS session.");
+  dashboardWorkerTabId = created.id;
+  await waitForTabCompleteSafe(created.id);
+  for (let i = 0; i < 20; i += 1) {
+    const probe = await probeNimsTab(created.id);
+    if (probe.authenticated) return created.id;
+    await delay(350);
+  }
+  throw new Error("NIMS session is not authenticated. Sign in again.");
+}
+
+async function findCrFrame(tabId) {
+  for (let attempt = 0; attempt < 18; attempt += 1) {
+    const probe = await probeNimsTab(tabId);
+    if (probe.crFrame) return probe.crFrame.frameId;
+    await messageFrames(tabId, { type: "NIMS_BRIDGE_OPEN_CR" });
+    await delay(attempt < 5 ? 550 : 900);
+  }
+  throw new Error("Unable to open the NIMS CR-wise results page.");
+}
+
+async function waitForReportFrame(tabId) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const probe = await probeNimsTab(tabId);
+    if (probe.reportFrame) return probe.reportFrame.frameId;
+    await delay(500);
+  }
+  throw new Error("NIMS did not return a result list for this CR number.");
+}
+
+function cultureNarrative(culture) {
+  if (!culture) return "";
+  const organisms = Array.isArray(culture.organisms) && culture.organisms.length
+    ? culture.organisms.join(", ")
+    : String(culture.organism || "");
+  const pieces = [
+    culture.site_specimen || culture.site || culture.specimen || "",
+    culture.result || culture.result_status || "",
+    organisms,
+    culture.growth_quantity || "",
+    culture.comment || "",
+    Array.isArray(culture.susceptible_antibiotics) && culture.susceptible_antibiotics.length ? "Susceptible: " + culture.susceptible_antibiotics.join(", ") : "",
+    Array.isArray(culture.resistant_antibiotics) && culture.resistant_antibiotics.length ? "Resistant: " + culture.resistant_antibiotics.join(", ") : ""
+  ].filter(Boolean);
+  return pieces.join(" · ");
+}
+
+function bundleFromParsedReports(crNo, extracted, state) {
+  const reports = (extracted && extracted.reports) || [];
+  const linkByKey = new Map(reports.map(report => [[report.title || "", report.date || ""].join("|"), report.url || ""]));
+  const results = [];
+  let resultIndex = 0;
+  const parsedReports = (state && state.parsedReports) || [];
+  for (const report of parsedReports) {
+    const key = [report.report_name || "", report.date_sent || ""].join("|");
+    const pdfUrl = linkByKey.get(key) || "";
+    for (const parameter of report.parameters || []) {
+      results.push({
+        id: "nims-" + (++resultIndex),
+        group: report.report_type || (report.report_tags || []).join(", "),
+        test: report.report_name || parameter.name || "Investigation",
+        parameter: parameter.canonical_name || parameter.name || "Result",
+        date: parameter.date_sent || report.date_sent || "",
+        value: parameter.value == null ? "" : String(parameter.value),
+        unit: parameter.unit || "",
+        refRange: parameter.reference_range || "",
+        abnormal: parameter.abnormal_flag || "unknown",
+        reportId: report.report_id || "",
+        pdfUrl
+      });
+    }
+    const cultures = [];
+    if (report.culture) cultures.push(report.culture);
+    if (Array.isArray(report.culture_results)) cultures.push(...report.culture_results);
+    for (const culture of cultures) {
+      const narrative = cultureNarrative(culture);
+      if (!narrative) continue;
+      results.push({
+        id: "nims-" + (++resultIndex),
+        group: "Microbiology",
+        test: report.report_name || "Culture",
+        parameter: "Culture result",
+        date: culture.reporting_date || culture.collection_date || culture.date_sent || report.date_sent || "",
+        value: narrative,
+        reportId: report.report_id || "",
+        pdfUrl
+      });
+    }
+  }
+  return {
+    patient: {
+      name: extracted && extracted.patient ? extracted.patient.name || "" : "",
+      crNo: extracted && extracted.patient && extracted.patient.crNo ? extracted.patient.crNo : crNo
+    },
+    results,
+    reports,
+    enquiryRows: []
+  };
+}
+
+async function fetchCrForDashboard(rawCrNo, sender) {
+  const crNo = String(rawCrNo || "").replace(/\D/g, "");
+  if (crNo.length < 6) return { ok: false, error: "Enter a valid numeric CR number." };
+  try {
+    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo });
+    const tabId = await ensureDashboardWorkerTab();
+    const crFrameId = await findCrFrame(tabId);
+    const submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
+    if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
+    const reportFrameId = await waitForReportFrame(tabId);
+    const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
+    const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
+    if (!processed || processed.ok === false) {
+      const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
+      throw new Error("The CR result list opened, but structured value extraction failed: " + reason);
+    }
+    const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
+    if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
+    await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", { payload: bundle });
+    return { ok: true, resultCount: bundle.results.length, reportCount: bundle.reports.length };
+  } catch (error) {
+    const message = error && error.message ? error.message : "NIMS retrieval failed.";
+    await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", { error: message });
+    return { ok: false, error: message };
+  }
+}
