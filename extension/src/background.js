@@ -1191,11 +1191,23 @@ async function ensureDashboardWorkerTab() {
   throw new Error("NIMS session is not authenticated. Sign in again.");
 }
 
+async function openOneCrNavigationStep(tabId) {
+  const frameIds = await frameIdsForTab(tabId);
+  const ordered = [0, ...frameIds.filter(frameId => frameId !== 0)];
+  for (const frameId of ordered) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_OPEN_CR" }, { frameId });
+      if (response && response.ok) return { ok: true, frameId, response };
+    } catch {}
+  }
+  return { ok: false };
+}
+
 async function findCrFrame(tabId) {
   for (let attempt = 0; attempt < 18; attempt += 1) {
     const probe = await probeNimsTab(tabId);
     if (probe.crFrame) return probe.crFrame.frameId;
-    await messageFrames(tabId, { type: "NIMS_BRIDGE_OPEN_CR" });
+    await openOneCrNavigationStep(tabId);
     await delay(attempt < 5 ? 550 : 900);
   }
   throw new Error("Unable to open the NIMS CR-wise results page.");
