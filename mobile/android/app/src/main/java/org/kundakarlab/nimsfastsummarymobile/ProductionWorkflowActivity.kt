@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
@@ -49,6 +50,7 @@ import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ClinicianCorrection
 import org.kundakarlab.nimsfastsummarymobile.domain.recovery.ReportIssueController
 import org.kundakarlab.nimsfastsummarymobile.security.SafeLogBuffer
+import org.kundakarlab.nimsfastsummarymobile.ui.formatters.ClinicalSummaryFormatter
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.SummaryJsonMapper
 import org.kundakarlab.nimsfastsummarymobile.ui.mappers.UiCorrectionOverlay
 import org.kundakarlab.nimsfastsummarymobile.ui.models.UiSummary
@@ -220,6 +222,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     onLoginAgain = ::loginAgain,
                     onLogout = ::logout,
                     onCopyLogs = ::copyLogs,
+                    onShareSummary = ::shareClinicalSummary,
                     onChangePatient = ::changePatient,
                     onManualCorrection = ::addManualCorrection,
                     onUndoCorrection = ::undoCorrection,
@@ -904,6 +907,32 @@ class ProductionWorkflowActivity : ComponentActivity() {
             status = "Logged out."
             webView.loadUrl(NIMS_LOGIN_URL)
         }
+    }
+
+    private fun shareClinicalSummary() {
+        val current = summary
+        if (current == null) {
+            status = "Results are not ready to share."
+            return
+        }
+        val prompt = buildString {
+            appendLine("Please clinically review these NIMS results.")
+            appendLine("Identify important abnormalities and trends, microbiology findings, likely clinical implications, and immediate issues that need source verification or action.")
+            appendLine("Do not assume diagnoses from the auto-parsed data; distinguish measured results from interpretation.")
+            if (activeCrNumber.isNotBlank()) appendLine("CR: $activeCrNumber")
+            appendLine()
+            append(ClinicalSummaryFormatter.cleanText(current))
+        }
+        startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Clinical review of NIMS results")
+                    putExtra(Intent.EXTRA_TEXT, prompt)
+                },
+                "Send NIMS results to ChatGPT"
+            )
+        )
     }
 
     private fun copyLogs() {

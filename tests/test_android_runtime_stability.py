@@ -51,3 +51,12 @@ def test_webview_surface_settings_are_present():
         "AndroidView(factory = { webView }",
     ):
         assert statement in source
+
+
+def test_production_workflow_can_share_clinical_summary_to_chatgpt():
+    activity = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/ProductionWorkflowActivity.kt").read_text()
+    ui = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/ProductionWorkflowUi.kt").read_text()
+    assert "ClinicalSummaryFormatter.cleanText" in activity
+    assert "Intent.ACTION_SEND" in activity
+    assert "onShareSummary = ::shareClinicalSummary" in activity
+    assert 'Text("Send to ChatGPT")' in ui
