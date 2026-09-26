@@ -104,6 +104,10 @@ class NimsRelayClient(private val settings: SecureSettings) {
         post(JSONObject().put("action", "resume").put("jobId", jobId))
     }
 
+    suspend fun revokeRequester() {
+        post(JSONObject().put("action", "revoke_requester"))
+    }
+
     suspend fun unregister() {
         post(JSONObject().put("action", "unregister"))
         settings.clearRelayIdentity()
