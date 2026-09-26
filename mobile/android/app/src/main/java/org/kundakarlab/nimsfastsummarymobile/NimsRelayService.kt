@@ -131,6 +131,9 @@ class NimsRelayService : Service() {
                 "Tap Authenticate, enter the fresh CAPTCHA, and the same request will continue",
                 authIntent(job.id)
             )
+        } catch (_: NimsIdentityMismatchException) {
+            client.fail(job.id, "identity_mismatch")
+            updateNotification("NIMS identity mismatch", "Returned CR did not match the requested CR; no results were sent")
         } catch (_: Throwable) {
             client.fail(job.id, "nims_retrieval_failed")
             updateNotification("NIMS request failed", "The dashboard can retry the CR request")
