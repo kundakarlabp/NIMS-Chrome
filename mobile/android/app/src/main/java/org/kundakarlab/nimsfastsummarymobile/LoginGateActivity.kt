@@ -166,6 +166,72 @@ class LoginGateActivity : ComponentActivity() {
         inspectAndAdvance(0, userRequestedVerification = true)
     }
 
+    private fun saveCredentials() {
+        val username = credentialUsernameInput.trim()
+        val password = credentialPasswordInput
+        if (username.isBlank() || password.isBlank()) {
+            status = "Enter the NIMS user ID and password before saving."
+            return
+        }
+        runCatching { secureSettings.saveNimsCredentials(username, password) }
+            .onSuccess {
+                savedUsername = username
+                credentialUsernameInput = username
+                credentialPasswordInput = ""
+                lastAutofillUrl = ""
+                status = "Login saved securely on this phone. Enter the CAPTCHA, then tap Authenticate."
+                autofillSavedCredentials()
+            }
+            .onFailure {
+                status = "Could not save the login securely on this phone."
+            }
+    }
+
+    private fun clearCredentials() {
+        secureSettings.clearNimsCredentials()
+        savedUsername = ""
+        credentialUsernameInput = ""
+        credentialPasswordInput = ""
+        lastAutofillUrl = ""
+        status = "Saved NIMS login removed from this phone."
+    }
+
+    private fun autofillSavedCredentials() {
+        val username = secureSettings.nimsUsername()
+        val password = secureSettings.nimsPassword()
+        if (username.isBlank() || password.isBlank()) {
+            status = "No saved NIMS login. Enter it once below and tap Save login."
+            return
+        }
+        webView.evaluateJavascript(NimsCredentialAutofill.fillScript(username, password)) { raw ->
+            val result = decodeObject(raw)
+            when {
+                result.optBoolean("ok") && result.optBoolean("captchaFound") ->
+                    status = "ID and password filled. Enter the fresh CAPTCHA, then tap Authenticate."
+                result.optBoolean("ok") ->
+                    status = "ID and password filled. Complete any NIMS verification shown, then tap Authenticate."
+                else -> status = "Waiting for the NIMS login form…"
+            }
+        }
+    }
+
+    private fun authenticateLogin() {
+        if (launched) return
+        webView.evaluateJavascript(NimsCredentialAutofill.authenticateScript) { raw ->
+            val result = decodeObject(raw)
+            when (result.optString("reason")) {
+                "captcha_required" -> status = "Enter the fresh CAPTCHA shown by NIMS, then tap Authenticate."
+                "clicked_login", "submitted_form" -> {
+                    loginFormSeen = true
+                    status = "Submitting NIMS login…"
+                    handler.postDelayed({ inspectAndAdvance(0, userRequestedVerification = true) }, 650L)
+                }
+                "login_form_not_found" -> verifyLogin()
+                else -> status = "The NIMS login form is not ready. Reload login if needed."
+            }
+        }
+    }
+
     private fun inspectAndAdvance(
         attempt: Int,
         userRequestedVerification: Boolean = false
@@ -188,6 +254,12 @@ class LoginGateActivity : ComponentActivity() {
                     "cr=$crReady rows=$reportRows logout=$logoutVisible expired=$sessionExpired"
             )
 
+            if (!loginVisible && !sessionExpired && protectedRoute && (crReady || reportRows > 0 || logoutVisible)) {
+                log("AUTH reused existing protected session")
+                openResultsWorkflow()
+                return@evaluateJavascript
+            }
+
             if (sessionExpired) {
                 protectedVerificationStarted = false
                 loginFormGoneAt = 0L
@@ -198,15 +270,16 @@ class LoginGateActivity : ComponentActivity() {
             if (loginVisible) {
                 loginFormSeen = true
                 loginFormGoneAt = 0L
-                if (protectedVerificationStarted) {
-                    protectedVerificationStarted = false
-                    status = "NIMS did not accept the session. Check user ID, password and captcha, then login again."
-                } else {
-                    status = if (userRequestedVerification) {
-                        "Submit the NIMS login form first, then tap Continue to results."
+                if (protectedVerificationStarted) protectedVerificationStarted = false
+                if (secureSettings.hasNimsCredentials()) {
+                    if (lastAutofillUrl != lastFinishedUrl) {
+                        lastAutofillUrl = lastFinishedUrl
+                        autofillSavedCredentials()
                     } else {
-                        "Enter user ID, password and captcha, then submit the NIMS form."
+                        status = "Enter the fresh CAPTCHA, then tap Authenticate."
                     }
+                } else {
+                    status = "Enter the NIMS user ID/password once below, save them securely, then enter the CAPTCHA."
                 }
                 return@evaluateJavascript
             }
@@ -320,6 +393,7 @@ class LoginGateActivity : ComponentActivity() {
             Intent(this, ProductionWorkflowActivity::class.java)
                 .putExtra(EXTRA_VERIFIED_LOGIN, true)
                 .putExtra(EXTRA_HANDOFF_URL, handoffUrl)
+                .putExtra(EXTRA_PENDING_CR, pendingCr)
         )
         finish()
     }
@@ -379,6 +453,7 @@ class LoginGateActivity : ComponentActivity() {
     companion object {
         internal const val EXTRA_VERIFIED_LOGIN = "nims_verified_login"
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
+        internal const val EXTRA_PENDING_CR = "nims_pending_cr"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
