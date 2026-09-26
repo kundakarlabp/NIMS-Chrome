@@ -13,6 +13,9 @@ data class BackgroundReportRow(
 
 data class BackgroundReportList(
     val patientName: String,
+    val returnedCrNo: String,
+    val age: String,
+    val sex: String,
     val rows: List<BackgroundReportRow>
 )
 
@@ -23,6 +26,12 @@ object NimsBackgroundReportListParser {
         """(?:Patient\s*Name|Name\s*of\s*Patient|Pat(?:ient)?\s*Name)\s*[:\-]?\s*([A-Za-z][A-Za-z .'-]{2,80})""",
         RegexOption.IGNORE_CASE
     )
+    private val crPattern = Regex(
+        """(?:CR\s*(?:No|Number)|Patient\s*CR)\s*[:\-]?\s*(\d{15})""",
+        RegexOption.IGNORE_CASE
+    )
+    private val agePattern = Regex("""\bAge\s*[:\-]?\s*(\d{1,3}\s*(?:Y|Yr|Yrs|Years)?)""", RegexOption.IGNORE_CASE)
+    private val sexPattern = Regex("""\b(?:Sex|Gender)\s*[:\-]?\s*(Male|Female|M|F)\b""", RegexOption.IGNORE_CASE)
 
     fun parse(html: String): BackgroundReportList {
         val doc = Jsoup.parse(html)
@@ -57,7 +66,14 @@ object NimsBackgroundReportListParser {
             ?.take(100)
             .orEmpty()
 
-        return BackgroundReportList(patientName = patient, rows = rows)
+        val returnedCr = doc.selectFirst("input[name=patCrNo],input#patCrNo")
+            ?.attr("value")
+            ?.filter(Char::isDigit)
+            ?.takeIf { it.length == 15 }
+            ?: crPattern.find(bodyText)?.groupValues?.getOrNull(1).orEmpty()
+        val age = agePattern.find(bodyText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val sex = sexPattern.find(bodyText)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        return BackgroundReportList(patientName = patient, returnedCrNo = returnedCr, age = age, sex = sex, rows = rows)
     }
 
     fun looksLikeLoginOrExpired(html: String, finalUrl: String = ""): Boolean {
