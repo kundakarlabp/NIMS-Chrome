@@ -49,8 +49,18 @@ class NimsRelayService : Service() {
                 if (jobId.isNotBlank()) {
                     scope.launch {
                         runCatching { client.resume(jobId) }
-                        settings.clearPendingRelayJobId()
-                        updateNotification("NIMS bridge active", "Authentication verified · resuming pending request")
+                            .onSuccess {
+                                settings.clearPendingRelayJobId()
+                                updateNotification("NIMS bridge active", "Authentication verified · resuming pending request")
+                            }
+                            .onFailure {
+                                settings.savePendingRelayJobId(jobId)
+                                updateNotification(
+                                    "NIMS bridge reconnecting",
+                                    "Authentication succeeded; secure relay resume will retry",
+                                    authIntent(jobId)
+                                )
+                            }
                     }
                 }
             }
@@ -64,9 +74,13 @@ class NimsRelayService : Service() {
         if (loopJob?.isActive == true) return
         loopJob = scope.launch {
             var retryMs = 2_000L
+            var registered = false
             while (isActive && settings.relayEnabled()) {
                 try {
-                    client.register()
+                    if (!registered) {
+                        client.register()
+                        registered = true
+                    }
                     retryMs = 2_000L
                     val pending = settings.pendingRelayJobId()
                     if (pending.isNotBlank()) {
@@ -83,6 +97,7 @@ class NimsRelayService : Service() {
                     }
                     process(job)
                 } catch (_: Throwable) {
+                    registered = false
                     updateNotification("NIMS bridge reconnecting", "Secure relay temporarily unavailable")
                     delay(retryMs)
                     retryMs = (retryMs * 2).coerceAtMost(30_000L)
