@@ -23,7 +23,7 @@ object NimsBackgroundReportListParser {
     private val printReport = Regex("""printReport\s*\(\s*(['"])([^'"]+)\1\s*\)""", RegexOption.IGNORE_CASE)
     private val datePattern = Regex("""\b(\d{1,2}[-/](?:\d{1,2}|[A-Za-z]{3})[-/]\d{2,4})\b""")
     private val patientNamePattern = Regex(
-        """(?:Patient\s*Name|Name\s*of\s*Patient|Pat(?:ient)?\s*Name)\s*[:\-]?\s*([A-Za-z][A-Za-z .'-]{2,80})""",
+        """(?:Patient\s*Name|Name\s*of\s*Patient|Pat(?:ient)?\s*Name)\s*[:\-]?\s*([A-Za-z][A-Za-z .'-]{2,80}?)(?=\s+(?:Age|Sex|Gender|CR\s*(?:No|Number))\b|$)""",
         RegexOption.IGNORE_CASE
     )
     private val crPattern = Regex(
