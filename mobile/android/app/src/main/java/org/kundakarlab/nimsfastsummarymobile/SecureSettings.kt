@@ -39,6 +39,10 @@ class SecureSettings @JvmOverloads constructor(
     fun nimsUsername(): String = nimsCredentials.read(KEY_NIMS_USERNAME_ENC)
     fun nimsPassword(): String = nimsCredentials.read(KEY_NIMS_PASSWORD_ENC)
     fun hasNimsCredentials(): Boolean = nimsUsername().isNotBlank() && nimsPassword().isNotBlank()
+    fun relayDeviceId(): String = prefs.getString(KEY_RELAY_DEVICE_ID, "").orEmpty()
+    fun relayDeviceSecret(): String = decryptPref(KEY_RELAY_DEVICE_SECRET, RELAY_SECRET_ALIAS, clearOnFailure = { clearRelayIdentity() })
+    fun relayEnabled(): Boolean = prefs.getBoolean(KEY_RELAY_ENABLED, false)
+    fun pendingRelayJobId(): String = prefs.getString(KEY_PENDING_RELAY_JOB_ID, "").orEmpty()
     fun processingMode(): org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode = runCatching { org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.valueOf(prefs.getString("processing_mode", "LOCAL_ONLY") ?: "LOCAL_ONLY") }.getOrDefault(org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.LOCAL_ONLY)
 
     fun saveHelperUrl(value: String) { prefs.edit().putString("helper_url", HelperSettingsValidator.normalizeUrl(value)).apply() }
@@ -56,6 +60,17 @@ class SecureSettings @JvmOverloads constructor(
         prefs.edit().remove("nims_username").remove("nims_password").apply()
     }
     fun saveProcessingMode(value: org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode) { prefs.edit().putString("processing_mode", value.name).apply() }
+    fun saveRelayIdentity(deviceId: String, deviceSecret: String) {
+        require(deviceId.isNotBlank()) { "Relay device ID is required" }
+        require(deviceSecret.isNotBlank()) { "Relay device secret is required" }
+        prefs.edit()
+            .putString(KEY_RELAY_DEVICE_ID, deviceId.trim())
+            .putString(KEY_RELAY_DEVICE_SECRET, encodeEncrypted(crypto.encrypt(deviceSecret, RELAY_SECRET_ALIAS)))
+            .apply()
+    }
+    fun saveRelayEnabled(value: Boolean) { prefs.edit().putBoolean(KEY_RELAY_ENABLED, value).apply() }
+    fun savePendingRelayJobId(value: String) { prefs.edit().putString(KEY_PENDING_RELAY_JOB_ID, value.trim()).apply() }
+    fun clearPendingRelayJobId() { prefs.edit().remove(KEY_PENDING_RELAY_JOB_ID).apply() }
     fun clearResults() { prefs.edit().remove(KEY_LAST_SUMMARY_ENC).remove("last_summary_json").apply() }
     fun clearPhysicianNote() { prefs.edit().remove(KEY_NOTE_ENC).remove("physician_note").apply() }
     fun clearHelperSettings() { prefs.edit().remove("helper_url").remove("helper_key").apply() }
@@ -63,8 +78,17 @@ class SecureSettings @JvmOverloads constructor(
         nimsCredentials.clear(KEY_NIMS_USERNAME_ENC, KEY_NIMS_PASSWORD_ENC)
         prefs.edit().remove("nims_username").remove("nims_password").apply()
     }
+    fun clearRelayIdentity() {
+        prefs.edit()
+            .remove(KEY_RELAY_DEVICE_ID)
+            .remove(KEY_RELAY_DEVICE_SECRET)
+            .remove(KEY_RELAY_ENABLED)
+            .remove(KEY_PENDING_RELAY_JOB_ID)
+            .apply()
+    }
     fun clearAllLocalData() {
         clearNimsCredentials()
+        clearRelayIdentity()
         prefs.edit().remove(KEY_LAST_SUMMARY_ENC).remove(KEY_NOTE_ENC).remove("last_summary_json").remove("physician_note").apply()
     }
     fun clearApiKey() { prefs.edit().remove("helper_key").apply() }
@@ -91,10 +115,15 @@ class SecureSettings @JvmOverloads constructor(
         private const val HELPER_KEY_ALIAS = "nims_fast_summary_helper_key"
         private const val CLINICAL_KEY_ALIAS = "nims_fast_summary_local_data_key"
         private const val NIMS_CREDENTIAL_KEY_ALIAS = "nims_results_login_credentials"
+        private const val RELAY_SECRET_ALIAS = "nims_results_relay_device_secret"
         const val KEY_LAST_SUMMARY_ENC = "last_summary_json_encrypted"
         const val KEY_NOTE_ENC = "physician_note_encrypted"
         const val KEY_NIMS_USERNAME_ENC = "nims_username_encrypted"
         const val KEY_NIMS_PASSWORD_ENC = "nims_password_encrypted"
+        const val KEY_RELAY_DEVICE_ID = "nims_relay_device_id"
+        const val KEY_RELAY_DEVICE_SECRET = "nims_relay_device_secret_encrypted"
+        const val KEY_RELAY_ENABLED = "nims_relay_enabled"
+        const val KEY_PENDING_RELAY_JOB_ID = "nims_relay_pending_job_id"
     }
 }
 
