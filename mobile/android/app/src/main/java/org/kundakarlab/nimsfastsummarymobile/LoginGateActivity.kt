@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONArray
@@ -52,6 +54,7 @@ import org.json.JSONObject
  */
 class LoginGateActivity : ComponentActivity() {
     private lateinit var webView: WebView
+    private lateinit var secureSettings: SecureSettings
     private val handler = Handler(Looper.getMainLooper())
     private val diagnostics = StringBuilder()
 
@@ -62,10 +65,19 @@ class LoginGateActivity : ComponentActivity() {
     private var launched = false
     private var lastFinishedUrl = ""
     private var lastLoginNavigationAt = 0L
+    private var lastAutofillUrl = ""
+    private var savedUsername by mutableStateOf("")
+    private var credentialUsernameInput by mutableStateOf("")
+    private var credentialPasswordInput by mutableStateOf("")
+    private var pendingCr = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        secureSettings = SecureSettings(this)
+        savedUsername = secureSettings.nimsUsername()
+        credentialUsernameInput = savedUsername
+        pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(20)
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
