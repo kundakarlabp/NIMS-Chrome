@@ -103,6 +103,7 @@ internal fun ProductionWorkflowApp(
     onLogout: () -> Unit,
     onCopyLogs: () -> Unit,
     onShareSummary: () -> Unit,
+    onOpenBridge: () -> Unit,
     onChangePatient: () -> Unit,
     onManualCorrection: (String, String, String, String) -> Unit,
     onUndoCorrection: (String) -> Unit,
@@ -130,6 +131,7 @@ internal fun ProductionWorkflowApp(
                         DropdownMenuItem(text = { Text("Refresh results") }, onClick = { menuOpen = false; onRefresh() })
                         DropdownMenuItem(text = { Text("Retry failed reports") }, onClick = { menuOpen = false; onRetryAll() })
                         DropdownMenuItem(text = { Text("Send to ChatGPT") }, onClick = { menuOpen = false; onShareSummary() })
+                        DropdownMenuItem(text = { Text("Dashboard / ChatGPT bridge") }, onClick = { menuOpen = false; onOpenBridge() })
                         DropdownMenuItem(text = { Text("Change CR number") }, onClick = { menuOpen = false; onChangePatient() })
                         DropdownMenuItem(text = { Text("Login again") }, onClick = { menuOpen = false; onLoginAgain() })
                         DropdownMenuItem(text = { Text("Copy diagnostic logs") }, onClick = { menuOpen = false; onCopyLogs() })
