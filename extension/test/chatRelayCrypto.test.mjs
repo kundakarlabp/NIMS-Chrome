@@ -1,11 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { webcrypto } from "node:crypto";
 import { createRequire } from "node:module";
 
-globalThis.crypto = webcrypto;
-globalThis.btoa = (value) => Buffer.from(value, "binary").toString("base64");
-globalThis.atob = (value) => Buffer.from(value, "base64").toString("binary");
 
 const require = createRequire(import.meta.url);
 const relayCrypto = require("../src/chatRelayCrypto.js");
