@@ -23,12 +23,22 @@ class SecureSettings @JvmOverloads constructor(
         crypto = crypto,
         alias = CLINICAL_KEY_ALIAS
     )
+    private val nimsCredentials = EncryptedCredentialPreferences(
+        get = { key -> prefs.getString(key, null) },
+        put = { key, value -> prefs.edit().putString(key, value).apply() },
+        remove = { key -> prefs.edit().remove(key).apply() },
+        crypto = crypto,
+        alias = NIMS_CREDENTIAL_KEY_ALIAS
+    )
 
     init { migrateClinicalData() }
 
     fun helperUrl(): String = prefs.getString("helper_url", "") ?: ""
     fun lastSummaryJson(): String = clinical.read(KEY_LAST_SUMMARY_ENC)
     fun physicianNote(): String = clinical.read(KEY_NOTE_ENC)
+    fun nimsUsername(): String = nimsCredentials.read(KEY_NIMS_USERNAME_ENC)
+    fun nimsPassword(): String = nimsCredentials.read(KEY_NIMS_PASSWORD_ENC)
+    fun hasNimsCredentials(): Boolean = nimsUsername().isNotBlank() && nimsPassword().isNotBlank()
     fun processingMode(): org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode = runCatching { org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.valueOf(prefs.getString("processing_mode", "LOCAL_ONLY") ?: "LOCAL_ONLY") }.getOrDefault(org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode.LOCAL_ONLY)
 
     fun saveHelperUrl(value: String) { prefs.edit().putString("helper_url", HelperSettingsValidator.normalizeUrl(value)).apply() }
@@ -37,11 +47,26 @@ class SecureSettings @JvmOverloads constructor(
     fun saveApiKey(value: String) { if (value.isNotBlank()) prefs.edit().putString("helper_key", encodeEncrypted(crypto.encrypt(value, HELPER_KEY_ALIAS))).apply() }
     fun saveLastSummaryJson(value: String) { clinical.write(KEY_LAST_SUMMARY_ENC, value, "last_summary_json") }
     fun savePhysicianNote(value: String) { clinical.write(KEY_NOTE_ENC, value, "physician_note") }
+    fun saveNimsCredentials(username: String, password: String) {
+        val user = username.trim()
+        require(user.isNotBlank()) { "NIMS user ID is required" }
+        require(password.isNotBlank()) { "NIMS password is required" }
+        nimsCredentials.write(KEY_NIMS_USERNAME_ENC, user)
+        nimsCredentials.write(KEY_NIMS_PASSWORD_ENC, password)
+        prefs.edit().remove("nims_username").remove("nims_password").apply()
+    }
     fun saveProcessingMode(value: org.kundakarlab.nimsfastsummarymobile.domain.model.ProcessingMode) { prefs.edit().putString("processing_mode", value.name).apply() }
     fun clearResults() { prefs.edit().remove(KEY_LAST_SUMMARY_ENC).remove("last_summary_json").apply() }
     fun clearPhysicianNote() { prefs.edit().remove(KEY_NOTE_ENC).remove("physician_note").apply() }
     fun clearHelperSettings() { prefs.edit().remove("helper_url").remove("helper_key").apply() }
-    fun clearAllLocalData() { prefs.edit().remove(KEY_LAST_SUMMARY_ENC).remove(KEY_NOTE_ENC).remove("last_summary_json").remove("physician_note").apply() }
+    fun clearNimsCredentials() {
+        nimsCredentials.clear(KEY_NIMS_USERNAME_ENC, KEY_NIMS_PASSWORD_ENC)
+        prefs.edit().remove("nims_username").remove("nims_password").apply()
+    }
+    fun clearAllLocalData() {
+        clearNimsCredentials()
+        prefs.edit().remove(KEY_LAST_SUMMARY_ENC).remove(KEY_NOTE_ENC).remove("last_summary_json").remove("physician_note").apply()
+    }
     fun clearApiKey() { prefs.edit().remove("helper_key").apply() }
 
     private fun migrateClinicalData() {
@@ -65,8 +90,11 @@ class SecureSettings @JvmOverloads constructor(
     companion object {
         private const val HELPER_KEY_ALIAS = "nims_fast_summary_helper_key"
         private const val CLINICAL_KEY_ALIAS = "nims_fast_summary_local_data_key"
+        private const val NIMS_CREDENTIAL_KEY_ALIAS = "nims_results_login_credentials"
         const val KEY_LAST_SUMMARY_ENC = "last_summary_json_encrypted"
         const val KEY_NOTE_ENC = "physician_note_encrypted"
+        const val KEY_NIMS_USERNAME_ENC = "nims_username_encrypted"
+        const val KEY_NIMS_PASSWORD_ENC = "nims_password_encrypted"
     }
 }
 
