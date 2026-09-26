@@ -75,3 +75,22 @@ def test_streamlined_auth_preserves_captcha_boundary_and_keystore_credentials():
     assert "NIMS_CREDENTIAL_KEY_ALIAS" in settings
     assert "nims_results_login_credentials" in settings
     assert 'android:allowBackup="false"' in manifest
+
+
+def test_android_relay_worker_is_encrypted_and_keeps_authentication_local():
+    manifest = (APP / "src/main/AndroidManifest.xml").read_text()
+    service = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsRelayService.kt").read_text()
+    crypto = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsRelayCrypto.kt").read_text()
+    client = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsRelayClient.kt").read_text()
+    retriever = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsBackgroundRetriever.kt").read_text()
+    assert 'android:foregroundServiceType="specialUse"' in manifest
+    assert "FOREGROUND_SERVICE_SPECIAL_USE" in manifest
+    assert "decryptEnvelope" in service
+    assert "encryptEnvelope" in crypto
+    assert "RSA-OAEP" in crypto and "AES/GCM/NoPadding" in crypto
+    assert "x-nims-device-secret" in client
+    assert "SHOWPATDETAILS" in retriever and "patCrNo" in retriever
+    assert "NimsAuthenticationRequiredException" in retriever
+    assert "nimsUsername()" not in client
+    assert "nimsPassword()" not in client
+    assert "Cookie" not in client
