@@ -28,6 +28,7 @@ import org.kundakarlab.nimsfastsummarymobile.domain.processing.ProcessingResult
 import java.util.concurrent.TimeUnit
 
 class NimsAuthenticationRequiredException : IllegalStateException("NIMS authentication required")
+class NimsIdentityMismatchException : IllegalStateException("NIMS returned a different CR number")
 
 class NimsBackgroundRetriever(context: Context) {
     private val appContext = context.applicationContext
@@ -52,6 +53,9 @@ class NimsBackgroundRetriever(context: Context) {
         }
 
         val reportList = NimsBackgroundReportListParser.parse(body)
+        if (reportList.returnedCrNo.isNotBlank() && reportList.returnedCrNo != crNo) {
+            throw NimsIdentityMismatchException()
+        }
         if (reportList.rows.isEmpty()) {
             if (Regex("login|captcha|password", RegexOption.IGNORE_CASE).containsMatchIn(body)) {
                 throw NimsAuthenticationRequiredException()
@@ -64,14 +68,31 @@ class NimsBackgroundRetriever(context: Context) {
         val parsed = coroutineScope {
             reportList.rows.map { row ->
                 async(Dispatchers.IO) {
-                    slots.withPermit { fetchAndParse(row, template) }
+                    slots.withPermit {
+                        try {
+                            fetchAndParse(row, template)
+                        } catch (auth: NimsAuthenticationRequiredException) {
+                            throw auth
+                        } catch (_: Throwable) {
+                            ParsedReport(
+                                reportId = row.reportId,
+                                reportName = row.reportName,
+                                dateSent = row.dateSent,
+                                reportType = row.reportType,
+                                warnings = listOf("Report fetch failed; verify this source report in NIMS."),
+                                processorName = "On-device"
+                            )
+                        }
+                    }
                 }
             }.awaitAll().filterNotNull()
         }
-        if (parsed.isEmpty()) throw IllegalStateException("NIMS reports were found but none could be parsed")
+        if (parsed.none { it.structuredValueCount > 0 }) {
+            throw IllegalStateException("NIMS reports were found but no structured results could be parsed")
+        }
 
         val reconciled = CultureEpisodeReconciler.reconcile(parsed)
-        canonicalBundle(crNo, reportList.patientName, reportList.rows, reconciled)
+        canonicalBundle(crNo, reportList, reconciled)
     }
 
     private fun fetchReportList(crNo: String): Pair<String, String> {
@@ -180,10 +201,10 @@ class NimsBackgroundRetriever(context: Context) {
 
     private fun canonicalBundle(
         crNo: String,
-        patientName: String,
-        sourceRows: List<BackgroundReportRow>,
+        reportList: BackgroundReportList,
         reports: List<ParsedReport>
     ): JSONObject {
+        val sourceRows = reportList.rows
         val results = JSONArray()
         reports.forEach { report ->
             report.labs.forEachIndexed { index, lab ->
@@ -252,7 +273,15 @@ class NimsBackgroundRetriever(context: Context) {
 
         return JSONObject()
             .put("schemaVersion", "nims-dashboard-canonical-v1")
-            .put("patient", JSONObject().put("name", patientName).put("crNo", crNo))
+            .put(
+                "patient",
+                JSONObject()
+                    .put("name", reportList.patientName)
+                    .put("crNo", reportList.returnedCrNo.ifBlank { crNo })
+                    .put("age", reportList.age)
+                    .put("sex", reportList.sex)
+                    .put("crVerified", reportList.returnedCrNo.isNotBlank())
+            )
             .put("results", results)
             .put("reports", sourceReports)
             .put("enquiryRows", JSONArray())
