@@ -76,6 +76,7 @@ class LoginGateActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         secureSettings = SecureSettings(this)
+        if (secureSettings.relayEnabled()) runCatching { NimsRelayService.start(this) }
         savedUsername = secureSettings.nimsUsername()
         credentialUsernameInput = savedUsername
         pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(20)
