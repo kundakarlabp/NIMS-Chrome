@@ -82,6 +82,21 @@ jobs:
           path: npm-test.log
           if-no-files-found: error
           retention-days: 7
+      - name: Package secure Chrome bridge
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd extension
+          zip -qr ../nims-chat-bridge-extension.zip manifest.json src
+      - name: Upload secure Chrome bridge
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nims-chat-bridge-extension
+          path: nims-chat-bridge-extension.zip
+          if-no-files-found: error
+          retention-days: 14
 
   android:
     needs: repository-contract
