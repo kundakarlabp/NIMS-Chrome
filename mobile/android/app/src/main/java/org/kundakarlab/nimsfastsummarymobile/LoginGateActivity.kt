@@ -108,6 +108,15 @@ class LoginGateActivity : ComponentActivity() {
                 LoginGateScreen(
                     webView = webView,
                     status = status,
+                    savedUsername = savedUsername,
+                    credentialUsername = credentialUsernameInput,
+                    credentialPassword = credentialPasswordInput,
+                    onCredentialUsernameChange = { credentialUsernameInput = it },
+                    onCredentialPasswordChange = { credentialPasswordInput = it },
+                    onSaveCredentials = ::saveCredentials,
+                    onClearCredentials = ::clearCredentials,
+                    onAutofill = ::autofillSavedCredentials,
+                    onAuthenticate = ::authenticateLogin,
                     onContinue = ::verifyLogin,
                     onLogoutOtherSessions = ::logoutOtherSessions,
                     onReloadLogin = ::beginFreshLogin,
@@ -117,7 +126,17 @@ class LoginGateActivity : ComponentActivity() {
         }
 
         log("BUILD versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
-        beginFreshLogin()
+        resumeExistingSession()
+    }
+
+    private fun resumeExistingSession() {
+        if (launched) return
+        status = "Checking the existing NIMS session…"
+        protectedVerificationStarted = false
+        lastFinishedUrl = ""
+        lastAutofillUrl = ""
+        webView.stopLoading()
+        webView.loadUrl(CR_RESULTS_URL)
     }
 
     private fun beginFreshLogin() {
@@ -127,6 +146,7 @@ class LoginGateActivity : ComponentActivity() {
         protectedVerificationStarted = false
         lastFinishedUrl = ""
         lastLoginNavigationAt = 0L
+        lastAutofillUrl = ""
         status = "Opening the NIMS login page…"
         handler.removeCallbacksAndMessages(null)
         WebStorage.getInstance().deleteAllData()
