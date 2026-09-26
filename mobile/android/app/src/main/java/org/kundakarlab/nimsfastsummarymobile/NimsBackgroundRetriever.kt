@@ -14,6 +14,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import org.kundakarlab.nimsfastsummarymobile.data.pdf.PdfBoxAndroidTextExtractor
 import org.kundakarlab.nimsfastsummarymobile.data.processing.CultureEpisodeReconciler
 import org.kundakarlab.nimsfastsummarymobile.data.processing.LocalTextReportProcessor
@@ -74,14 +75,48 @@ class NimsBackgroundRetriever(context: Context) {
     }
 
     private fun fetchReportList(crNo: String): Pair<String, String> {
-        val cookie = CookieManager.getInstance().getCookie(CR_RESULTS_URL).orEmpty()
-        if (cookie.isBlank()) throw NimsAuthenticationRequiredException()
-        val form = FormBody.Builder()
-            .add("hmode", "SHOWPATDETAILS")
-            .add("patCrNo", crNo)
-            .build()
-        val request = Request.Builder()
+        val initialCookie = CookieManager.getInstance().getCookie(CR_RESULTS_URL).orEmpty()
+        if (initialCookie.isBlank()) throw NimsAuthenticationRequiredException()
+
+        val preflightRequest = Request.Builder()
             .url(CR_RESULTS_URL)
+            .get()
+            .header("Cookie", initialCookie)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "text/html,application/xhtml+xml,*/*")
+            .build()
+
+        val preflightHtml = http.newCall(preflightRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            syncResponseCookies(response.request.url.toString(), response.headers("Set-Cookie"))
+            if (response.code == 401 || response.code == 403 ||
+                NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, response.request.url.toString())
+            ) {
+                throw NimsAuthenticationRequiredException()
+            }
+            if (!response.isSuccessful) throw IllegalStateException("NIMS CR form returned ${response.code}")
+            body
+        }
+
+        val document = Jsoup.parse(preflightHtml, CR_RESULTS_URL)
+        val htmlForm = document.selectFirst(
+            "form[name=viewExternalInvFB], form#viewExternalInvFB, form[action*=viewcrnowisereportprocess]"
+        )
+        val postUrl = htmlForm?.absUrl("action")?.takeIf(String::isNotBlank) ?: CR_RESULTS_URL
+        val form = FormBody.Builder().also { builder ->
+            htmlForm?.select("input[type=hidden][name]")?.forEach { input ->
+                val name = input.attr("name").trim()
+                if (name.isNotBlank() && !name.equals("hmode", true) && !name.equals("patCrNo", true)) {
+                    builder.add(name, input.attr("value"))
+                }
+            }
+            builder.add("hmode", "SHOWPATDETAILS")
+            builder.add("patCrNo", crNo)
+        }.build()
+
+        val cookie = CookieManager.getInstance().getCookie(postUrl).orEmpty().ifBlank { initialCookie }
+        val request = Request.Builder()
+            .url(postUrl)
             .post(form)
             .header("Cookie", cookie)
             .header("User-Agent", USER_AGENT)
@@ -91,12 +126,20 @@ class NimsBackgroundRetriever(context: Context) {
             .build()
         http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
+            syncResponseCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             if (response.code == 401 || response.code == 403) throw NimsAuthenticationRequiredException()
             if (!response.isSuccessful && !NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, response.request.url.toString())) {
                 throw IllegalStateException("NIMS CR request returned ${response.code}")
             }
             return body to response.request.url.toString()
         }
+    }
+
+    private fun syncResponseCookies(url: String, setCookieHeaders: List<String>) {
+        if (setCookieHeaders.isEmpty()) return
+        val manager = CookieManager.getInstance()
+        setCookieHeaders.forEach { header -> runCatching { manager.setCookie(url, header) } }
+        runCatching { manager.flush() }
     }
 
     private suspend fun fetchAndParse(row: BackgroundReportRow, template: ReportTemplate): ParsedReport? {
