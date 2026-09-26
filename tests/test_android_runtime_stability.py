@@ -60,3 +60,18 @@ def test_production_workflow_can_share_clinical_summary_to_chatgpt():
     assert "Intent.ACTION_SEND" in activity
     assert "onShareSummary = ::shareClinicalSummary" in activity
     assert 'Text("Send to ChatGPT")' in ui
+
+
+def test_streamlined_auth_preserves_captcha_boundary_and_keystore_credentials():
+    login = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/LoginGateActivity.kt").read_text()
+    autofill = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/NimsCredentialAutofill.kt").read_text()
+    settings = (APP / "src/main/java/org/kundakarlab/nimsfastsummarymobile/SecureSettings.kt").read_text()
+    manifest = (APP / "src/main/AndroidManifest.xml").read_text()
+    assert "resumeExistingSession()" in login
+    assert "saveNimsCredentials" in login
+    assert 'Text("Authenticate")' in login
+    assert "captcha_required" in autofill
+    assert "captchaValue" not in autofill
+    assert "NIMS_CREDENTIAL_KEY_ALIAS" in settings
+    assert "nims_results_login_credentials" in settings
+    assert 'android:allowBackup="false"' in manifest
