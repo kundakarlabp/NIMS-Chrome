@@ -1318,4 +1318,7 @@ async function fetchCrForDashboard(rawCrNo, sender) {
     return { ok: false, error: message };
   }
 }
-\n\nglobalThis.NimsDashboardBridgeApi = { fetchCrForDashboard };\nimportScripts("chatRelayCrypto.js", "chatRelay.js");\n
+
+
+globalThis.NimsDashboardBridgeApi = { fetchCrForDashboard };
+if (typeof importScripts === "function") importScripts("chatRelayCrypto.js", "chatRelay.js");
