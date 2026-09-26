@@ -14,11 +14,11 @@ That single action selects only the frame containing genuine visible one-argumen
 
 Advanced Diagnose/Discover/Test controls remain under **Advanced tools** for troubleshooting only.
 
-NIMS Fast Summary summarizes NIMS e-Sushrut/HIS report-list pages after the user logs in manually. It does not automate login, store credentials, bypass captcha/OTP/session expiry, or call external AI services.
+NIMS Fast Summary summarizes NIMS e-Sushrut/HIS reports after NIMS authentication. Android can reuse an active session and, with explicit clinician opt-in, store the NIMS user ID/password encrypted in Android Keystore and autofill them locally. CAPTCHA/OTP remains human-entered; credentials, cookies and session tokens are never sent to helpers, dashboards, or ChatGPT.
 
 Recommended modes:
 
-1. Android WebView local-first app: no laptop or Railway dependency for supported text/HTML reports and text-based PDFs. The phone logs in to NIMS manually, fetches reports with the WebView session, and parses supported reports on-device; Railway is optional legacy fallback.
+1. Android WebView local-first app: no laptop or Railway dependency for supported text/HTML reports and text-based PDFs. The phone first reuses an active NIMS session; if re-authentication is required it can locally autofill opt-in Keystore-encrypted credentials while the clinician enters the fresh CAPTCHA/OTP. Reports are fetched with the WebView session and parsed on-device; Railway is optional legacy fallback.
 2. Chrome extension + Railway helper: desktop browser session fetches reports, Railway parses/summarizes.
 3. Local helper: development and fully local desktop use.
 

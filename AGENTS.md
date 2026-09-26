@@ -10,7 +10,7 @@ NIMS Fast Summary is a privacy-sensitive clinical report retrieval and summariza
 - shared browser/WebView navigation and report-fetch logic
 - deterministic parsers and physician-facing summaries
 
-The primary objective is **safe, source-verifiable access to NIMS reports after manual clinician login**. The system must not automate authentication, expose session material, silently misclassify reports, or present incomplete parsing as reliable clinical data.
+The primary objective is **safe, source-verifiable access to NIMS reports after clinician-authorized NIMS authentication**. Android may streamline login with explicit opt-in encrypted local credential autofill, but the system must not defeat CAPTCHA/OTP, expose session material, silently misclassify reports, or present incomplete parsing as reliable clinical data.
 
 ## Read first
 
@@ -28,8 +28,8 @@ Repository code, tests, security constraints, and deployment documentation remai
 
 ## Non-negotiable clinical and authentication rules
 
-- Login, captcha, OTP, CR-number entry, and report-page navigation remain manual unless an approved NIMS interface explicitly supports automation.
-- Never store or transmit NIMS usernames, passwords, OTPs, cookies, session tokens, hidden form values, full report URLs, query strings, transient report filenames, raw `onclick` values, or raw `printReport` arguments.
+- CAPTCHA and OTP remain human-entered unless NIMS provides an approved non-interactive interface. Do not OCR-solve, bypass, replay, or outsource them. Android may reuse active sessions, autofill clinician-opted-in credentials, and automate CR/report navigation.
+- NIMS usernames/passwords may be stored only on the clinician's Android device after explicit opt-in, AES-GCM encrypted under a dedicated Android Keystore key. Never log, export, transmit, back up, or send those credentials to helpers, dashboards, relays, or AI services. Never persist/export OTPs, CAPTCHA values, cookies, session tokens, hidden form values, full report URLs, query strings, transient report filenames, raw `onclick` values, or raw `printReport` arguments.
 - Never commit real patient reports, identifiers, screenshots, PDFs, HTML, logs, cache files, API keys, or production diagnostics.
 - Use synthetic or explicitly de-identified fixtures only.
 - Android remains on-device-first. Railway is optional fallback and must never receive browser/WebView session credentials.

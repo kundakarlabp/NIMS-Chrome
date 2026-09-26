@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONArray
@@ -52,6 +54,7 @@ import org.json.JSONObject
  */
 class LoginGateActivity : ComponentActivity() {
     private lateinit var webView: WebView
+    private lateinit var secureSettings: SecureSettings
     private val handler = Handler(Looper.getMainLooper())
     private val diagnostics = StringBuilder()
 
@@ -62,10 +65,19 @@ class LoginGateActivity : ComponentActivity() {
     private var launched = false
     private var lastFinishedUrl = ""
     private var lastLoginNavigationAt = 0L
+    private var lastAutofillUrl = ""
+    private var savedUsername by mutableStateOf("")
+    private var credentialUsernameInput by mutableStateOf("")
+    private var credentialPasswordInput by mutableStateOf("")
+    private var pendingCr = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        secureSettings = SecureSettings(this)
+        savedUsername = secureSettings.nimsUsername()
+        credentialUsernameInput = savedUsername
+        pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(20)
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -96,6 +108,15 @@ class LoginGateActivity : ComponentActivity() {
                 LoginGateScreen(
                     webView = webView,
                     status = status,
+                    savedUsername = savedUsername,
+                    credentialUsername = credentialUsernameInput,
+                    credentialPassword = credentialPasswordInput,
+                    onCredentialUsernameChange = { credentialUsernameInput = it },
+                    onCredentialPasswordChange = { credentialPasswordInput = it },
+                    onSaveCredentials = ::saveCredentials,
+                    onClearCredentials = ::clearCredentials,
+                    onAutofill = ::autofillSavedCredentials,
+                    onAuthenticate = ::authenticateLogin,
                     onContinue = ::verifyLogin,
                     onLogoutOtherSessions = ::logoutOtherSessions,
                     onReloadLogin = ::beginFreshLogin,
@@ -105,7 +126,17 @@ class LoginGateActivity : ComponentActivity() {
         }
 
         log("BUILD versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
-        beginFreshLogin()
+        resumeExistingSession()
+    }
+
+    private fun resumeExistingSession() {
+        if (launched) return
+        status = "Checking the existing NIMS session…"
+        protectedVerificationStarted = false
+        lastFinishedUrl = ""
+        lastAutofillUrl = ""
+        webView.stopLoading()
+        webView.loadUrl(CR_RESULTS_URL)
     }
 
     private fun beginFreshLogin() {
@@ -115,6 +146,7 @@ class LoginGateActivity : ComponentActivity() {
         protectedVerificationStarted = false
         lastFinishedUrl = ""
         lastLoginNavigationAt = 0L
+        lastAutofillUrl = ""
         status = "Opening the NIMS login page…"
         handler.removeCallbacksAndMessages(null)
         WebStorage.getInstance().deleteAllData()
@@ -132,6 +164,72 @@ class LoginGateActivity : ComponentActivity() {
         if (launched) return
         status = "Checking NIMS login…"
         inspectAndAdvance(0, userRequestedVerification = true)
+    }
+
+    private fun saveCredentials() {
+        val username = credentialUsernameInput.trim()
+        val password = credentialPasswordInput
+        if (username.isBlank() || password.isBlank()) {
+            status = "Enter the NIMS user ID and password before saving."
+            return
+        }
+        runCatching { secureSettings.saveNimsCredentials(username, password) }
+            .onSuccess {
+                savedUsername = username
+                credentialUsernameInput = username
+                credentialPasswordInput = ""
+                lastAutofillUrl = ""
+                status = "Login saved securely on this phone. Enter the CAPTCHA, then tap Authenticate."
+                autofillSavedCredentials()
+            }
+            .onFailure {
+                status = "Could not save the login securely on this phone."
+            }
+    }
+
+    private fun clearCredentials() {
+        secureSettings.clearNimsCredentials()
+        savedUsername = ""
+        credentialUsernameInput = ""
+        credentialPasswordInput = ""
+        lastAutofillUrl = ""
+        status = "Saved NIMS login removed from this phone."
+    }
+
+    private fun autofillSavedCredentials() {
+        val username = secureSettings.nimsUsername()
+        val password = secureSettings.nimsPassword()
+        if (username.isBlank() || password.isBlank()) {
+            status = "No saved NIMS login. Enter it once below and tap Save login."
+            return
+        }
+        webView.evaluateJavascript(NimsCredentialAutofill.fillScript(username, password)) { raw ->
+            val result = decodeObject(raw)
+            when {
+                result.optBoolean("ok") && result.optBoolean("captchaFound") ->
+                    status = "ID and password filled. Enter the fresh CAPTCHA, then tap Authenticate."
+                result.optBoolean("ok") ->
+                    status = "ID and password filled. Complete any NIMS verification shown, then tap Authenticate."
+                else -> status = "Waiting for the NIMS login form…"
+            }
+        }
+    }
+
+    private fun authenticateLogin() {
+        if (launched) return
+        webView.evaluateJavascript(NimsCredentialAutofill.authenticateScript) { raw ->
+            val result = decodeObject(raw)
+            when (result.optString("reason")) {
+                "captcha_required" -> status = "Enter the fresh CAPTCHA shown by NIMS, then tap Authenticate."
+                "clicked_login", "submitted_form" -> {
+                    loginFormSeen = true
+                    status = "Submitting NIMS login…"
+                    handler.postDelayed({ inspectAndAdvance(0, userRequestedVerification = true) }, 650L)
+                }
+                "login_form_not_found" -> verifyLogin()
+                else -> status = "The NIMS login form is not ready. Reload login if needed."
+            }
+        }
     }
 
     private fun inspectAndAdvance(
@@ -156,6 +254,12 @@ class LoginGateActivity : ComponentActivity() {
                     "cr=$crReady rows=$reportRows logout=$logoutVisible expired=$sessionExpired"
             )
 
+            if (!loginVisible && !sessionExpired && protectedRoute && (crReady || reportRows > 0 || logoutVisible)) {
+                log("AUTH reused existing protected session")
+                openResultsWorkflow()
+                return@evaluateJavascript
+            }
+
             if (sessionExpired) {
                 protectedVerificationStarted = false
                 loginFormGoneAt = 0L
@@ -166,15 +270,16 @@ class LoginGateActivity : ComponentActivity() {
             if (loginVisible) {
                 loginFormSeen = true
                 loginFormGoneAt = 0L
-                if (protectedVerificationStarted) {
-                    protectedVerificationStarted = false
-                    status = "NIMS did not accept the session. Check user ID, password and captcha, then login again."
-                } else {
-                    status = if (userRequestedVerification) {
-                        "Submit the NIMS login form first, then tap Continue to results."
+                if (protectedVerificationStarted) protectedVerificationStarted = false
+                if (secureSettings.hasNimsCredentials()) {
+                    if (lastAutofillUrl != lastFinishedUrl) {
+                        lastAutofillUrl = lastFinishedUrl
+                        autofillSavedCredentials()
                     } else {
-                        "Enter user ID, password and captcha, then submit the NIMS form."
+                        status = "Enter the fresh CAPTCHA, then tap Authenticate."
                     }
+                } else {
+                    status = "Enter the NIMS user ID/password once below, save them securely, then enter the CAPTCHA."
                 }
                 return@evaluateJavascript
             }
@@ -288,6 +393,7 @@ class LoginGateActivity : ComponentActivity() {
             Intent(this, ProductionWorkflowActivity::class.java)
                 .putExtra(EXTRA_VERIFIED_LOGIN, true)
                 .putExtra(EXTRA_HANDOFF_URL, handoffUrl)
+                .putExtra(EXTRA_PENDING_CR, pendingCr)
         )
         finish()
     }
@@ -347,6 +453,7 @@ class LoginGateActivity : ComponentActivity() {
     companion object {
         internal const val EXTRA_VERIFIED_LOGIN = "nims_verified_login"
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
+        internal const val EXTRA_PENDING_CR = "nims_pending_cr"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
@@ -459,6 +566,15 @@ internal object LoginGatePolicy {
 private fun LoginGateScreen(
     webView: WebView,
     status: String,
+    savedUsername: String,
+    credentialUsername: String,
+    credentialPassword: String,
+    onCredentialUsernameChange: (String) -> Unit,
+    onCredentialPasswordChange: (String) -> Unit,
+    onSaveCredentials: () -> Unit,
+    onClearCredentials: () -> Unit,
+    onAutofill: () -> Unit,
+    onAuthenticate: () -> Unit,
     onContinue: () -> Unit,
     onLogoutOtherSessions: () -> Unit,
     onReloadLogin: () -> Unit,
@@ -469,16 +585,45 @@ private fun LoginGateScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("NIMS login", style = MaterialTheme.typography.headlineMedium)
-        Text("Enter user ID, password and captcha. Credentials are not stored by this app.")
+        if (savedUsername.isBlank()) {
+            Text("Save the NIMS login once on this phone. It is encrypted with Android Keystore and never sent to the dashboard or ChatGPT.")
+            OutlinedTextField(
+                value = credentialUsername,
+                onValueChange = onCredentialUsernameChange,
+                label = { Text("NIMS user ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = credentialPassword,
+                onValueChange = onCredentialPasswordChange,
+                label = { Text("NIMS password") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(onClick = onSaveCredentials, modifier = Modifier.fillMaxWidth()) { Text("Save login on this phone") }
+        } else {
+            Text("Saved login: $savedUsername")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = onAutofill, modifier = Modifier.weight(1f)) { Text("Use saved login") }
+                OutlinedButton(onClick = onClearCredentials, modifier = Modifier.weight(1f)) { Text("Forget login") }
+            }
+        }
+        Text("CAPTCHA stays manual and is never read or stored by the app.")
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
         Text(status, style = MaterialTheme.typography.bodyMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Button(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Continue to results") }
-            OutlinedButton(onClick = onReloadLogin, modifier = Modifier.weight(1f)) { Text("Reload login") }
+            Button(onClick = onAuthenticate, modifier = Modifier.weight(1f)) { Text("Authenticate") }
+            OutlinedButton(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Check login") }
         }
+        OutlinedButton(onClick = onReloadLogin, modifier = Modifier.fillMaxWidth()) { Text("Reload login") }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)

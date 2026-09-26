@@ -4,7 +4,7 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 
 - The Chrome extension uses only the already logged-in Chrome session.
 - It does not implement automatic login.
-- It does not store usernames, passwords, OTPs, captcha answers, or session tokens.
+- The desktop Chrome extension does not store usernames, passwords, OTPs, captcha answers, or session tokens.
 - It must not be used to bypass hospital authentication, captcha, OTP, session expiry, or access controls.
 - The local helper runs on `http://127.0.0.1:8765` and stores parsed JSON cache only.
 - The helper can optionally run in Railway remote mode. Railway remote mode receives report PDF/HTML/text content for parsing, so it must be protected by `NIMS_HELPER_API_KEY`.
@@ -36,7 +36,7 @@ NIMS Fast Summary is designed for local personal clinical workflow.
 - Do not commit `cache.db`, `.env`, logs, API keys, or real report samples.
 - Do not upload PHI to external services.
 - Optional AI interpretation, if enabled later with `OPENAI_API_KEY`, must receive only de-identified structured JSON.
-- Android mobile mode uses manual NIMS login in a WebView. The app does not add credential fields, does not store NIMS usernames/passwords, does not auto-fill credentials, does not export cookies, and must not bypass captcha/OTP/session controls.
+- Android mobile mode may explicitly remember the NIMS user ID/password only when the clinician opts in. Values are AES-GCM encrypted under a dedicated Android Keystore key, remain on-device, are never logged/exported/transmitted, and can be cleared independently. The app may autofill those saved credentials into the local NIMS WebView. CAPTCHA/OTP remains human-entered and is never read, stored, OCR-solved, exported, or sent to a relay. Cookies/session tokens remain on-device and are never exported.
 - Android report fetching uses the active WebView cookie session and sends report content to the configured helper only for parsing. NIMS cookies stay on the device and are not posted to Railway.
 - Android helper API keys are stored with Android Keystore-backed encryption. Clear settings controls are available.
 - Do not use Google Drive or any cloud file store as a parser backend. Google Drive may be used only for manual export storage if the user chooses.

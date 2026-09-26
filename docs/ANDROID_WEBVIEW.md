@@ -13,7 +13,7 @@ Unmodified NIMS portal during login and navigation
   -> native Reports, Trends, Cultures, and Summary UI
 ```
 
-NIMS remains responsible for authentication, captcha or OTP, menu and frame navigation, CR-number entry, form submission, and source-report rendering.
+NIMS remains responsible for authentication decisions, CAPTCHA/OTP verification, and source-report rendering. Android may reuse an authenticated session, autofill explicitly saved Keystore-encrypted user ID/password values, and automate CR/report navigation; CAPTCHA/OTP remains human-entered.
 
 During login and ordinary portal navigation the app installs no document-start JavaScript, persistent bridge, polling timer, DOM observer, jQuery replacement, compatibility shim, or navigation automation. The only Android JavaScript asset is `src/main/assets/nimsOnDemandExtractor.js`, and it executes once only when the clinician taps **Analyze**.
 
@@ -28,7 +28,7 @@ During login and ordinary portal navigation the app installs no document-start J
 7. Review the native Reports, Trends, Cultures, and Summary tabs.
 8. Verify generated values against the source NIMS reports before clinical use.
 
-The app does not automate login, captcha, OTP, CR entry, form submission, or menu navigation.
+The app may streamline login by reusing the active session and locally autofilling opt-in Keystore-encrypted credentials, and it may automate CR/report navigation. CAPTCHA/OTP is not read, stored, OCR-solved, or bypassed.
 
 ## On-demand extractor contract
 
@@ -79,4 +79,4 @@ CI cannot reproduce authenticated live NIMS behaviour. A final supervised device
 
 ## Privacy and clinical safety
 
-NIMS credentials are not stored. Cookies remain on-device and are used only for approved NIMS requests. Every parsed report retains provenance and explicit failure status. Generated summaries are supervised decision support and must be checked against the source NIMS reports before clinical decisions.
+NIMS credentials are stored only when the clinician explicitly enables remembered login; they are encrypted with Android Keystore and never leave the device. CAPTCHA/OTP is never stored. Cookies remain on-device and are used only for approved NIMS requests. Every parsed report retains provenance and explicit failure status. Generated summaries are supervised decision support and must be checked against the source NIMS reports before clinical decisions.
