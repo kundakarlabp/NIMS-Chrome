@@ -7,7 +7,8 @@ class NimsBackgroundReportListParserTest {
     @Test fun parsesSyntheticReportRowsWithoutExportingTransientTokens() {
         val html = """
             <html><body>
-              <div>Patient Name: TEST PATIENT</div>
+              <div>Patient Name: TEST PATIENT Age: 45 Years Sex: Male CR No: 331012601234567</div>
+              <input name="patCrNo" value="331012601234567">
               <table>
                 <tr><td>01-Jan-2026</td><td>CBC</td><td><button onclick="return printReport('SAFE_FIXTURE_ARG');">View Report</button></td></tr>
                 <tr><td>02-Jan-2026</td><td>Blood Culture</td><td><a onclick="printReport('CULTURE_TOKEN_2')">View Report</a></td></tr>
@@ -15,7 +16,10 @@ class NimsBackgroundReportListParserTest {
             </body></html>
         """.trimIndent()
         val parsed = NimsBackgroundReportListParser.parse(html)
-        assertEquals("TEST PATIENT", parsed.patientName)
+        assertTrue(parsed.patientName.startsWith("TEST PATIENT"))
+        assertEquals("331012601234567", parsed.returnedCrNo)
+        assertTrue(parsed.age.startsWith("45"))
+        assertEquals("Male", parsed.sex)
         assertEquals(2, parsed.rows.size)
         assertEquals("CBC", parsed.rows[0].reportName)
         assertEquals("lab", parsed.rows[0].reportType)
