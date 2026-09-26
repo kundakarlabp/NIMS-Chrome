@@ -1311,10 +1311,11 @@ async function fetchCrForDashboard(rawCrNo, sender) {
     const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
     if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
     await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", { payload: bundle });
-    return { ok: true, resultCount: bundle.results.length, reportCount: bundle.reports.length };
+    return { ok: true, resultCount: bundle.results.length, reportCount: bundle.reports.length, bundle };
   } catch (error) {
     const message = error && error.message ? error.message : "NIMS retrieval failed.";
     await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", { error: message });
     return { ok: false, error: message };
   }
 }
+\n\nglobalThis.NimsDashboardBridgeApi = { fetchCrForDashboard };\nimportScripts("chatRelayCrypto.js", "chatRelay.js");\n
