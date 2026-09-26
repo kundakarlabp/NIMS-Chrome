@@ -76,6 +76,12 @@ class NimsRelayPairingActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Pair dashboard / ChatGPT") }
 
+                    OutlinedButton(
+                        onClick = ::revokePairing,
+                        enabled = bridgeEnabled,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Revoke paired dashboard / ChatGPT") }
+
                     if (pairingCode.isNotBlank()) {
                         Text("One-time pairing code", style = MaterialTheme.typography.labelLarge)
                         Text(pairingCode, style = MaterialTheme.typography.headlineLarge)
@@ -117,6 +123,19 @@ class NimsRelayPairingActivity : ComponentActivity() {
         expiresAt = ""
         NimsRelayService.stop(this)
         status = "Secure relay stopped. NIMS itself remains available in the app."
+    }
+
+    private fun revokePairing() {
+        status = "Revoking paired requester…"
+        lifecycleScope.launch {
+            runCatching { client.revokeRequester() }
+                .onSuccess {
+                    pairingCode = ""
+                    expiresAt = ""
+                    status = "Paired dashboard/ChatGPT requester revoked. Create a new pairing code when needed."
+                }
+                .onFailure { status = "Could not revoke pairing yet. Check connectivity and retry." }
+        }
     }
 
     private fun generatePairingCode() {
