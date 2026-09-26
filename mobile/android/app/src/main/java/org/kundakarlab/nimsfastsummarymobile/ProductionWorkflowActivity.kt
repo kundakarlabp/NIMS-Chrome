@@ -235,6 +235,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     onLogout = ::logout,
                     onCopyLogs = ::copyLogs,
                     onShareSummary = ::shareClinicalSummary,
+                    onOpenBridge = { startActivity(Intent(this, NimsRelayPairingActivity::class.java)) },
                     onChangePatient = ::changePatient,
                     onManualCorrection = ::addManualCorrection,
                     onUndoCorrection = ::undoCorrection,

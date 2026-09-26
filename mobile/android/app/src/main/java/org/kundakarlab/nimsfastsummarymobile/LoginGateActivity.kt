@@ -70,14 +70,17 @@ class LoginGateActivity : ComponentActivity() {
     private var credentialUsernameInput by mutableStateOf("")
     private var credentialPasswordInput by mutableStateOf("")
     private var pendingCr = ""
+    private var relayJobId = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         secureSettings = SecureSettings(this)
+        if (secureSettings.relayEnabled()) runCatching { NimsRelayService.start(this) }
         savedUsername = secureSettings.nimsUsername()
         credentialUsernameInput = savedUsername
         pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(20)
+        relayJobId = intent.getStringExtra(EXTRA_RELAY_JOB_ID).orEmpty()
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -120,7 +123,8 @@ class LoginGateActivity : ComponentActivity() {
                     onContinue = ::verifyLogin,
                     onLogoutOtherSessions = ::logoutOtherSessions,
                     onReloadLogin = ::beginFreshLogin,
-                    onCopyLogs = ::copyLogs
+                    onCopyLogs = ::copyLogs,
+                    onOpenBridge = { startActivity(Intent(this, NimsRelayPairingActivity::class.java)) }
                 )
             }
         }
@@ -385,8 +389,15 @@ class LoginGateActivity : ComponentActivity() {
     private fun openResultsWorkflow() {
         if (launched) return
         launched = true
-        status = "NIMS login verified. Opening patient results…"
         CookieManager.getInstance().flush()
+        if (relayJobId.isNotBlank()) {
+            status = "NIMS login verified. Resuming the encrypted request…"
+            log("AUTH verified; resuming relay job")
+            NimsRelayService.resumeAfterAuthentication(this, relayJobId)
+            finish()
+            return
+        }
+        status = "NIMS login verified. Opening patient results…"
         log("AUTH verified; opening production workflow")
         val handoffUrl = lastFinishedUrl.takeIf(::isAllowedNimsUrl).orEmpty()
         startActivity(
@@ -454,6 +465,7 @@ class LoginGateActivity : ComponentActivity() {
         internal const val EXTRA_VERIFIED_LOGIN = "nims_verified_login"
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
         internal const val EXTRA_PENDING_CR = "nims_pending_cr"
+        internal const val EXTRA_RELAY_JOB_ID = "nims_relay_job_id"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
@@ -578,7 +590,8 @@ private fun LoginGateScreen(
     onContinue: () -> Unit,
     onLogoutOtherSessions: () -> Unit,
     onReloadLogin: () -> Unit,
-    onCopyLogs: () -> Unit
+    onCopyLogs: () -> Unit,
+    onOpenBridge: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -624,6 +637,7 @@ private fun LoginGateScreen(
             OutlinedButton(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Check login") }
         }
         OutlinedButton(onClick = onReloadLogin, modifier = Modifier.fillMaxWidth()) { Text("Reload login") }
+        OutlinedButton(onClick = onOpenBridge, modifier = Modifier.fillMaxWidth()) { Text("Dashboard / ChatGPT bridge") }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
