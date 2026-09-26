@@ -566,6 +566,15 @@ internal object LoginGatePolicy {
 private fun LoginGateScreen(
     webView: WebView,
     status: String,
+    savedUsername: String,
+    credentialUsername: String,
+    credentialPassword: String,
+    onCredentialUsernameChange: (String) -> Unit,
+    onCredentialPasswordChange: (String) -> Unit,
+    onSaveCredentials: () -> Unit,
+    onClearCredentials: () -> Unit,
+    onAutofill: () -> Unit,
+    onAuthenticate: () -> Unit,
     onContinue: () -> Unit,
     onLogoutOtherSessions: () -> Unit,
     onReloadLogin: () -> Unit,
@@ -576,16 +585,45 @@ private fun LoginGateScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text("NIMS login", style = MaterialTheme.typography.headlineMedium)
-        Text("Enter user ID, password and captcha. Credentials are not stored by this app.")
+        if (savedUsername.isBlank()) {
+            Text("Save the NIMS login once on this phone. It is encrypted with Android Keystore and never sent to the dashboard or ChatGPT.")
+            OutlinedTextField(
+                value = credentialUsername,
+                onValueChange = onCredentialUsernameChange,
+                label = { Text("NIMS user ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = credentialPassword,
+                onValueChange = onCredentialPasswordChange,
+                label = { Text("NIMS password") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(onClick = onSaveCredentials, modifier = Modifier.fillMaxWidth()) { Text("Save login on this phone") }
+        } else {
+            Text("Saved login: $savedUsername")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = onAutofill, modifier = Modifier.weight(1f)) { Text("Use saved login") }
+                OutlinedButton(onClick = onClearCredentials, modifier = Modifier.weight(1f)) { Text("Forget login") }
+            }
+        }
+        Text("CAPTCHA stays manual and is never read or stored by the app.")
         AndroidView(factory = { webView }, modifier = Modifier.fillMaxWidth().weight(1f))
         Text(status, style = MaterialTheme.typography.bodyMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Button(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Continue to results") }
-            OutlinedButton(onClick = onReloadLogin, modifier = Modifier.weight(1f)) { Text("Reload login") }
+            Button(onClick = onAuthenticate, modifier = Modifier.weight(1f)) { Text("Authenticate") }
+            OutlinedButton(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Check login") }
         }
+        OutlinedButton(onClick = onReloadLogin, modifier = Modifier.fillMaxWidth()) { Text("Reload login") }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
