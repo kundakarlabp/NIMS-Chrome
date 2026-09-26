@@ -183,10 +183,22 @@ class ProductionWorkflowActivity : ComponentActivity() {
         installRuntimeAtDocumentStart()
         addLog("BUILD versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
         val verifiedHandoff = intent.getBooleanExtra(LoginGateActivity.EXTRA_VERIFIED_LOGIN, false)
+        val pendingCrFromLogin = intent.getStringExtra(LoginGateActivity.EXTRA_PENDING_CR)
+            .orEmpty()
+            .filter(Char::isDigit)
+            .take(20)
+        if (pendingCrFromLogin.length >= 6) {
+            crNumber = pendingCrFromLogin
+            pendingCrSubmitAfterReady = true
+        }
         if (verifiedHandoff) {
             phase = ProductionPhase.OPENING_CR
-            status = "Opening the CR results module…"
-            addLog("SESSION_HANDOFF verified=true target=cr_module")
+            status = if (pendingCrSubmitAfterReady) {
+                "NIMS login verified. Resuming CR $pendingCrFromLogin…"
+            } else {
+                "Opening the CR results module…"
+            }
+            addLog("SESSION_HANDOFF verified=true target=cr_module pendingCr=${pendingCrSubmitAfterReady}")
             CookieManager.getInstance().flush()
             webView.loadUrl(CR_RESULTS_URL)
         } else {
@@ -848,12 +860,15 @@ class ProductionWorkflowActivity : ComponentActivity() {
 
     private fun loginAgain() {
         crReadinessPollActive = false
-        pendingCrSubmitAfterReady = false
         authenticated = false
         crModuleReady = false
-        phase = ProductionPhase.LOGIN
-        status = "Login to NIMS to continue."
-        webView.loadUrl(NIMS_LOGIN_URL)
+        val resumeCr = activeCrNumber.ifBlank { crNumber }.filter(Char::isDigit).take(20)
+        status = "Opening streamlined NIMS authentication…"
+        startActivity(
+            Intent(this, LoginGateActivity::class.java)
+                .putExtra(LoginGateActivity.EXTRA_PENDING_CR, resumeCr)
+        )
+        finish()
     }
 
     private fun logoutOtherSessions() {
@@ -903,9 +918,9 @@ class ProductionWorkflowActivity : ComponentActivity() {
             clearPatientState(clearLastCompletedCr = true)
             authenticated = false
             crModuleReady = false
-            phase = ProductionPhase.LOGIN
             status = "Logged out."
-            webView.loadUrl(NIMS_LOGIN_URL)
+            startActivity(Intent(this, LoginGateActivity::class.java))
+            finish()
         }
     }
 
