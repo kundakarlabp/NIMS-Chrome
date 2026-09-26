@@ -1,15 +1,30 @@
 package org.kundakarlab.nimsfastsummarymobile
 
-import org.json.JSONObject
-
 /**
  * Login helper scripts. Username/password are supplied only from the local
  * Keystore-backed credential vault. CAPTCHA text is never read back into Kotlin.
  */
 object NimsCredentialAutofill {
+    private fun jsStringLiteral(value: String): String = buildString {
+        append('"')
+        value.forEach { ch ->
+            when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                else -> if (ch.code < 0x20) append("\\u%04x".format(ch.code)) else append(ch)
+            }
+        }
+        append('"')
+    }
+
     fun fillScript(username: String, password: String): String {
-        val user = JSONObject.quote(username)
-        val pass = JSONObject.quote(password)
+        val user = jsStringLiteral(username)
+        val pass = jsStringLiteral(password)
         return """
             (function(){
               function collect(doc,out,seen,depth){
