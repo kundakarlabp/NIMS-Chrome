@@ -1292,7 +1292,7 @@ function bundleFromParsedReports(crNo, extracted, state) {
 
 async function fetchCrForDashboard(rawCrNo, sender) {
   const crNo = String(rawCrNo || "").replace(/\D/g, "");
-  if (!/^\\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
+  if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
   try {
     await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo });
     const tabId = await ensureDashboardWorkerTab();
