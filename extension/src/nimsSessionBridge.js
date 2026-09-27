@@ -125,7 +125,7 @@
 
   function submitCrNumber(raw) {
     const crNo = String(raw || "").replace(/\D/g, "");
-    if (!/^\\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
+    if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
     const input = findCrInput();
     if (!input) return { ok: false, error: "CR number field is not ready." };
     setInputValue(input, crNo);
