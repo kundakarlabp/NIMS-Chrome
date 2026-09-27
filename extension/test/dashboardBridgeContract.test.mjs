@@ -38,3 +38,4 @@ test('background keeps per-browser authenticated session and moves login tab out
 test('dashboard bridge marks connector readiness for dashboard polling fallback', () => {
   assert.match(dashboardBridge, /data-nims-connector-ready/);
 });
+\n\ntest('restored bridge scripts are syntactically valid JavaScript', () => {\n  assert.doesNotThrow(() => new Function(dashboardBridge));\n  assert.doesNotThrow(() => new Function(sessionBridge));\n  assert.doesNotThrow(() => new Function(background));\n});\n
