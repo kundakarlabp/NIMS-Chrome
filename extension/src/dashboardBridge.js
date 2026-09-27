@@ -45,6 +45,7 @@
     return false;
   });
 
-  try { document.documentElement.setAttribute("data-nims-connector-ready", "1"); } catch {}\n  post("KBP_NIMS_BRIDGE_READY", { ready: true });
+  try { document.documentElement.setAttribute("data-nims-connector-ready", "1"); } catch {}
+  post("KBP_NIMS_BRIDGE_READY", { ready: true });
   emitStatus();
 })();
