@@ -25,6 +25,8 @@ test('NIMS session bridge uses exact CR form contract and never collects credent
   assert.match(sessionBridge, /SHOWPATDETAILS/);
   assert.doesNotMatch(sessionBridge, /password\s*[:=]/i);
   assert.doesNotMatch(sessionBridge, /captcha\s*[:=]/i);
+  assert.ok(sessionBridge.includes('if (!/^\\d{15}$/.test(crNo))'));
+  assert.ok(background.includes('if (!/^\\d{15}$/.test(crNo))'));
 });
 
 test('background keeps per-browser authenticated session and moves login tab out before closing popup', () => {
@@ -34,8 +36,12 @@ test('background keeps per-browser authenticated session and moves login tab out
   assert.match(background, /bundleFromParsedReports/);
 });
 
-
 test('dashboard bridge marks connector readiness for dashboard polling fallback', () => {
   assert.match(dashboardBridge, /data-nims-connector-ready/);
 });
-\n\ntest('restored bridge scripts are syntactically valid JavaScript', () => {\n  assert.doesNotThrow(() => new Function(dashboardBridge));\n  assert.doesNotThrow(() => new Function(sessionBridge));\n  assert.doesNotThrow(() => new Function(background));\n});\n
+
+test('restored bridge scripts are syntactically valid JavaScript', () => {
+  assert.doesNotThrow(() => new Function(dashboardBridge));
+  assert.doesNotThrow(() => new Function(sessionBridge));
+  assert.doesNotThrow(() => new Function(background));
+});
