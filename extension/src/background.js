@@ -1,4 +1,5 @@
-importScripts("nimsRestApi.js");\nconst DEFAULT_HELPER = "http://127.0.0.1:8765";
+importScripts("nimsRestApi.js");
+const DEFAULT_HELPER = "http://127.0.0.1:8765";
 const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
   "https://www.nimsts.edu.in/AHIMSG5/*",
