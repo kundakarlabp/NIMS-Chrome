@@ -1372,6 +1372,9 @@ async function fetchCrForDashboard(rawCrNo, sender) {
   if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
   try {
     await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_rest_api" });
+    // Preserve the existing trust boundary: REST is an optimization inside an
+    // already authenticated clinician NIMS session, never an authentication bypass.
+    await ensureDashboardWorkerTab();
     const rest = await tryRestApiForDashboard(crNo);
     let bundle;
     let source;
