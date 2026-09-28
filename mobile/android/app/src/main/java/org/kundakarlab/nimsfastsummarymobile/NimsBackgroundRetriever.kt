@@ -47,19 +47,21 @@ class NimsBackgroundRetriever(context: Context) {
 
     suspend fun retrieve(crNo: String): JSONObject = withContext(Dispatchers.IO) {
         require(crNo.matches(Regex("""\d{15}"""))) { "Invalid CR number" }
-        val (body, finalUrl) = fetchReportList(crNo)
-        if (NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, finalUrl)) {
-            throw NimsAuthenticationRequiredException()
+        val reportList = try {
+            fetchReportListRest(crNo)
+        } catch (identity: NimsIdentityMismatchException) {
+            throw identity
+        } catch (_: Throwable) {
+            val (body, finalUrl) = fetchReportListLegacy(crNo)
+            if (NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, finalUrl)) {
+                throw NimsAuthenticationRequiredException()
+            }
+            NimsBackgroundReportListParser.parse(body)
         }
-
-        val reportList = NimsBackgroundReportListParser.parse(body)
         if (reportList.returnedCrNo.isNotBlank() && reportList.returnedCrNo != crNo) {
             throw NimsIdentityMismatchException()
         }
         if (reportList.rows.isEmpty()) {
-            if (Regex("login|captcha|password", RegexOption.IGNORE_CASE).containsMatchIn(body)) {
-                throw NimsAuthenticationRequiredException()
-            }
             throw IllegalStateException("No NIMS reports were found for the requested CR")
         }
 
@@ -95,7 +97,37 @@ class NimsBackgroundRetriever(context: Context) {
         canonicalBundle(crNo, reportList, reconciled)
     }
 
-    private fun fetchReportList(crNo: String): Pair<String, String> {
+    private fun fetchReportListRest(crNo: String): BackgroundReportList {
+        val url = "$REPORT_LIST_API?crNo=$crNo&hosCode=$HOSPITAL_CODE"
+        val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
+        if (cookie.isBlank()) throw NimsAuthenticationRequiredException()
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("Cookie", cookie)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "application/json,text/plain,*/*")
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            syncResponseCookies(response.request.url.toString(), response.headers("Set-Cookie"))
+            if (response.code == 401 || response.code == 403 ||
+                NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, response.request.url.toString())
+            ) {
+                throw NimsAuthenticationRequiredException()
+            }
+            if (!response.isSuccessful) throw IllegalStateException("NIMS report-list API returned ${response.code}")
+            val parsed = runCatching { NimsRestReportListParser.parse(body, crNo) }
+                .getOrElse { error ->
+                    if (error is NimsIdentityMismatchException) throw error
+                    throw IllegalStateException("NIMS report-list API returned an unsupported payload")
+                }
+            if (parsed.rows.isEmpty()) throw IllegalStateException("NIMS report-list API returned no usable report rows")
+            return parsed
+        }
+    }
+
+    private fun fetchReportListLegacy(crNo: String): Pair<String, String> {
         val initialCookie = CookieManager.getInstance().getCookie(CR_RESULTS_URL).orEmpty()
         if (initialCookie.isBlank()) throw NimsAuthenticationRequiredException()
 
@@ -164,39 +196,44 @@ class NimsBackgroundRetriever(context: Context) {
     }
 
     private suspend fun fetchAndParse(row: BackgroundReportRow, template: ReportTemplate): ParsedReport? {
-        val url = NimsReportTemplate.directReportUrlOrNull(template, row.token) ?: return null
-        val fetched = reportClient.fetch(url, MAX_REPORT_BYTES)
-        if (ReportResponseClassifier.classify(fetched.statusCode, fetched.contentType, fetched.bytes) == "html_login_or_session") {
-            throw NimsAuthenticationRequiredException()
+        val urls = buildList {
+            row.directUrl.takeIf { it.isNotBlank() && NimsReportTemplate.isAllowedNimsUrl(it) }?.let(::add)
+            NimsReportTemplate.directReportUrlOrNull(template, row.token)?.let(::add)
+        }.distinct()
+        if (urls.isEmpty()) return null
+
+        var lastWarning = "Report fetch failed; verify this source report in NIMS."
+        for (url in urls) {
+            val fetched = runCatching { reportClient.fetch(url, MAX_REPORT_BYTES) }.getOrNull() ?: continue
+            val classification = ReportResponseClassifier.classify(fetched.statusCode, fetched.contentType, fetched.bytes)
+            if (classification == "html_login_or_session") throw NimsAuthenticationRequiredException()
+            if (classification !in setOf("pdf_report", "html_report_content")) {
+                lastWarning = "Unsupported NIMS report response ($classification); verify the source report."
+                continue
+            }
+            val input = ReportInput(
+                reportId = row.reportId,
+                reportName = row.reportName,
+                dateSent = row.dateSent,
+                reportType = row.reportType,
+                contentType = fetched.contentType.substringBefore(';').ifBlank { "application/octet-stream" },
+                bytes = fetched.bytes,
+                safeSource = fetched.finalUrlSafe
+            )
+            when (val result = processor.parseReport(input)) {
+                is ProcessingResult.Success -> return result.value
+                is ProcessingResult.Failure -> lastWarning = result.userMessage
+                is ProcessingResult.Unsupported -> lastWarning = result.reason
+            }
         }
-        val input = ReportInput(
+        return ParsedReport(
             reportId = row.reportId,
             reportName = row.reportName,
             dateSent = row.dateSent,
             reportType = row.reportType,
-            contentType = fetched.contentType.substringBefore(';').ifBlank { "application/octet-stream" },
-            bytes = fetched.bytes,
-            safeSource = fetched.finalUrlSafe
+            warnings = listOf(lastWarning),
+            processorName = "On-device"
         )
-        return when (val result = processor.parseReport(input)) {
-            is ProcessingResult.Success -> result.value
-            is ProcessingResult.Failure -> ParsedReport(
-                reportId = row.reportId,
-                reportName = row.reportName,
-                dateSent = row.dateSent,
-                reportType = row.reportType,
-                warnings = listOf(result.userMessage),
-                processorName = "On-device"
-            )
-            is ProcessingResult.Unsupported -> ParsedReport(
-                reportId = row.reportId,
-                reportName = row.reportName,
-                dateSent = row.dateSent,
-                reportType = row.reportType,
-                warnings = listOf(result.reason),
-                processorName = "On-device"
-            )
-        }
     }
 
     private fun canonicalBundle(
@@ -285,6 +322,7 @@ class NimsBackgroundRetriever(context: Context) {
             .put("results", results)
             .put("reports", sourceReports)
             .put("enquiryRows", JSONArray())
+            .put("source", reportList.source)
             .put(
                 "coverage",
                 JSONObject()
@@ -314,6 +352,8 @@ class NimsBackgroundRetriever(context: Context) {
     companion object {
         private const val NIMS_ORIGIN = "https://www.nimsts.edu.in"
         private const val CR_RESULTS_URL = "$NIMS_ORIGIN/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
+        private const val REPORT_LIST_API = "https://nimsts.edu.in/HBIMS/services/restful/invService/reportList"
+        private const val HOSPITAL_CODE = "33101"
         private const val MAX_REPORT_BYTES = 25 * 1024 * 1024
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
     }
