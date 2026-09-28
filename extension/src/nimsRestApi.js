@@ -49,10 +49,31 @@
       const url = new URL(value, "https://nimsts.edu.in");
       if (!/^(?:www\.)?nimsts\.edu\.in$/i.test(url.hostname)) return "";
       if (!/^https:$/.test(url.protocol)) return "";
+      if (!/^\/(?:AHIMSG5|HISInvestigationG5|HIS|hislogin|HISUtilities|HBIMS)\//.test(url.pathname)) return "";
       return url.href;
     } catch {
       return "";
     }
+  }
+
+  function safeReportToken(raw) {
+    const token = clean(raw);
+    if (!token || token.length > 512) return "";
+    if (token.includes("..") || token.includes("://") || /[\\/]/.test(token)) return "";
+    for (let i = 0; i < token.length; i += 1) {
+      const code = token.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) return "";
+    }
+    return token;
+  }
+
+  function verifiedReportUrlForToken(raw) {
+    const token = safeReportToken(raw);
+    if (!token) return "";
+    const url = new URL("/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt", "https://www.nimsts.edu.in");
+    url.searchParams.set("hmode", "PRINTREPORT");
+    url.searchParams.set("fileName", token);
+    return url.href;
   }
 
   function normalizeRow(row, index) {
@@ -60,7 +81,10 @@
     const date = first(row, ["reportDate","report_date","resultDate","result_date","dateSent","date_sent","sampleDate","sample_date","date"]);
     const department = first(row, ["department","departmentName","department_name","labName","lab_name","section"]);
     const rawUrl = first(row, ["reportUrl","report_url","pdfUrl","pdf_url","url","downloadUrl","download_url"]);
-    const token = first(row, ["fileName","filename","file_name","reportToken","report_token","token"]);
+    const token = safeReportToken(first(row, [
+      "fileName","filename","file_name","reportToken","report_token","token",
+      "reportFileName","report_file_name","pdfFileName","pdf_file_name"
+    ]));
     return {
       id: stableId(row, index),
       title: title || "Investigation report",
@@ -165,6 +189,8 @@
     normalizeReportListPayload,
     fetchReportList,
     safeDiagnostics,
-    safeReportUrl
+    safeReportUrl,
+    safeReportToken,
+    verifiedReportUrlForToken
   };
 })(typeof self !== "undefined" ? self : globalThis);
