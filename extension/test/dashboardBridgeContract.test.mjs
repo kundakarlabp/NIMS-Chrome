@@ -10,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.6');
+  assert.equal(manifest.version, '0.5.7');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);
@@ -95,6 +95,7 @@ test('browser fallback stops before parsing when the displayed CR differs', asyn
   let ranProcessor = false;
   const context = {
     ensureDashboardWorkerTab: async () => 1,
+    probeNimsTab: async () => ({ reportFrame: null }),
     findCrFrame: async () => 0,
     waitForReportFrame: async () => 0,
     chrome: { tabs: { sendMessage: async (_tab, message) => {
@@ -108,6 +109,55 @@ test('browser fallback stops before parsing when the displayed CR differs', asyn
   vm.runInContext(source, context);
   await assert.rejects(() => context.fetchCrForDashboardLegacy('331012600000001'), /identity verification failed/);
   assert.equal(ranProcessor, false);
+});
+
+test('browser fallback reuses an open report list only for the requested CR', async () => {
+  const start = background.indexOf('async function fetchCrForDashboardLegacy(crNo)');
+  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)', start);
+  const source = background.slice(start, end);
+  const requestedCr = '331012600000001';
+  const sent = [];
+  const context = {
+    ensureDashboardWorkerTab: async () => 1,
+    probeNimsTab: async () => ({ reportFrame: { frameId: 0, patient: { crNo: requestedCr } } }),
+    findCrFrame: async () => { throw new Error('should reuse the report list'); },
+    bundleFromParsedReports: () => ({ results: [{}], reports: [{}] }),
+    chrome: { tabs: { sendMessage: async (_tab, message) => {
+      sent.push(message.type);
+      if (message.type === 'NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA') return { patient: { crNo: requestedCr }, reports: [] };
+      if (message.type === 'NIMS_BRIDGE_RUN_SUMMARY') return { ok: true, state: {} };
+      throw new Error('unexpected message');
+    } } }
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  const bundle = await context.fetchCrForDashboardLegacy(requestedCr);
+  assert.deepEqual(sent, ['NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA', 'NIMS_BRIDGE_RUN_SUMMARY']);
+  assert.equal(bundle.source, 'authenticated_browser_fallback');
+});
+
+test('browser fallback waits for the new report after a form-submit port closes', async () => {
+  const start = background.indexOf('async function fetchCrForDashboardLegacy(crNo)');
+  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)', start);
+  const source = background.slice(start, end);
+  const requestedCr = '331012600000001';
+  let waited = false;
+  const context = {
+    ensureDashboardWorkerTab: async () => 1,
+    probeNimsTab: async () => ({ reportFrame: null }),
+    findCrFrame: async () => 0,
+    waitForReportFrame: async () => { waited = true; return 0; },
+    bundleFromParsedReports: () => ({ results: [{}], reports: [{}] }),
+    chrome: { tabs: { sendMessage: async (_tab, message) => {
+      if (message.type === 'NIMS_BRIDGE_SUBMIT_CR') throw new Error('The page keeping the extension port is moved into back/forward cache, so the message channel is closed.');
+      if (message.type === 'NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA') return { patient: { crNo: requestedCr }, reports: [] };
+      if (message.type === 'NIMS_BRIDGE_RUN_SUMMARY') return { ok: true, state: {} };
+    } } }
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await context.fetchCrForDashboardLegacy(requestedCr);
+  assert.equal(waited, true);
 });
 
 test('parsed clinical state is kept in the content frame, not persistent extension storage', () => {
