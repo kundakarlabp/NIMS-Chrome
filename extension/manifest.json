@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Desktop NIMS Results Dashboard connector: manual authenticated login, REST-first report discovery, and proven browser bridge fallback.",
   "permissions": [
     "storage",
@@ -52,8 +52,7 @@
       ],
       "run_at": "document_idle",
       "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
+      "match_about_blank": true
     },
     {
       "matches": [
@@ -80,8 +79,7 @@
       "js": ["src/nimsSessionBridge.js"],
       "run_at": "document_idle",
       "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
+      "match_about_blank": true
     }
   ],
   "background": {

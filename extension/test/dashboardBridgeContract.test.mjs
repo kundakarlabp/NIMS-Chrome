@@ -10,9 +10,10 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.3');
+  assert.equal(manifest.version, '0.5.4');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
+  assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
   assert.equal(files.some(path => /manualAnalysis|sidepanel/i.test(path)), false);
   assert.ok(files.includes('src/contentUtils.js'));
