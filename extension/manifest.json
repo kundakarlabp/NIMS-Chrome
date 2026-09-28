@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Fast Summary",
-  "version": "0.4.1",
-  "description": "Local fast summary tables for NIMS HIS reports after manual login.",
+  "version": "0.4.2",
+  "description": "Authenticated NIMS results retrieval with REST-first discovery and browser fallback.",
   "permissions": [
     "storage",
     "activeTab",
