@@ -512,6 +512,14 @@
       try { topWindow.menuSelected("Investigation", true); rememberProvisionalNavigation(NIMS_PAGE_STAGE.HOME, "selected_investigation"); return navigationResult(true, NIMS_PAGE_STAGE.HOME, "selected_investigation", false); } catch { }
     }
 
+    // Chrome content scripts cannot read page-defined functions from their
+    // isolated world. The real shell exposes an exact Investigation onclick;
+    // clicking it still runs the page's own menuSelected handler.
+    const investigation = findInvestigationModuleTarget(topDoc);
+    if (investigation.ok && investigation.element) {
+      return performNavigationTarget(NIMS_PAGE_STAGE.HOME, "clicked_investigation_module", investigation, "investigation_module_not_found");
+    }
+
     // 6. Native top callMenu as last resort (still attaches SSO ticket + addTab).
     if (topWindow && typeof topWindow.callMenu === "function") {
       try { topWindow.callMenu(CR_WISE_ENDPOINT, CR_WISE_MENU_LABEL); return navigationResult(true, NIMS_PAGE_STAGE.INVESTIGATION_MENU, "called_top_menu_function", false); } catch { }

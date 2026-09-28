@@ -164,6 +164,21 @@ test('home shell selects Investigation via native menuSelected (no URL assignmen
   assert.equal(first.action, 'selected_investigation');
 });
 
+test('isolated content script clicks the exact Investigation tab when page functions are hidden', () => {
+  const { core, dom } = loadCore(`<!doctype html><body>
+    <div>Welcome e-Sushrut Home Menu</div>
+    <button>Investigation Enquiry</button>
+    <button>Investigation</button>
+  </body>`, 'https://nimsts.edu.in/AHIMSG5/hissso/loginLogin.action');
+  delete dom.window.menuSelected;
+  delete dom.window.callMenu;
+  let selected = '';
+  dom.window.document.querySelectorAll('button')[1].addEventListener('click', () => { selected = 'Investigation'; });
+  const result = core.navigateCurrentDocumentStep(dom.window.document);
+  assert.equal(result.action, 'clicked_investigation_module');
+  assert.equal(selected, 'Investigation');
+});
+
 test('home shell without menuSelected falls back to native top callMenu (not URL assignment)', () => {
   const { core, dom } = loadCore(g5Shell, 'https://nimsts.edu.in/AHIMSG5/home');
   delete dom.window.menuSelected;
