@@ -8,7 +8,8 @@ data class BackgroundReportRow(
     val token: String,
     val reportName: String,
     val dateSent: String,
-    val reportType: String
+    val reportType: String,
+    val directUrl: String = ""
 )
 
 data class BackgroundReportList(
@@ -16,7 +17,8 @@ data class BackgroundReportList(
     val returnedCrNo: String,
     val age: String,
     val sex: String,
-    val rows: List<BackgroundReportRow>
+    val rows: List<BackgroundReportRow>,
+    val source: String = "legacy_html"
 )
 
 object NimsBackgroundReportListParser {

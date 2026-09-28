@@ -45,3 +45,30 @@ test('restored bridge scripts are syntactically valid JavaScript', () => {
   assert.doesNotThrow(() => new Function(sessionBridge));
   assert.doesNotThrow(() => new Function(background));
 });
+
+
+test('dashboard retrieval prefers REST reportList and preserves authenticated browser fallback', () => {
+  assert.match(background, /tryRestApiForDashboard/);
+  assert.match(background, /fetchCrForDashboardLegacy/);
+  assert.match(background, /nims_rest_api/);
+  assert.match(background, /authenticated_browser_fallback/);
+  assert.match(background, /KBP_NIMS_SOURCE_FALLBACK/);
+  assert.match(background, /pdf_base64/);
+});
+
+
+test('REST-primary dashboard path remains behind the authenticated NIMS session gate', () => {
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const body = background.slice(start, start + 2600);
+  assert.ok(body.indexOf('ensureDashboardWorkerTab()') >= 0);
+  assert.ok(body.indexOf('ensureDashboardWorkerTab()') < body.indexOf('tryRestApiForDashboard(crNo)'));
+});
+
+
+test('REST parsing does not export transient resolved report URLs into the canonical bundle', () => {
+  const restStart = background.indexOf('async function tryRestApiForDashboard');
+  const restEnd = background.indexOf('async function fetchCrForDashboardLegacy', restStart);
+  const restBody = background.slice(restStart, restEnd);
+  assert.match(restBody, /fetch\(report\.resolvedUrl/);
+  assert.doesNotMatch(restBody, /sourceReports\.push\([^\n]*resolvedUrl/);
+});

@@ -1,3 +1,4 @@
+if (typeof importScripts === "function") importScripts("nimsRestApi.js");
 const DEFAULT_HELPER = "http://127.0.0.1:8765";
 const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
@@ -1290,26 +1291,109 @@ function bundleFromParsedReports(crNo, extracted, state) {
   };
 }
 
+async function tryRestApiForDashboard(crNo) {
+  if (!self.NimsRestApi) return { ok: false, fallback: true, reason: "REST adapter unavailable." };
+  try {
+    const reportList = await self.NimsRestApi.fetchReportList(crNo, fetch, "33101");
+    const diagnostics = self.NimsRestApi.safeDiagnostics(reportList);
+    // reportList is now the preferred discovery path. Until a returned row exposes a
+    // verified report URL/token contract, parsing remains on the proven browser path.
+    // This is deliberately fail-closed: never guess a report URL from patient data.
+    const usable = reportList.reports
+      .map(report => ({
+        ...report,
+        resolvedUrl: report.url || self.NimsRestApi.verifiedReportUrlForToken(report.token)
+      }))
+      .filter(report => report.resolvedUrl);
+    if (!usable.length) return { ok: false, fallback: true, diagnostics, reason: "REST report rows expose neither a verified report URL nor a safe report token." };
+
+    const parsedReports = [];
+    const sourceReports = [];
+    for (const report of usable) {
+      try {
+        const response = await fetch(report.resolvedUrl, { method: "GET", credentials: "include", redirect: "follow" });
+        const contentType = response.headers.get("content-type") || "";
+        const buffer = await response.arrayBuffer();
+        const classified = classifyReportResponse(buffer, contentType, response.status, safeHostPath(response.url));
+        if (!response.ok || directFetchErrorForClassification(classified.classification)) continue;
+        const parsed = await callHelper("/parse-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            report_id: report.id,
+            report_name: report.title,
+            date_sent: report.date,
+            content_type: contentType,
+            pdf_base64: arrayBufferToBase64(buffer)
+          })
+        });
+        if (parsed && parsed.ok && parsed.data) {
+          parsedReports.push(parsed.data);
+          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department });
+        }
+      } catch {}
+    }
+    if (!parsedReports.length) return { ok: false, fallback: true, diagnostics, reason: "REST discovery succeeded but no report parsed through the verified report URLs." };
+    const extracted = { patient: { name: reportList.patientName || "", crNo: reportList.returnedCrNo || crNo }, reports: sourceReports };
+    const bundle = bundleFromParsedReports(crNo, extracted, { parsedReports });
+    if (!bundle.results.length) return { ok: false, fallback: true, diagnostics, reason: "REST reports parsed without structured values." };
+    bundle.source = "nims_rest_api";
+    bundle.coverage = { resultCount: bundle.results.length, reportCount: reportList.reports.length, parsedReportCount: parsedReports.length };
+    return { ok: true, bundle, diagnostics };
+  } catch (error) {
+    return {
+      ok: false,
+      fallback: true,
+      reason: error && error.message ? error.message : "NIMS REST retrieval failed.",
+      code: error && error.code ? error.code : ""
+    };
+  }
+}
+
+async function fetchCrForDashboardLegacy(crNo) {
+  const tabId = await ensureDashboardWorkerTab();
+  const crFrameId = await findCrFrame(tabId);
+  const submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
+  if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
+  const reportFrameId = await waitForReportFrame(tabId);
+  const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
+  const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
+  if (!processed || processed.ok === false) {
+    const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
+    throw new Error("The CR result list opened, but structured value extraction failed: " + reason);
+  }
+  const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
+  if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
+  bundle.source = "authenticated_browser_fallback";
+  return bundle;
+}
+
 async function fetchCrForDashboard(rawCrNo, sender) {
   const crNo = String(rawCrNo || "").replace(/\D/g, "");
   if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
   try {
-    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo });
-    const tabId = await ensureDashboardWorkerTab();
-    const crFrameId = await findCrFrame(tabId);
-    const submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
-    if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
-    const reportFrameId = await waitForReportFrame(tabId);
-    const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
-    const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
-    if (!processed || processed.ok === false) {
-      const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
-      throw new Error("The CR result list opened, but structured value extraction failed: " + reason);
+    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_rest_api" });
+    // Preserve the existing trust boundary: REST is an optimization inside an
+    // already authenticated clinician NIMS session, never an authentication bypass.
+    await ensureDashboardWorkerTab();
+    const rest = await tryRestApiForDashboard(crNo);
+    let bundle;
+    let source;
+    if (rest.ok) {
+      bundle = rest.bundle;
+      source = "nims_rest_api";
+    } else {
+      await pushDashboardEvent("KBP_NIMS_SOURCE_FALLBACK", {
+        from: "nims_rest_api",
+        to: "authenticated_browser_fallback",
+        reason: rest.reason || "REST path unavailable.",
+        diagnostics: rest.diagnostics || {}
+      });
+      bundle = await fetchCrForDashboardLegacy(crNo);
+      source = "authenticated_browser_fallback";
     }
-    const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
-    if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
     await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", { payload: bundle });
-    return { ok: true, resultCount: bundle.results.length, reportCount: bundle.reports.length };
+    return { ok: true, source, resultCount: bundle.results.length, reportCount: bundle.reports.length };
   } catch (error) {
     const message = error && error.message ? error.message : "NIMS retrieval failed.";
     await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", { error: message });
