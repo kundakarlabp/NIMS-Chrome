@@ -1374,10 +1374,32 @@ async function tryRestApiForDashboard(crNo) {
 
 async function fetchCrForDashboardLegacy(crNo) {
   const tabId = await ensureDashboardWorkerTab();
-  const crFrameId = await findCrFrame(tabId);
-  const submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
-  if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
-  const reportFrameId = await waitForReportFrame(tabId);
+  const existing = await probeNimsTab(tabId);
+  let reportFrameId = null;
+  if (existing.reportFrame) {
+    const displayedCrNo = String(existing.reportFrame.patient && existing.reportFrame.patient.crNo || "").replace(/\D/g, "");
+    if (displayedCrNo === crNo) reportFrameId = existing.reportFrame.frameId;
+    else {
+      // A previous CR's list must never be reused for a new request. Return to
+      // the authenticated shell and let its native menu build a fresh SSO URL.
+      await chrome.tabs.update(tabId, { url: NIMS_LOGIN_URL_DASHBOARD });
+      await waitForTabCompleteSafe(tabId);
+    }
+  }
+  if (reportFrameId === null) {
+    const crFrameId = await findCrFrame(tabId);
+    let submitted;
+    try {
+      submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
+    } catch (error) {
+      // A successful form submission can navigate before Chrome delivers the
+      // reply, closing the old content-script port as it enters page cache.
+      if (!/back\/forward cache|message channel is closed/i.test(String(error && error.message || ""))) throw error;
+      submitted = { ok: true };
+    }
+    if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
+    reportFrameId = await waitForReportFrame(tabId);
+  }
   const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
   const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
   if (!returnedCrNo || returnedCrNo !== crNo) {
