@@ -72,3 +72,22 @@ test('REST parsing does not export transient resolved report URLs into the canon
   assert.match(restBody, /fetch\(report\.resolvedUrl/);
   assert.doesNotMatch(restBody, /sourceReports\.push\([^\n]*resolvedUrl/);
 });
+
+
+test('dashboard bridge exposes a unique runtime version for compatibility checks', () => {
+  assert.equal(manifest.version, '0.4.2');
+  assert.match(dashboardBridge, /chrome\.runtime\.getManifest\(\)\.version/);
+  assert.match(dashboardBridge, /version:\s*BRIDGE_VERSION/);
+});
+
+test('desktop REST identity mismatch fails closed instead of entering browser fallback', () => {
+  const start = background.indexOf('const rest = await tryRestApiForDashboard(crNo);');
+  const end = background.indexOf('await pushDashboardEvent("KBP_NIMS_BULK_RESULTS"', start);
+  const body = background.slice(start, end);
+  const mismatch = body.indexOf('NIMS_IDENTITY_MISMATCH');
+  const fallback = body.indexOf('KBP_NIMS_SOURCE_FALLBACK');
+  assert.ok(mismatch >= 0, 'identity mismatch guard is required');
+  assert.ok(fallback >= 0, 'explicit fallback event is required');
+  assert.ok(mismatch < fallback, 'identity mismatch must be handled before fallback');
+  assert.match(body, /NIMS identity verification failed\. Results were not retrieved\./);
+});

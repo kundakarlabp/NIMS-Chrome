@@ -2,9 +2,14 @@
   "use strict";
   if (window.__KBP_NIMS_DASHBOARD_BRIDGE_INSTALLED__) return;
   window.__KBP_NIMS_DASHBOARD_BRIDGE_INSTALLED__ = true;
+  const BRIDGE_VERSION = chrome.runtime.getManifest().version;
+
+  function bridgePayload(payload) {
+    return { ...(payload || {}), version: BRIDGE_VERSION };
+  }
 
   function post(type, payload) {
-    window.postMessage({ type, ...(payload || {}) }, window.location.origin);
+    window.postMessage({ type, ...bridgePayload(payload) }, window.location.origin);
   }
 
   async function send(type, payload) {
