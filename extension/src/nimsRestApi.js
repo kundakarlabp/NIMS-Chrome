@@ -118,9 +118,11 @@
     const patientObject = payload && typeof payload === "object" && !Array.isArray(payload)
       ? (payload.patient || payload.patientDetails || payload.patient_details || payload.data || payload)
       : {};
-    const returnedCrNo = first(patientObject, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no"])
-      || first(rowsSource[0] || {}, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no"]);
-    const patientName = first(patientObject, ["patientName","patient_name","patName","pat_name","name"])
+    const patientObjectCr = first(patientObject, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no"]);
+    const returnedCrNo = patientObjectCr
+      || first(rowsSource[0] || {}, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no"]);
+    const patientName = first(patientObject, ["patientName","patient_name","patName","pat_name"])
+      || (patientObjectCr ? first(patientObject, ["name"]) : "")
       || first(rowsSource[0] || {}, ["patientName","patient_name","patName","pat_name"]);
     return {
       requestedCrNo,
