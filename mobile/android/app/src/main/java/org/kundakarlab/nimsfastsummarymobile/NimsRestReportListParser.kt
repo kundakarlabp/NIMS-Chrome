@@ -75,8 +75,11 @@ object NimsRestReportListParser {
 
     private fun toReportRow(obj: JSONObject): BackgroundReportRow? {
         val name = first(obj, reportNameKeys)
-        val directUrl = safeNimsUrl(first(obj, urlKeys))
-        val token = safeToken(first(obj, tokenKeys))
+        val rawUrl = first(obj, urlKeys)
+        val directUrl = safeNimsUrl(rawUrl)
+        val token = safeToken(first(obj, tokenKeys)).ifBlank {
+            if (directUrl.isBlank()) safeToken(rawUrl) else ""
+        }
         val date = first(obj, dateKeys)
         val department = first(obj, listOf("department", "departmentName", "department_name", "labName", "lab_name", "section"))
 
