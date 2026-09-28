@@ -35,13 +35,17 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.5.2"
+          assert m["version"] == "0.5.3"
           assert "side_panel" not in m and "action" not in m
           scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
           assert "src/contentScript.js" in scripts
           assert "src/contentUtils.js" in scripts
           assert "src/nimsSessionBridge.js" in scripts
           assert not any("manual" in p.lower() or "sidepanel" in p.lower() for p in scripts)
+          from pathlib import Path
+          expected = {"background.js", "contentScript.js", "contentUtils.js", "dashboardBridge.js", "navigationCore.js", "nimsRestApi.js", "nimsSessionBridge.js"}
+          assert {p.name for p in Path("extension/src").iterdir() if p.is_file()} == expected
+          assert all(Path("extension", p).is_file() for p in scripts)
           PY
 
   javascript:

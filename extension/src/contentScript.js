@@ -6,6 +6,7 @@
   const DEBUG_MODE = false;
   let observerStarted = false;
   let periodicScanStarted = false;
+  let summaryState = null;
 
   function start() {
     // Dashboard-driven only. Keep the proven processor available without injecting legacy UI.
@@ -349,11 +350,7 @@
 
   async function saveState(state) {
     const sanitized = utils.sanitizeState(state, DEBUG_MODE);
-    if (isExtension) {
-      await chrome.storage.local.set({ nimsFastSummaryState: sanitized });
-    } else {
-      window.nimsFastSummaryState = sanitized;
-    }
+    summaryState = sanitized;
   }
 
   window.NimsFastSummary = {
@@ -361,6 +358,7 @@
     extractReportRows: () => utils.extractReportRows(document, location.href),
     selectRowsForMode: utils.selectRowsForMode,
     runSummary,
+    getSummaryState: () => summaryState,
     discoverMapping,
     clearMapping,
     scanAndInject,

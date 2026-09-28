@@ -52,6 +52,25 @@ test("fetchReportList fails closed on identity mismatch", async () => {
   await assert.rejects(() => api.fetchReportList("331012600000001", fakeFetch), /different CR number/);
 });
 
+test("fetchReportList rejects a conflicting CR in any report row", async () => {
+  const fakeFetch = async url => ({
+    ok: true, status: 200, url,
+    text: async () => JSON.stringify({ patient: { crNo: "331012600000001" }, reports: [
+      { testName: "CBC", crNo: "331012600000001" },
+      { testName: "Culture", crNo: "331012600000999" }
+    ] })
+  });
+  await assert.rejects(() => api.fetchReportList("331012600000001", fakeFetch), /different CR number/);
+});
+
+test("fetchReportList does not trust rows with no confirmed CR", async () => {
+  const fakeFetch = async url => ({
+    ok: true, status: 200, url,
+    text: async () => JSON.stringify([{ testName: "CBC", reportUrl: "/HBIMS/report/cbc" }])
+  });
+  await assert.rejects(() => api.fetchReportList("331012600000001", fakeFetch), /did not confirm/);
+});
+
 test("diagnostics contain counts only and no identifiers or raw rows", () => {
   const normalized = api.normalizeReportListPayload([{ testName: "CBC", crNo: "331012600000001", fileName: "secret-token" }], "331012600000001");
   const diagnostic = api.safeDiagnostics(normalized);

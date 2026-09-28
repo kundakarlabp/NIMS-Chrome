@@ -49,12 +49,15 @@ The REST endpoint is an optimization layered on top of the existing working brid
 ## Routine use
 
 1. Keep the validated connector loaded in Chrome.
+   Keep the deterministic helper running at `127.0.0.1:8765`, or retain an explicitly configured helper from the existing extension installation. The connector requires it to parse reports from either retrieval path.
 2. Open the dashboard.
 3. Click **Connect NIMS**.
 4. Complete NIMS login and CAPTCHA manually.
 5. Return to the dashboard; it detects the authenticated session.
 6. Enter the 15-digit CR and click **Get results**.
 7. REST is attempted first. If it cannot supply usable reports, the dashboard automatically uses the authenticated browser bridge.
+
+For a local helper, install `helper/requirements.txt` and run `python -m uvicorn main:app --app-dir helper --host 127.0.0.1 --port 8765` from the repository root. The helper must remain running during retrieval.
 
 ## Development validation
 

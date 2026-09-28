@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 const dashboardBridge = fs.readFileSync(new URL('../src/dashboardBridge.js', import.meta.url), 'utf8');
@@ -9,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.2');
+  assert.equal(manifest.version, '0.5.3');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
@@ -84,4 +85,32 @@ test('runtime scripts compile', () => {
   assert.doesNotThrow(() => new Function(sessionBridge));
   assert.doesNotThrow(() => new Function(background));
   assert.doesNotThrow(() => new Function(processor));
+});
+
+test('browser fallback stops before parsing when the displayed CR differs', async () => {
+  const start = background.indexOf('async function fetchCrForDashboardLegacy(crNo)');
+  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)', start);
+  const source = background.slice(start, end);
+  let ranProcessor = false;
+  const context = {
+    ensureDashboardWorkerTab: async () => 1,
+    findCrFrame: async () => 0,
+    waitForReportFrame: async () => 0,
+    chrome: { tabs: { sendMessage: async (_tab, message) => {
+      if (message.type === 'NIMS_BRIDGE_SUBMIT_CR') return { ok: true };
+      if (message.type === 'NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA') return { patient: { crNo: '331012600000999' }, reports: [] };
+      ranProcessor = true;
+      return { ok: true, state: {} };
+    } } }
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await assert.rejects(() => context.fetchCrForDashboardLegacy('331012600000001'), /identity verification failed/);
+  assert.equal(ranProcessor, false);
+});
+
+test('parsed clinical state is kept in the content frame, not persistent extension storage', () => {
+  assert.match(processor, /getSummaryState: \(\) => summaryState/);
+  assert.doesNotMatch(processor, /storage\.local\.set\(\{ nimsFastSummaryState/);
+  assert.doesNotMatch(sessionBridge, /storage\.local\.get\("nimsFastSummaryState"\)/);
 });
