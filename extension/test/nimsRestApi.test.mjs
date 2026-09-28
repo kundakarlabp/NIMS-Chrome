@@ -59,3 +59,17 @@ test("diagnostics contain counts only and no identifiers or raw rows", () => {
   assert.doesNotMatch(text, /331012600000001|secret-token/);
   assert.equal(diagnostic.reportCount, 1);
 });
+
+
+test("verified report token resolves only through the fixed NIMS report endpoint", () => {
+  const url = api.verifiedReportUrlForToken("SAFE_FIXTURE_ARG");
+  assert.match(url, /^https:\/\/www\.nimsts\.edu\.in\/HISInvestigationG5\/new_investigation\/invDuplicateResultReportPrinting\.cnt\?/);
+  assert.match(url, /hmode=PRINTREPORT/);
+  assert.match(url, /fileName=SAFE_FIXTURE_ARG/);
+});
+
+test("unsafe report tokens and off-contract NIMS paths are rejected", () => {
+  assert.equal(api.verifiedReportUrlForToken("../secret"), "");
+  assert.equal(api.verifiedReportUrlForToken("https://example.com/a"), "");
+  assert.equal(api.safeReportUrl("https://nimsts.edu.in/not-approved/report.pdf"), "");
+});
