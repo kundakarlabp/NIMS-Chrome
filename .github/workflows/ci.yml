@@ -35,7 +35,7 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.5.5"
+          assert m["version"] == "0.5.6"
           assert all(not entry.get("match_origin_as_fallback") for entry in m["content_scripts"])
           assert "side_panel" not in m and "action" not in m
           scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
