@@ -26,10 +26,13 @@ jobs:
           ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manual*' -o -name 'contentScript.js' -o -name 'contentUtils.js' -o -name 'styles.css' \) | grep .
           ! grep -R -E 'CWS_|chromewebstore|NIMS_HELPER_REMOTE_MODE|sidePanel|side_panel' extension/src helper dashboard README.md SECURITY.md AGENTS.md
       - name: Verify minimal manifest
-        run: python - <<'PY'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
           import json
-          m=json.load(open("extension/manifest.json"))
-          assert set(m["permissions"])=={"tabs","webNavigation"}
+          m = json.load(open("extension/manifest.json"))
+          assert set(m["permissions"]) == {"tabs", "webNavigation"}
           assert "side_panel" not in m and "action" not in m
           assert not any("railway" in h for h in m["host_permissions"])
           PY
