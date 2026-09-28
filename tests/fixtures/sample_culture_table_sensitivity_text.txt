@@ -1,0 +1,13 @@
+Microbiology Culture and Sensitivity
+Lab No: LAB-55
+Site: Urine
+Specimen: Urine
+Growth isolated
+Organism isolated: Escherichia coli
+Antibiotic Interpretation
+Meropenem S
+Amikacin S
+Ceftriaxone R
+Ciprofloxacin I
+Final report
+
