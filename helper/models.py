@@ -1,21 +1,8 @@
 from __future__ import annotations
-
-from typing import Any, Literal
-
+from typing import Literal
 from pydantic import BaseModel, Field
 
-
-ReportType = Literal[
-    "cbc",
-    "rft",
-    "lft",
-    "electrolytes",
-    "coagulation",
-    "culture",
-    "radiology",
-    "other",
-]
-
+ReportType = Literal["cbc","rft","lft","electrolytes","coagulation","culture","radiology","other"]
 
 class ParseReportRequest(BaseModel):
     report_id: str | None = None
@@ -26,16 +13,14 @@ class ParseReportRequest(BaseModel):
     text: str | None = None
     content_type: str = ""
 
-
 class Parameter(BaseModel):
     name: str
     canonical_name: str
     value: str
     unit: str = ""
     reference_range: str = ""
-    abnormal_flag: Literal["low", "high", "normal", "unknown"] = "unknown"
+    abnormal_flag: Literal["low","high","normal","unknown"] = "unknown"
     date_sent: str = ""
-
 
 class CultureResult(BaseModel):
     date_sent: str = ""
@@ -48,9 +33,7 @@ class CultureResult(BaseModel):
     site_specimen: str = ""
     culture_type: str = ""
     bottle_set: str = ""
-    result: Literal[
-        "positive", "negative", "no_growth", "pending", "contaminant", "possible_contaminant", "unknown"
-    ] = "unknown"
+    result: Literal["positive","negative","no_growth","pending","contaminant","possible_contaminant","unknown"] = "unknown"
     growth_quantity: str = ""
     organism: str = ""
     comment: str = ""
@@ -62,15 +45,10 @@ class CultureResult(BaseModel):
     culture_number: str = ""
     site: str = ""
     specimen: str = ""
-    result_status: Literal[
-        "positive", "negative", "no_growth", "pending", "contaminant", "unknown"
-    ] = "unknown"
+    result_status: Literal["positive","negative","no_growth","pending","contaminant","unknown"] = "unknown"
     organisms: list[str] = Field(default_factory=list)
-    sensitivity_summary: dict[str, list[str]] = Field(
-        default_factory=lambda: {"sensitive": [], "resistant": [], "intermediate": []}
-    )
-    report_status: Literal["preliminary", "final", "48_hour", "unknown"] = "unknown"
-
+    sensitivity_summary: dict[str, list[str]] = Field(default_factory=lambda: {"sensitive":[],"resistant":[],"intermediate":[]})
+    report_status: Literal["preliminary","final","48_hour","unknown"] = "unknown"
 
 class ParsedReport(BaseModel):
     report_id: str = ""
@@ -83,20 +61,3 @@ class ParsedReport(BaseModel):
     culture_results: list[CultureResult] = Field(default_factory=list)
     raw_text_preview: str = ""
     errors: list[str] = Field(default_factory=list)
-    cached: bool = False
-
-
-class SummarizeRequest(BaseModel):
-    mode: Literal["fast", "cultures_only", "full"] = "fast"
-    reports: list[ParsedReport | dict[str, Any]] = Field(default_factory=list)
-
-
-class CacheLookupItem(BaseModel):
-    report_key: str
-    report_name: str = ""
-    date_sent: str = ""
-
-
-class CacheLookupRequest(BaseModel):
-    reports: list[CacheLookupItem] = Field(default_factory=list)
-

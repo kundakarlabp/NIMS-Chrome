@@ -1,17 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "NIMS Fast Summary",
-  "version": "0.4.2",
-  "description": "Authenticated NIMS results retrieval with REST-first discovery and browser fallback.",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "tabs",
-    "sidePanel",
-    "webRequest",
-    "webNavigation"
-  ],
+  "name": "NIMS Results Connector",
+  "version": "0.5.0",
+  "description": "Desktop connector for the NIMS Results Dashboard with REST-first report discovery and authenticated browser fallback.",
+  "permissions": ["tabs", "webNavigation"],
   "host_permissions": [
     "https://nimsts.edu.in/AHIMSG5/*",
     "https://nimsts.edu.in/HISInvestigationG5/*",
@@ -26,8 +18,6 @@
     "https://www.nimsts.edu.in/HISUtilities/*",
     "https://www.nimsts.edu.in/HBIMS/*",
     "http://127.0.0.1:8765/*",
-    "https://*.railway.app/*",
-    "https://*.up.railway.app/*",
     "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
   ],
   "content_scripts": [
@@ -46,61 +36,17 @@
         "https://www.nimsts.edu.in/HISUtilities/*",
         "https://www.nimsts.edu.in/HBIMS/*"
       ],
-      "js": [
-        "src/navigationCore.js",
-        "src/contentUtils.js",
-        "src/contentScript.js",
-        "src/manualAnalysisUtils.js",
-        "src/manualAnalysis.js"
-      ],
-      "css": [
-        "src/styles.css"
-      ],
+      "js": ["src/navigationCore.js", "src/nimsSessionBridge.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
     },
     {
-      "matches": [
-        "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
-      ],
-      "js": [
-        "src/dashboardBridge.js"
-      ],
+      "matches": ["https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"],
+      "js": ["src/dashboardBridge.js"],
       "run_at": "document_start"
-    },
-    {
-      "matches": [
-        "https://nimsts.edu.in/AHIMSG5/*",
-        "https://nimsts.edu.in/HISInvestigationG5/*",
-        "https://nimsts.edu.in/HIS/*",
-        "https://nimsts.edu.in/hislogin/*",
-        "https://nimsts.edu.in/HISUtilities/*",
-        "https://nimsts.edu.in/HBIMS/*",
-        "https://www.nimsts.edu.in/AHIMSG5/*",
-        "https://www.nimsts.edu.in/HISInvestigationG5/*",
-        "https://www.nimsts.edu.in/HIS/*",
-        "https://www.nimsts.edu.in/hislogin/*",
-        "https://www.nimsts.edu.in/HISUtilities/*",
-        "https://www.nimsts.edu.in/HBIMS/*"
-      ],
-      "js": [
-        "src/nimsSessionBridge.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true,
-      "match_origin_as_fallback": true
     }
   ],
-  "background": {
-    "service_worker": "src/background.js"
-  },
-  "side_panel": {
-    "default_path": "src/sidepanel.html"
-  },
-  "action": {
-    "default_title": "NIMS Fast Summary"
-  }
+  "background": {"service_worker": "src/background.js"}
 }
