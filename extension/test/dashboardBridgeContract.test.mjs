@@ -45,3 +45,13 @@ test('restored bridge scripts are syntactically valid JavaScript', () => {
   assert.doesNotThrow(() => new Function(sessionBridge));
   assert.doesNotThrow(() => new Function(background));
 });
+
+
+test('dashboard retrieval prefers REST reportList and preserves authenticated browser fallback', () => {
+  assert.match(background, /tryRestApiForDashboard/);
+  assert.match(background, /fetchCrForDashboardLegacy/);
+  assert.match(background, /nims_rest_api/);
+  assert.match(background, /authenticated_browser_fallback/);
+  assert.match(background, /KBP_NIMS_SOURCE_FALLBACK/);
+  assert.match(background, /pdf_base64/);
+});
