@@ -39,6 +39,16 @@ class NimsRestReportListParserTest {
     }
 
     @Test
+    fun tokenShapedReportUrlBecomesOpaqueToken() {
+        val parsed = NimsRestReportListParser.parse(
+            """[{"testName":"CBC","reportUrl":"SAFE_FIXTURE_ARG","crNo":"331012600000001"}]""",
+            cr
+        )
+        assertEquals("", parsed.rows.single().directUrl)
+        assertEquals("SAFE_FIXTURE_ARG", parsed.rows.single().token)
+    }
+
+    @Test
     fun ignoresOffDomainUrlsAndUnsafeTokens() {
         val parsed = NimsRestReportListParser.parse(
             """
