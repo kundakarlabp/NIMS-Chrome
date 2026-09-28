@@ -1298,14 +1298,19 @@ async function tryRestApiForDashboard(crNo) {
     // reportList is now the preferred discovery path. Until a returned row exposes a
     // verified report URL/token contract, parsing remains on the proven browser path.
     // This is deliberately fail-closed: never guess a report URL from patient data.
-    const usable = reportList.reports.filter(report => report.url);
-    if (!usable.length) return { ok: false, fallback: true, diagnostics, reason: "REST report rows do not expose a verified direct report URL." };
+    const usable = reportList.reports
+      .map(report => ({
+        ...report,
+        resolvedUrl: report.url || self.NimsRestApi.verifiedReportUrlForToken(report.token)
+      }))
+      .filter(report => report.resolvedUrl);
+    if (!usable.length) return { ok: false, fallback: true, diagnostics, reason: "REST report rows expose neither a verified report URL nor a safe report token." };
 
     const parsedReports = [];
     const sourceReports = [];
     for (const report of usable) {
       try {
-        const response = await fetch(report.url, { method: "GET", credentials: "include", redirect: "follow" });
+        const response = await fetch(report.resolvedUrl, { method: "GET", credentials: "include", redirect: "follow" });
         const contentType = response.headers.get("content-type") || "";
         const buffer = await response.arrayBuffer();
         const classified = classifyReportResponse(buffer, contentType, response.status, safeHostPath(response.url));
@@ -1323,7 +1328,7 @@ async function tryRestApiForDashboard(crNo) {
         });
         if (parsed && parsed.ok && parsed.data) {
           parsedReports.push(parsed.data);
-          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department, url: report.url });
+          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department, url: report.resolvedUrl });
         }
       } catch {}
     }
