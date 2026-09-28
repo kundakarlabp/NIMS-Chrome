@@ -73,3 +73,14 @@ test("unsafe report tokens and off-contract NIMS paths are rejected", () => {
   assert.equal(api.verifiedReportUrlForToken("https://example.com/a"), "");
   assert.equal(api.safeReportUrl("https://nimsts.edu.in/not-approved/report.pdf"), "");
 });
+
+
+test("token-shaped reportUrl is treated as a safe opaque report token, not a URL", () => {
+  const out = api.normalizeReportListPayload(
+    [{ testName: "CBC", reportUrl: "SAFE_FIXTURE_ARG", crNo: "331012600000001" }],
+    "331012600000001"
+  );
+  assert.equal(out.reports[0].url, "");
+  assert.equal(out.reports[0].token, "SAFE_FIXTURE_ARG");
+  assert.equal(Object.prototype.hasOwnProperty.call(out.reports[0], "raw"), false);
+});
