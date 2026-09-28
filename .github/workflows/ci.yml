@@ -1,14 +1,18 @@
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
 permissions:
   contents: read
+
 jobs:
   repository-contract:
     runs-on: ubuntu-24.04
@@ -18,13 +22,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for removed in mobile shared docs scripts railway.json .dockerignore; do test ! -e "$removed"; done
+          for removed in mobile shared docs scripts helper tests railway.json .dockerignore; do
+            test ! -e "$removed"
+          done
           test ! -e dashboard/mobileRelay.ts
           test ! -e dashboard/APPDEPLOY_MOBILE_BRIDGE_PATCH.md
-          test ! -e helper/cache.py
-          test ! -e helper/Dockerfile
           ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manual*' -o -name 'contentScript.js' -o -name 'contentUtils.js' -o -name 'styles.css' \) | grep .
-          ! grep -R -E 'CWS_|chromewebstore|NIMS_HELPER_REMOTE_MODE|sidePanel|side_panel' extension/src helper dashboard README.md SECURITY.md AGENTS.md
+          ! grep -R -E 'CWS_|chromewebstore|NIMS_HELPER_REMOTE_MODE|sidePanel|side_panel|127\.0\.0\.1:8765' extension/src dashboard README.md SECURITY.md AGENTS.md
       - name: Verify minimal manifest
         shell: bash
         run: |
@@ -35,7 +39,9 @@ jobs:
           assert set(m["permissions"]) == {"tabs", "webNavigation"}
           assert "side_panel" not in m and "action" not in m
           assert not any("railway" in h for h in m["host_permissions"])
+          assert not any("127.0.0.1" in h for h in m["host_permissions"])
           PY
+
   javascript:
     needs: repository-contract
     runs-on: ubuntu-24.04
@@ -47,17 +53,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-  helper:
-    needs: repository-contract
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -r helper/requirements-dev.txt
-      - run: PYTHONPATH=helper python -m pytest -q
-      - run: python -m py_compile helper/main.py helper/models.py helper/parsers/*.py
+
   extension-package:
     needs: javascript
     runs-on: ubuntu-24.04
