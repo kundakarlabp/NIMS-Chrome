@@ -63,3 +63,12 @@ test('REST-primary dashboard path remains behind the authenticated NIMS session 
   assert.ok(body.indexOf('ensureDashboardWorkerTab()') >= 0);
   assert.ok(body.indexOf('ensureDashboardWorkerTab()') < body.indexOf('tryRestApiForDashboard(crNo)'));
 });
+
+
+test('REST parsing does not export transient resolved report URLs into the canonical bundle', () => {
+  const restStart = background.indexOf('async function tryRestApiForDashboard');
+  const restEnd = background.indexOf('async function fetchCrForDashboardLegacy', restStart);
+  const restBody = background.slice(restStart, restEnd);
+  assert.match(restBody, /fetch\(report\.resolvedUrl/);
+  assert.doesNotMatch(restBody, /sourceReports\.push\([^\n]*resolvedUrl/);
+});
