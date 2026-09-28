@@ -158,3 +158,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f helper/Dockerfile .
+
+
+  extension-package:
+    needs: navigation-js
+    runs-on: ubuntu-24.04
+    env:
+      CWS_CREDENTIALS_JSON: ${{ secrets.CWS_CREDENTIALS_JSON }}
+      CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+      CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package production extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          root = Path("extension")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          version = manifest["version"]
+          target = Path("dist") / f"nims-fast-summary-{version}.zip"
+          target.parent.mkdir(parents=True, exist_ok=True)
+          excluded = {"test", "test_pages", "__pycache__"}
+          with ZipFile(target, "w", ZIP_DEFLATED) as archive:
+              for path in sorted(root.rglob("*")):
+                  if not path.is_file() or any(part in excluded for part in path.relative_to(root).parts):
+                      continue
+                  archive.write(path, path.relative_to(root))
+          print(target)
+          PY
+      - name: Upload installable extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nims-fast-summary-extension
+          path: dist/nims-fast-summary-*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Authenticate for Chrome Web Store publication
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CWS_CREDENTIALS_JSON != '' && env.CWS_PUBLISHER_ID != '' && env.CWS_EXTENSION_ID != ''
+        id: cws_auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.CWS_CREDENTIALS_JSON }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+      - name: Publish extension update to Chrome Web Store
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CWS_CREDENTIALS_JSON != '' && env.CWS_PUBLISHER_ID != '' && env.CWS_EXTENSION_ID != ''
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.cws_auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          package="$(find dist -maxdepth 1 -name 'nims-fast-summary-*.zip' -print -quit)"
+          test -n "$package"
+          curl --fail-with-body --silent --show-error             -H "Authorization: Bearer $ACCESS_TOKEN"             -X POST -T "$package"             "https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:upload"
+          curl --fail-with-body --silent --show-error             -H "Authorization: Bearer $ACCESS_TOKEN"             -X POST             "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish"
