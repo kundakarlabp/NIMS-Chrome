@@ -1,4 +1,7 @@
 if (typeof importScripts === "function") importScripts("nimsRestApi.js");
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.remove(["nimsFastSummaryState", "nimsFastSummaryProgress"]).catch(() => {});
+});
 const DEFAULT_HELPER = "http://127.0.0.1:8765";
 const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
@@ -24,7 +27,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "NIMS_PROGRESS") {
-    chrome.storage.local.set({ nimsFastSummaryProgress: message.message });
     sendResponse({ ok: true });
     return false;
   }
@@ -1009,7 +1011,7 @@ function waitForTabComplete(tabId) {
 }
 
 function setProgress(message) {
-  return chrome.storage.local.set({ nimsFastSummaryProgress: message });
+  return Promise.resolve();
 }
 
 function delay(ms) {
@@ -1348,6 +1350,12 @@ async function fetchCrForDashboardLegacy(crNo) {
   if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
   const reportFrameId = await waitForReportFrame(tabId);
   const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
+  const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
+  if (!returnedCrNo || returnedCrNo !== crNo) {
+    const error = new Error("NIMS identity verification failed. Results were not retrieved.");
+    error.code = returnedCrNo ? "NIMS_IDENTITY_MISMATCH" : "NIMS_IDENTITY_UNVERIFIED";
+    throw error;
+  }
   const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
   if (!processed || processed.ok === false) {
     const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";

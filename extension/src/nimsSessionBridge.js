@@ -175,8 +175,9 @@
   }
 
   async function readSummaryState() {
-    const data = await chrome.storage.local.get("nimsFastSummaryState");
-    return data.nimsFastSummaryState || null;
+    return window.NimsFastSummary && typeof window.NimsFastSummary.getSummaryState === "function"
+      ? window.NimsFastSummary.getSummaryState()
+      : null;
   }
 
   async function mappingIsValidated() {

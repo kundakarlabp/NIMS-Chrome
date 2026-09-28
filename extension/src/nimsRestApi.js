@@ -121,12 +121,14 @@
     const patientObjectCr = first(patientObject, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no"]);
     const returnedCrNo = patientObjectCr
       || first(rowsSource[0] || {}, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no"]);
+    const rowCrNos = rowsSource.map(row => first(row, ["crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no"]).replace(/\D/g, "")).filter(Boolean);
     const patientName = first(patientObject, ["patientName","patient_name","patName","pat_name"])
       || (patientObjectCr ? first(patientObject, ["name"]) : "")
       || first(rowsSource[0] || {}, ["patientName","patient_name","patName","pat_name"]);
     return {
       requestedCrNo,
       returnedCrNo: returnedCrNo.replace(/\D/g, ""),
+      rowCrNos,
       patientName,
       reports,
       source: "nims_rest_report_list"
@@ -165,9 +167,15 @@
     try { payload = JSON.parse(text); }
     catch { throw new Error("NIMS report-list API did not return JSON."); }
     const normalized = normalizeReportListPayload(payload, normalizedCr);
-    if (normalized.returnedCrNo && normalized.returnedCrNo !== normalizedCr) {
+    if ((normalized.returnedCrNo && normalized.returnedCrNo !== normalizedCr)
+      || normalized.rowCrNos.some(rowCrNo => rowCrNo !== normalizedCr)) {
       const error = new Error("NIMS report-list API returned a different CR number.");
       error.code = "NIMS_IDENTITY_MISMATCH";
+      throw error;
+    }
+    if (!normalized.returnedCrNo && !normalized.rowCrNos.length) {
+      const error = new Error("NIMS report-list API did not confirm the requested CR number.");
+      error.code = "NIMS_IDENTITY_UNVERIFIED";
       throw error;
     }
     if (!normalized.reports.length) throw new Error("NIMS report-list API returned no usable report rows.");
