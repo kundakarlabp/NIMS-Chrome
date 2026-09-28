@@ -10,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.5');
+  assert.equal(manifest.version, '0.5.6');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);

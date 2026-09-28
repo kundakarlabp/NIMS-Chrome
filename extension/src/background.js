@@ -1184,6 +1184,35 @@ async function ensureDashboardWorkerTab() {
 }
 
 async function openOneCrNavigationStep(tabId) {
+  // Page-defined callMenu/addTab are invisible to isolated content scripts.
+  // Run the existing direct-leaf routine in NIMS's main world only after its
+  // exact CR-wise menu item appears; the ticketed URL stays inside that page.
+  try {
+    const target = { tabId, frameIds: [0] };
+    const found = await chrome.scripting.executeScript({
+      target, world: "MAIN",
+      func: () => {
+        const id = "Cr_No_Wise_Result_Report_Printing_New";
+        const menu = document.getElementById("frmMainMenu");
+        let item = document.getElementById(id);
+        if (!item && menu) { try { item = menu.contentDocument && menu.contentDocument.getElementById(id); } catch {} }
+        return Boolean(item && item.isConnected && (item.getAttribute("onclick") || "").includes("/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"));
+      }
+    });
+    if (found && found[0] && found[0].result) {
+      await chrome.scripting.executeScript({ target, world: "MAIN", files: ["src/navigationCore.js"] });
+      const direct = await chrome.scripting.executeScript({
+        target, world: "MAIN",
+        func: () => {
+          const result = globalThis.NimsReportCore && globalThis.NimsReportCore.openCrWiseResultsDirect(document);
+          return { ok: Boolean(result && result.ok), action: result && result.action || "none" };
+        }
+      });
+      if (direct && direct[0] && direct[0].result && direct[0].result.ok) {
+        return { ok: true, frameId: 0, response: direct[0].result };
+      }
+    }
+  } catch {}
   const frameIds = await frameIdsForTab(tabId);
   const ordered = [0, ...frameIds.filter(frameId => frameId !== 0)];
   for (const frameId of ordered) {
