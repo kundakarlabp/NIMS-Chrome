@@ -55,3 +55,11 @@ test('dashboard retrieval prefers REST reportList and preserves authenticated br
   assert.match(background, /KBP_NIMS_SOURCE_FALLBACK/);
   assert.match(background, /pdf_base64/);
 });
+
+
+test('REST-primary dashboard path remains behind the authenticated NIMS session gate', () => {
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const body = background.slice(start, start + 2600);
+  assert.ok(body.indexOf('ensureDashboardWorkerTab()') >= 0);
+  assert.ok(body.indexOf('ensureDashboardWorkerTab()') < body.indexOf('tryRestApiForDashboard(crNo)'));
+});
