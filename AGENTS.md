@@ -1,93 +1,42 @@
 # AGENTS.md
 
-## Project identity
+## Scope
 
-NIMS Fast Summary is a privacy-sensitive clinical report retrieval and summarization system composed of:
+This repository has one canonical product: the desktop NIMS Results Dashboard connector.
 
-- a Chrome Manifest V3 extension
-- a local or Railway-hosted FastAPI helper
-- a local-first Android WebView application
-- shared browser/WebView navigation and report-fetch logic
-- deterministic parsers and physician-facing summaries
+Keep only the live-dashboard integration contract, Chrome bridge, REST-first NIMS report discovery, authenticated browser fallback, deterministic local report parsing, and the tests/CI required for those paths.
 
-The primary objective is **safe, source-verifiable access to NIMS reports after clinician-authorized NIMS authentication**. Android may streamline login with explicit opt-in encrypted local credential autofill, but the system must not defeat CAPTCHA/OTP, expose session material, silently misclassify reports, or present incomplete parsing as reliable clinical data.
+Do not reintroduce Android, mobile relays, Railway/remote parsing, side panels, manual-analysis products, duplicate navigation cores, Chrome Web Store publishing, scheduled retrieval, or alternate credential paths.
 
-## Read first
+## Canonical ownership
 
-Before editing, inspect:
+- `extension/src/navigationCore.js`: single navigation/report-row source of truth.
+- `extension/src/nimsSessionBridge.js`: authenticated NIMS page probing, CR submission, fallback report-list extraction.
+- `extension/src/nimsRestApi.js`: HBIMS REST report-list adapter and URL/token safety policy.
+- `extension/src/background.js`: orchestration, REST-first/fallback selection, local parser calls, canonical dashboard bundle.
+- `extension/src/dashboardBridge.js`: dashboard ↔ extension message contract.
+- `helper/`: local-only deterministic parser.
+- `.github/workflows/ci.yml`: executable repository contract.
 
-1. this file
-2. `README.md`
-3. `SECURITY.md` when present
-4. the owning implementation and its tests
-5. `.agents/skills/robust-repo-change/SKILL.md`
-6. `.agents/skills/clinical-software-safety/SKILL.md`
-7. `.github/workflows/ci.yml`
+## Non-negotiable rules
 
-Repository code, tests, security constraints, and deployment documentation remain authoritative. Shared skills supplement local rules; they do not override them.
-
-## Non-negotiable clinical and authentication rules
-
-- CAPTCHA and OTP remain human-entered unless NIMS provides an approved non-interactive interface. Do not OCR-solve, bypass, replay, or outsource them. Android may reuse active sessions, autofill clinician-opted-in credentials, and automate CR/report navigation.
-- NIMS usernames/passwords may be stored only on the clinician's Android device after explicit opt-in, AES-GCM encrypted under a dedicated Android Keystore key. Never log, export, transmit, back up, or send those credentials to helpers, dashboards, relays, or AI services. Never persist/export OTPs, CAPTCHA values, cookies, session tokens, hidden form values, full report URLs, query strings, transient report filenames, raw `onclick` values, or raw `printReport` arguments.
-- Never commit real patient reports, identifiers, screenshots, PDFs, HTML, logs, cache files, API keys, or production diagnostics.
-- Use synthetic or explicitly de-identified fixtures only.
-- Android remains on-device-first. Railway is optional fallback and must never receive browser/WebView session credentials.
-- Raw reports, raw HTML, and raw PDF bytes must not be persisted. Preserve the existing parsed-summary/cache boundaries.
-- External AI interpretation remains disabled unless an explicitly reviewed, privacy-preserving feature is approved. Do not convert rule-based extraction into autonomous diagnosis or treatment advice.
-- OCR remains disabled unless deliberately implemented, validated, and documented. Image-only PDFs must fail visibly as unsupported.
-- Every generated value or summary must remain traceable to its source report and parsing outcome.
-- Clinicians must verify summaries against source reports before clinical decisions.
-
-## Architectural ownership
-
-- `shared/nims-web/nimsReportCore.js` is the canonical shared navigation/report-fetch core. Do not fork equivalent logic into extension and Android implementations.
-- `extension/` owns Chrome UI, side-panel controls, browser-session fetching, sanitized diagnostics, and background/helper communication.
-- `helper/` owns HTTP parsing/summarization endpoints, authentication for remote mode, cache policy, and server-side report classification.
-- `mobile/android/` owns the Android WebView wrapper, on-device processing, encrypted local summary/notes storage, and mobile lifecycle.
-- `scripts/sync_navigation_core.py` owns synchronization checks for the canonical shared JavaScript.
-- Tests and `.github/workflows/ci.yml` define the executable regression contract.
-
-Do not add parallel navigation engines, silent popup fallback, alternate credential paths, raw-report caches, or duplicated parser ownership.
-
-## Safe report-processing rules
-
-- Classify fetched content before parsing: supported PDF/text, login/session page, viewer shell, duplicate-report page, generic HTML, empty response, wrong endpoint, or unsupported format.
-- A candidate request mapping is not validated until `Test Direct Fetch` retrieves and parses a supported report.
-- Bulk modes must not silently fall back to visible popup capture.
-- Row indexes are not trusted cache keys. Preserve safe hashed report-key behavior.
-- Diagnostics must remain sanitized and exclude identifiers, query values, session material, raw source content, and transient filenames.
-- Never infer a negative or normal result from absent text.
-- Preserve units, dates, amendments, duplicate reports, organisms, susceptibilities, and parse errors explicitly.
+- CAPTCHA/OTP remain human-entered; never OCR-solve, bypass, replay, or outsource them.
+- Never store or export usernames, passwords, cookies, session tokens, hidden auth fields, query strings, transient report filenames, or full report URLs.
+- Never commit real patient identifiers/reports/screenshots/logs.
+- Use synthetic/de-identified fixtures only.
+- A returned CR mismatch is a hard failure.
+- Classify fetched content before parsing and visibly reject login/session pages, viewer shells, empty responses, and unsupported content.
+- Never infer a negative/normal result from absent text.
+- Raw report bytes remain transient.
+- The local parser is the only parser endpoint; do not add remote helper modes.
+- The dashboard bundle may contain patient identity returned by NIMS for clinician verification, but must not contain session material or transient report links.
 
 ## Change workflow
 
-1. Define the exact symptom, intended behavior, affected platform, trust boundary, and files that should not change.
-2. Reproduce with a synthetic/de-identified fixture or focused test.
-3. Establish root cause before editing.
-4. Change the owning module or canonical shared core only.
-5. Add regression coverage for normal, malformed, unsupported, session-expired, privacy-leak, and platform-specific paths as applicable.
-6. Verify shared-core synchronization when navigation logic changes.
-7. Review the diff for credential/session leakage, raw-data persistence, unsafe fallback, and source-provenance loss.
-8. Run the complete required CI on the final branch head.
-9. Open one focused PR and merge only after all checks and review threads pass.
-
-## Minimum validation
-
-Use the exact repository CI commands for affected paths:
-
-```bash
-pip install -r helper/requirements-dev.txt
-python -m pytest -q
-python -m py_compile helper/main.py helper/models.py helper/cache.py
-npm ci
-npm test
-python scripts/sync_navigation_core.py --check
-cd mobile/android && ./gradlew clean test lintDebug assembleDebug
-```
-
-For Android PDF or WebView changes, also require the configured instrumented tests. For Docker/helper changes, validate the helper Docker build. Never test with identifiable live reports in CI.
-
-## Release evidence
-
-A feature is not complete because one happy-path report works. Completion requires final-head CI, hazard-path tests, source-to-summary traceability, sanitized diagnostics, and an explicit residual-risk statement. Use the `session-worklog` skill when work will continue across chats.
+1. Read this file, `README.md`, `SECURITY.md`, and relevant tests.
+2. Read the robust-repo-change and clinical-software-safety skills.
+3. Reproduce with synthetic/de-identified fixtures.
+4. Change the owning module only.
+5. Add focused regression coverage.
+6. Run complete CI on the final PR head.
+7. Merge only when all checks pass.

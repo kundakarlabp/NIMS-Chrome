@@ -1,52 +1,52 @@
 name: CI
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-
+    branches: [main]
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
   repository-contract:
-    name: repository-contract
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Enforce results-only repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          for removed in mobile shared docs scripts railway.json .dockerignore; do test ! -e "$removed"; done
+          test ! -e dashboard/mobileRelay.ts
+          test ! -e dashboard/APPDEPLOY_MOBILE_BRIDGE_PATCH.md
+          test ! -e helper/cache.py
+          test ! -e helper/Dockerfile
+          ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manual*' -o -name 'contentScript.js' -o -name 'contentUtils.js' -o -name 'styles.css' \) | grep .
+          ! grep -R -E 'CWS_|chromewebstore|NIMS_HELPER_REMOTE_MODE|sidePanel|side_panel' extension/src helper dashboard README.md SECURITY.md AGENTS.md
+      - name: Verify minimal manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          m = json.load(open("extension/manifest.json"))
+          assert set(m["permissions"]) == {"tabs", "webNavigation"}
+          assert "side_panel" not in m and "action" not in m
+          assert not any("railway" in h for h in m["host_permissions"])
+          PY
+  javascript:
+    needs: repository-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 2
-      - name: Enforce one canonical workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t workflows < <(find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
-          printf '%s\n' "${workflows[@]}"
-          test "${#workflows[@]}" -eq 1
-          test "${workflows[0]}" = ".github/workflows/ci.yml"
-      - name: Verify pull request merge-ref synchronization
-        if: github.event_name == 'pull_request'
-        shell: bash
-        env:
-          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-list --parents -n 1 HEAD | awk '{print NF}')" -eq 3
-          actual_base="$(git rev-parse HEAD^1)"
-          actual_head="$(git rev-parse HEAD^2)"
-          test "$actual_base" = "$EXPECTED_BASE"
-          test "$actual_head" = "$EXPECTED_HEAD"
-      - name: Verify canonical navigation source synchronization
-        run: python scripts/sync_navigation_core.py --check
-
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
   helper:
     needs: repository-contract
     runs-on: ubuntu-24.04
@@ -56,167 +56,24 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r helper/requirements-dev.txt
-      - run: python -m pytest -q
-      - run: python -m py_compile helper/main.py helper/models.py helper/cache.py
-
-  navigation-js:
-    needs: repository-contract
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-      - run: npm ci
-      - name: Run JavaScript tests
-        shell: bash
-        run: |
-          set -o pipefail
-          npm test 2>&1 | tee npm-test.log
-      - name: Upload JavaScript test log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: navigation-test-log
-          path: npm-test.log
-          if-no-files-found: error
-          retention-days: 7
-
-  android:
-    needs: repository-contract
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Build, unit test, lint, and assemble
-        run: ./gradlew clean test lintDebug assembleDebug --console=plain
-        working-directory: mobile/android
-      - name: Verify packaged NIMS runtime
-        working-directory: mobile/android
-        shell: bash
-        run: |
-          set -euo pipefail
-          listing="$(unzip -l app/build/outputs/apk/debug/app-debug.apk)"
-          for required in nimsReportCore.js contentUtils.js nimsAndroidFrameBridge.js nimsWebviewShim.js; do
-            echo "$listing" | grep "assets/$required"
-          done
-          if echo "$listing" | grep -q 'assets/test/'; then
-            echo 'Shared JavaScript tests were packaged into the APK'
-            exit 1
-          fi
-          if echo "$listing" | grep -q 'nimsOnDemandExtractor.js'; then
-            echo 'Obsolete 0.10.0 runtime asset was packaged'
-            exit 1
-          fi
-      - name: Verify KVM
-        run: |
-          ls -l /dev/kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
-      - name: Run instrumented PDF tests
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          profile: pixel_6
-          working-directory: mobile/android
-          script: |
-            adb wait-for-device
-            ./gradlew connectedDebugAndroidTest --stacktrace --console=plain
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nims-results-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: android-test-lint-and-instrumentation-reports
-          path: |
-            mobile/android/app/build/reports/tests/
-            mobile/android/app/build/reports/androidTests/
-            mobile/android/app/build/outputs/androidTest-results/
-            mobile/android/app/build/reports/lint-results-debug.html
-          if-no-files-found: ignore
-          retention-days: 14
-
-  docker:
-    needs: repository-contract
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker build -f helper/Dockerfile .
-
-
+      - run: PYTHONPATH=helper python -m pytest -q
+      - run: python -m py_compile helper/main.py helper/models.py helper/parsers/*.py
   extension-package:
-    needs: navigation-js
+    needs: javascript
     runs-on: ubuntu-24.04
-    env:
-      CWS_CREDENTIALS_JSON: ${{ secrets.CWS_CREDENTIALS_JSON }}
-      CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
-      CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Package production extension
+      - name: Package validated extension
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from zipfile import ZIP_DEFLATED, ZipFile
-
-          root = Path("extension")
-          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-          version = manifest["version"]
-          target = Path("dist") / f"nims-fast-summary-{version}.zip"
-          target.parent.mkdir(parents=True, exist_ok=True)
-          excluded = {"test", "test_pages", "__pycache__"}
-          with ZipFile(target, "w", ZIP_DEFLATED) as archive:
-              for path in sorted(root.rglob("*")):
-                  if not path.is_file() or any(part in excluded for part in path.relative_to(root).parts):
-                      continue
-                  archive.write(path, path.relative_to(root))
-          print(target)
-          PY
-      - name: Upload installable extension artifact
-        uses: actions/upload-artifact@v4
+          version="$(python -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          mkdir -p dist
+          cd extension
+          zip -qr "../dist/nims-results-connector-$version.zip" manifest.json src
+      - uses: actions/upload-artifact@v4
         with:
-          name: nims-fast-summary-extension
-          path: dist/nims-fast-summary-*.zip
+          name: nims-results-connector
+          path: dist/nims-results-connector-*.zip
           if-no-files-found: error
           retention-days: 14
-      - name: Authenticate for Chrome Web Store publication
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CWS_CREDENTIALS_JSON != '' && env.CWS_PUBLISHER_ID != '' && env.CWS_EXTENSION_ID != ''
-        id: cws_auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ env.CWS_CREDENTIALS_JSON }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
-      - name: Publish extension update to Chrome Web Store
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.CWS_CREDENTIALS_JSON != '' && env.CWS_PUBLISHER_ID != '' && env.CWS_EXTENSION_ID != ''
-        shell: bash
-        env:
-          ACCESS_TOKEN: ${{ steps.cws_auth.outputs.access_token }}
-        run: |
-          set -euo pipefail
-          package="$(find dist -maxdepth 1 -name 'nims-fast-summary-*.zip' -print -quit)"
-          test -n "$package"
-          curl --fail-with-body --silent --show-error             -H "Authorization: Bearer $ACCESS_TOKEN"             -X POST -T "$package"             "https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:upload"
-          curl --fail-with-body --silent --show-error             -H "Authorization: Bearer $ACCESS_TOKEN"             -X POST             "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish"
