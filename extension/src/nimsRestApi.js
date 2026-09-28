@@ -80,19 +80,19 @@
     const title = first(row, ["reportName","report_name","testName","test_name","investigationName","investigation_name","test","investigation"]);
     const date = first(row, ["reportDate","report_date","resultDate","result_date","dateSent","date_sent","sampleDate","sample_date","date"]);
     const department = first(row, ["department","departmentName","department_name","labName","lab_name","section"]);
-    const rawUrl = first(row, ["reportUrl","report_url","pdfUrl","pdf_url","url","downloadUrl","download_url"]);
+    const rawUrl = first(row, ["reportUrl","report_url","pdfUrl","pdf_url","url","downloadUrl","download_url","reportLink","report_link"]);
+    const directUrl = safeReportUrl(rawUrl);
     const token = safeReportToken(first(row, [
       "fileName","filename","file_name","reportToken","report_token","token",
       "reportFileName","report_file_name","pdfFileName","pdf_file_name"
-    ]));
+    ])) || (!directUrl ? safeReportToken(rawUrl) : "");
     return {
       id: stableId(row, index),
       title: title || "Investigation report",
       date,
       department,
-      url: safeReportUrl(rawUrl),
-      token,
-      raw: row
+      url: directUrl,
+      token
     };
   }
 
