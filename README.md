@@ -1,60 +1,66 @@
 # NIMS Results Connector
 
-This repository owns one product: the desktop NIMS Results Dashboard connector.
+This repository owns one desktop workflow only: the NIMS Results Dashboard connector.
 
 ## Live dashboard
 
 https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/
 
-## Canonical architecture
+## Canonical flow
 
 ```text
-Dashboard tab
-   ↕ browser-local parser (PDF.js / HTML text)
-Chrome extension
+Dashboard
+   ↓
+Chrome connector
+   ↓
+manual clinician NIMS login / CAPTCHA
    ↓
 authenticated NIMS session
-   ├─ HBIMS reportList REST discovery (primary)
-   └─ CR-wise browser report tokens (automatic fallback)
+   ├─ REST reportList discovery first
+   │    └─ verified NIMS report fetch + parser
+   └─ existing CR-wise browser bridge fallback
+        └─ proven direct-report processor + parser
    ↓
-verified NIMS report fetch
+canonical structured results
    ↓
-raw report bytes returned only to the open dashboard tab
-   ↓
-browser-local structured parsing
-   ↓
-canonical result bundle
+Dashboard
 ```
 
-There is no Android app, mobile relay, localhost/Python helper, remote report parser, Railway dependency, side panel, manual-analysis product, paid extension-store publishing workflow, or duplicated navigation runtime.
+The REST endpoint is an optimization layered on top of the existing working bridge. It does not replace authentication and it does not bypass CAPTCHA.
 
-## Setup
+## What is intentionally not in this repository
 
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Choose **Load unpacked**.
-4. Select this repository's `extension/` directory.
-5. Open the live dashboard.
-6. Click **Connect NIMS** and complete NIMS login/CAPTCHA normally.
-7. Enter the 15-digit CR number and click **Get results**.
+- Android/mobile app
+- mobile or ChatGPT relay
+- side-panel product
+- manual-analysis UI
+- Chrome Web Store publishing workflow
+- duplicated navigation engine
 
-The extension tries the REST report list first and automatically falls back to the authenticated CR-wise result page when required.
+## Runtime components
 
-## Privacy and safety
+- `extension/src/dashboardBridge.js`: dashboard ↔ extension contract.
+- `extension/src/nimsSessionBridge.js`: authenticated NIMS session, CR navigation and dashboard bridge.
+- `extension/src/nimsRestApi.js`: HBIMS reportList adapter and safe NIMS report URL/token policy.
+- `extension/src/navigationCore.js`: NIMS navigation/report-row logic.
+- `extension/src/contentUtils.js` + `contentScript.js`: the proven report processor used only by the fallback path; its old toolbar UI is disabled.
+- `helper/`: deterministic report parser used by the proven retrieval path.
 
-- NIMS credentials, cookies and session tokens stay inside Chrome.
-- CAPTCHA/OTP remain human-entered.
-- Raw report bytes are held in memory only and are passed only to the open dashboard tab for local parsing.
-- Raw reports are not sent to a parser backend.
-- Report URLs and transient filenames are fetch-only and are not included in the final dashboard bundle.
-- A returned CR mismatch is a hard failure.
-- Missing or unparsable content is never treated as a normal/negative result.
+## Routine use
 
-## Development
+1. Keep the validated connector loaded in Chrome.
+2. Open the dashboard.
+3. Click **Connect NIMS**.
+4. Complete NIMS login and CAPTCHA manually.
+5. Return to the dashboard; it detects the authenticated session.
+6. Enter the 15-digit CR and click **Get results**.
+7. REST is attempted first. If it cannot supply usable reports, the dashboard automatically uses the authenticated browser bridge.
+
+## Development validation
 
 ```bash
 npm ci
 npm test
+pip install -r helper/requirements-dev.txt
+PYTHONPATH=helper python -m pytest -q tests/test_parsers.py
 ```
-
-CI validates the connector and packages the `extension/` directory as a ZIP artifact for manual installation/update.

@@ -1,0 +1,12 @@
+Patient Name: Test Patient
+CR No: 000000
+Complete Blood Count
+Date Sent: 19-May-2026
+Hemoglobin 8.9 g/dL range 13-17
+TLC 18600 /cumm range 4000-11000
+Neutrophils 86 % range 40-75
+Lymphocytes 9 % range 20-45
+Platelets 150000 /cumm range 150000-450000
+Hematocrit 28 % range 40-50
+MCV 82 fL range 80-100
+

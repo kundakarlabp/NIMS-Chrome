@@ -1,0 +1,12 @@
+Microbiology Culture and Sensitivity
+Date sent: 17-May-2026
+Culture No: BC1234
+Site: Central line
+Specimen: Blood
+Culture positive. Growth seen.
+Organism: Klebsiella pneumoniae
+Sensitive: Meropenem, Amikacin
+Resistant: Ceftriaxone, Piperacillin-tazobactam
+Intermediate: Ciprofloxacin
+Final report
+

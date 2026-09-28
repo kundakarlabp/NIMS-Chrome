@@ -1,0 +1,14 @@
+CBC Extracted Table
+Hemoglobin
+8.7
+g/dL
+13-17
+Platelet count
+98000
+/cumm
+150000-450000
+Creatinine
+2.2
+mg/dL
+0.6-1.2
+

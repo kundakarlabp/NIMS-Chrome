@@ -1,0 +1,15 @@
+Renal Function Test and Liver Function Test
+Date Sent: 18-May-2026
+Urea 72 mg/dL range 15-40
+Creatinine 1.7 mg/dL range 0.6-1.2
+Sodium 134 mmol/L range 135-145
+Potassium 5.2 mmol/L range 3.5-5.0
+Chloride 101 mmol/L range 98-107
+Bilirubin total 1.8 mg/dL range 0.2-1.2
+Bilirubin direct 0.8 mg/dL range 0.0-0.3
+AST 85 U/L range 0-40
+ALT 96 U/L range 0-40
+ALP 220 U/L range 40-130
+Albumin 2.8 g/dL range 3.5-5.0
+Total protein 6.2 g/dL range 6.0-8.3
+

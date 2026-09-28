@@ -18,28 +18,30 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Enforce results-only repository
+      - name: Enforce desktop Results-only repository
         shell: bash
         run: |
           set -euo pipefail
-          for removed in mobile shared docs scripts helper tests railway.json .dockerignore; do
+          for removed in mobile shared docs scripts railway.json .dockerignore; do
             test ! -e "$removed"
           done
           test ! -e dashboard/mobileRelay.ts
           test ! -e dashboard/APPDEPLOY_MOBILE_BRIDGE_PATCH.md
-          ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manual*' -o -name 'contentScript.js' -o -name 'contentUtils.js' -o -name 'styles.css' \) | grep .
-          ! grep -R -E 'CWS_|chromewebstore|NIMS_HELPER_REMOTE_MODE|sidePanel|side_panel|127\.0\.0\.1:8765' extension/src dashboard README.md SECURITY.md AGENTS.md
-      - name: Verify minimal manifest
+          ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manualAnalysis*' -o -name 'manualSidepanel*' \) | grep .
+      - name: Verify connector manifest
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert set(m["permissions"]) == {"tabs", "webNavigation"}
+          assert m["version"] == "0.5.2"
           assert "side_panel" not in m and "action" not in m
-          assert not any("railway" in h for h in m["host_permissions"])
-          assert not any("127.0.0.1" in h for h in m["host_permissions"])
+          scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
+          assert "src/contentScript.js" in scripts
+          assert "src/contentUtils.js" in scripts
+          assert "src/nimsSessionBridge.js" in scripts
+          assert not any("manual" in p.lower() or "sidepanel" in p.lower() for p in scripts)
           PY
 
   javascript:
@@ -54,8 +56,20 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  helper:
+    needs: repository-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r helper/requirements-dev.txt
+      - run: PYTHONPATH=helper python -m pytest -q tests/test_parsers.py
+      - run: python -m py_compile helper/main.py helper/models.py helper/cache.py helper/parsers/*.py
+
   extension-package:
-    needs: javascript
+    needs: [javascript, helper]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
