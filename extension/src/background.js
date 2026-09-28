@@ -1318,7 +1318,7 @@ async function tryRestApiForDashboard(crNo) {
             report_name: report.title,
             date_sent: report.date,
             content_type: contentType,
-            content_base64: arrayBufferToBase64(buffer)
+            pdf_base64: arrayBufferToBase64(buffer)
           })
         });
         if (parsed && parsed.ok && parsed.data) {
