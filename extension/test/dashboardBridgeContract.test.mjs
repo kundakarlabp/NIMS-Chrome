@@ -186,3 +186,16 @@ test('canonical bundle carries versioned NIMS provenance for downstream clinical
   assert.equal(bundle.results[0].provenance.method, 'deterministic_parser');
   assert.equal(bundle.reports[0].provenance.source, 'nims');
 });
+
+
+test('manual session rediscovery scans every NIMS module supported by the bridge', () => {
+  const start = background.indexOf('async function getDashboardSessionStatus()');
+  const end = background.indexOf('async function openDashboardLogin', start);
+  const body = background.slice(start, end);
+  assert.ok(start >= 0);
+  assert.match(body, /chrome\.tabs\.query\(\{ url: NIMS_URL_FILTERS \}\)/);
+  for (const moduleName of ['AHIMSG5', 'HISInvestigationG5', 'HIS', 'hislogin', 'HISUtilities', 'HBIMS']) {
+    assert.ok(background.includes('https://nimsts.edu.in/' + moduleName + '/*'));
+    assert.ok(background.includes('https://www.nimsts.edu.in/' + moduleName + '/*'));
+  }
+});
