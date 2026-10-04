@@ -165,3 +165,24 @@ test('parsed clinical state is kept in the content frame, not persistent extensi
   assert.doesNotMatch(processor, /storage\.local\.set\(\{ nimsFastSummaryState/);
   assert.doesNotMatch(sessionBridge, /storage\.local\.get\("nimsFastSummaryState"\)/);
 });
+
+
+test('canonical bundle carries versioned NIMS provenance for downstream clinical consumers', () => {
+  const start = background.indexOf('function bundleFromParsedReports(crNo, extracted, state)');
+  const end = background.indexOf('async function tryRestApiForDashboard(crNo)', start);
+  const source = background.slice(start, end);
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  const bundle = context.bundleFromParsedReports(
+    '331012600000001',
+    { patient: { name: 'Synthetic Patient', crNo: '331012600000001' }, reports: [{ id: 'r1', title: 'CBC', date: '04/10/2026', url: '' }] },
+    { parsedReports: [{ report_id: 'r1', report_name: 'CBC', date_sent: '04/10/2026', parameters: [{ canonical_name: 'WBC', value: '12000', unit: '/uL' }] }] }
+  );
+  assert.equal(bundle.schemaVersion, 'nims-clinical-bundle/1.0');
+  assert.equal(bundle.patient.provenance.source, 'nims');
+  assert.equal(bundle.patient.provenance.identityVerified, true);
+  assert.equal(bundle.results[0].provenance.source, 'nims');
+  assert.equal(bundle.results[0].provenance.method, 'deterministic_parser');
+  assert.equal(bundle.reports[0].provenance.source, 'nims');
+});

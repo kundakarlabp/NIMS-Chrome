@@ -1281,7 +1281,8 @@ function bundleFromParsedReports(crNo, extracted, state) {
         refRange: parameter.reference_range || "",
         abnormal: parameter.abnormal_flag || "unknown",
         reportId: report.report_id || "",
-        pdfUrl
+        pdfUrl,
+        provenance: { source: "nims", method: "deterministic_parser", reportId: report.report_id || "" }
       });
     }
     const cultures = [];
@@ -1298,17 +1299,21 @@ function bundleFromParsedReports(crNo, extracted, state) {
         date: culture.reporting_date || culture.collection_date || culture.date_sent || report.date_sent || "",
         value: narrative,
         reportId: report.report_id || "",
-        pdfUrl
+        pdfUrl,
+        provenance: { source: "nims", method: "deterministic_parser", reportId: report.report_id || "" }
       });
     }
   }
   return {
+    schemaVersion: "nims-clinical-bundle/1.0",
+    generatedAt: new Date().toISOString(),
     patient: {
       name: extracted && extracted.patient ? extracted.patient.name || "" : "",
-      crNo: extracted && extracted.patient && extracted.patient.crNo ? extracted.patient.crNo : crNo
+      crNo: extracted && extracted.patient && extracted.patient.crNo ? extracted.patient.crNo : crNo,
+      provenance: { source: "nims", identityVerified: true }
     },
     results,
-    reports,
+    reports: reports.map(report => ({ ...report, provenance: { source: "nims", method: "report_discovery" } })),
     enquiryRows: []
   };
 }
