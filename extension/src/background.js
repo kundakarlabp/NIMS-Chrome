@@ -1103,16 +1103,9 @@ async function probeNimsTab(tabId) {
 }
 
 async function getDashboardSessionStatus() {
-  const tabs = await chrome.tabs.query({
-    url: [
-      "https://nimsts.edu.in/AHIMSG5/*",
-      "https://www.nimsts.edu.in/AHIMSG5/*",
-      "https://nimsts.edu.in/HISInvestigationG5/*",
-      "https://www.nimsts.edu.in/HISInvestigationG5/*",
-      "https://nimsts.edu.in/hislogin/*",
-      "https://www.nimsts.edu.in/hislogin/*"
-    ]
-  }).catch(() => []);
+  // Manual login can finish in any protected NIMS module. Keep session
+  // rediscovery aligned with the same allow-list used by the content bridge.
+  const tabs = await chrome.tabs.query({ url: NIMS_URL_FILTERS }).catch(() => []);
   for (const tab of tabs) {
     if (!tab.id) continue;
     const probe = await probeNimsTab(tab.id);
