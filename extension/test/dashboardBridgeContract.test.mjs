@@ -239,3 +239,18 @@ test('auth-required event remains separate from REST fallback and identity misma
   assert.ok(body.indexOf('KBP_NIMS_AUTH_REQUIRED') < body.indexOf('tryRestApiForDashboard(crNo)'));
   assert.ok(body.indexOf('NIMS_IDENTITY_MISMATCH') < body.indexOf('KBP_NIMS_SOURCE_FALLBACK'));
 });
+
+
+test('REST authentication expiry reopens manual login instead of entering browser fallback', () => {
+  const start = background.indexOf('const rest = await tryRestApiForDashboard(crNo);');
+  const end = background.indexOf('await pushDashboardEvent("KBP_NIMS_BULK_RESULTS"', start);
+  const body = background.slice(start, end);
+  const auth = body.indexOf('NIMS_AUTH_REQUIRED');
+  const mismatch = body.indexOf('NIMS_IDENTITY_MISMATCH');
+  const fallback = body.indexOf('KBP_NIMS_SOURCE_FALLBACK');
+  assert.ok(auth >= 0);
+  assert.ok(auth < mismatch);
+  assert.ok(auth < fallback);
+  assert.match(body, /openDashboardLogin\(sender\)/);
+  assert.match(body, /KBP_NIMS_AUTH_REQUIRED/);
+});
