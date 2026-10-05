@@ -302,7 +302,8 @@ test('all async background RPC paths return a structured response on rejection',
 
 test('session-state notifications do not keep a navigation-sensitive message channel open', () => {
   const start = background.indexOf('message.type === "NIMS_SESSION_STATE"');
-  const body = background.slice(start, start + 450);
+  const end = background.indexOf('message.type === "NIMS_DASHBOARD_STATUS"', start);
+  const body = background.slice(start, end);
   assert.match(body, /void handleDashboardSessionState/);
   assert.match(body, /return false/);
   assert.doesNotMatch(body, /sendResponse/);
