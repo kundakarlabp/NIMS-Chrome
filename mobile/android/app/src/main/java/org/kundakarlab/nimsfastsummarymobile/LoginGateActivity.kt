@@ -264,6 +264,21 @@ class LoginGateActivity : ComponentActivity() {
                 return@evaluateJavascript
             }
 
+            // The authenticated CR module can render its protected shell before the
+            // CR input/results/logout controls appear. Do not mistake that valid
+            // protected state for a failed session and send the user back to login.
+            // Require repeated clean probes so a transient redirect cannot bypass
+            // the login gate.
+            if (!loginVisible && !sessionExpired && protectedRoute && !publicLanding && !protectedVerificationStarted) {
+                protectedVerificationStarted = true
+                status = "Verifying the existing NIMS session…"
+                handler.postDelayed(
+                    { inspectAndAdvance(1, userRequestedVerification = true) },
+                    450L
+                )
+                return@evaluateJavascript
+            }
+
             if (sessionExpired) {
                 protectedVerificationStarted = false
                 loginFormGoneAt = 0L
@@ -567,8 +582,7 @@ internal object LoginGatePolicy {
         sessionExpired: Boolean,
         verificationStarted: Boolean,
         protectedRoute: Boolean
-    ): Boolean = loginFormSeen &&
-        verificationStarted &&
+    ): Boolean = verificationStarted &&
         protectedRoute &&
         !loginVisible &&
         !sessionExpired
