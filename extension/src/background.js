@@ -19,123 +19,114 @@ const NIMS_URL_FILTERS = [
 ];
 let privateDirectMapping = null;
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "NIMS_OPEN_PANEL") {
-    // Dashboard-driven runtime: acknowledge legacy processor progress without opening UI.
-    sendResponse({ ok: true });
-    return false;
-  }
+function safeAsyncError(error, fallback = "NIMS connector operation failed.") {
+  const message = error && error.message ? String(error.message) : "";
+  return {
+    ok: false,
+    error: message || fallback
+  };
+}
 
-  if (message.type === "NIMS_PROGRESS") {
+function respondAsync(promise, sendResponse, fallback) {
+  Promise.resolve(promise)
+    .then((value) => sendResponse(value === undefined ? { ok: true } : value))
+    .catch((error) => sendResponse(safeAsyncError(error, fallback)));
+  return true;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || !message.type) return false;
+
+  if (message.type === "NIMS_OPEN_PANEL" || message.type === "NIMS_PROGRESS") {
     sendResponse({ ok: true });
     return false;
   }
 
   if (message.type === "NIMS_FETCH_REPORT") {
-    fetchReportWithSession(message.row, sender).then(sendResponse);
-    return true;
+    return respondAsync(fetchReportWithSession(message.row, sender), sendResponse, "NIMS report fetch failed.");
   }
-
   if (message.type === "NIMS_DISCOVER_MAPPING") {
-    discoverDirectMapping(message.rowPayload, sender).then(sendResponse);
-    return true;
+    return respondAsync(discoverDirectMapping(message.rowPayload, sender), sendResponse, "NIMS report mapping discovery failed.");
   }
-
   if (message.type === "NIMS_GET_MAPPING_SUMMARY") {
-    getDirectMappingSummary().then((summary) => sendResponse({ ok: true, summary }));
-    return true;
+    return respondAsync(
+      getDirectMappingSummary().then((summary) => ({ ok: true, summary })),
+      sendResponse,
+      "NIMS mapping status could not be read."
+    );
   }
-
   if (message.type === "NIMS_CLEAR_DIRECT_MAPPING") {
-    clearDirectMapping().then(sendResponse);
-    return true;
+    return respondAsync(clearDirectMapping(), sendResponse, "NIMS mapping could not be cleared.");
   }
-
   if (message.type === "NIMS_FETCH_REPORT_DIRECT") {
-    fetchReportDirect(message.rowPayload).then(sendResponse);
-    return true;
+    return respondAsync(fetchReportDirect(message.rowPayload), sendResponse, "NIMS direct report fetch failed.");
   }
-
   if (message.type === "NIMS_RECORD_DIRECT_TEST") {
-    recordDirectTestResult(message.result).then(sendResponse);
-    return true;
+    return respondAsync(recordDirectTestResult(message.result), sendResponse, "NIMS direct-test result could not be recorded.");
   }
-
   if (message.type === "NIMS_GET_DIRECT_DIAGNOSTICS") {
-    getDirectDiagnostics().then(sendResponse);
-    return true;
+    return respondAsync(getDirectDiagnostics(), sendResponse, "NIMS diagnostics could not be read.");
   }
-
   if (message.type === "NIMS_HELPER_HEALTH") {
-    callHelper("/health").then(sendResponse);
-    return true;
+    return respondAsync(callHelper("/health"), sendResponse, "NIMS helper health check failed.");
   }
-
   if (message.type === "NIMS_GET_HELPER_SETTINGS") {
-    getHelperSettings().then((settings) => sendResponse({ ok: true, settings: safeHelperSettings(settings) }));
-    return true;
+    return respondAsync(
+      getHelperSettings().then((settings) => ({ ok: true, settings: safeHelperSettings(settings) })),
+      sendResponse,
+      "NIMS helper settings could not be read."
+    );
   }
-
   if (message.type === "NIMS_SAVE_HELPER_SETTINGS") {
-    saveHelperSettings(message.settings || {}).then(sendResponse);
-    return true;
+    return respondAsync(saveHelperSettings(message.settings || {}), sendResponse, "NIMS helper settings could not be saved.");
   }
-
   if (message.type === "NIMS_CLEAR_HELPER_SETTINGS") {
-    chrome.storage.local.remove("nimsHelperSettings").then(() => sendResponse({ ok: true }));
-    return true;
+    return respondAsync(
+      chrome.storage.local.remove("nimsHelperSettings").then(() => ({ ok: true })),
+      sendResponse,
+      "NIMS helper settings could not be cleared."
+    );
   }
-
   if (message.type === "NIMS_HELPER_PARSE_REPORT") {
-    callHelper("/parse-report", {
+    return respondAsync(callHelper("/parse-report", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.body || {})
-    }).then(sendResponse);
-    return true;
+    }), sendResponse, "NIMS report parser request failed.");
   }
-
   if (message.type === "NIMS_HELPER_SUMMARIZE") {
-    callHelper("/summarize", {
+    return respondAsync(callHelper("/summarize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.body || {})
-    }).then(sendResponse);
-    return true;
+    }), sendResponse, "NIMS summary request failed.");
   }
-
   if (message.type === "NIMS_HELPER_CACHE_LOOKUP") {
-    callHelper("/cache-lookup", {
+    return respondAsync(callHelper("/cache-lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.body || {})
-    }).then(sendResponse);
-    return true;
+    }), sendResponse, "NIMS helper cache lookup failed.");
   }
-
   if (message.type === "NIMS_HELPER_CLEAR_CACHE" || message.type === "NIMS_CLEAR_CACHE") {
-    callHelper("/clear-cache", { method: "POST" }).then(sendResponse);
-    return true;
+    return respondAsync(callHelper("/clear-cache", { method: "POST" }), sendResponse, "NIMS helper cache could not be cleared.");
   }
 
   if (message.type === "NIMS_SESSION_STATE") {
-    handleDashboardSessionState(message.state || {}, sender).then(() => sendResponse({ ok: true }));
-    return true;
+    // This is a notification, not an RPC. Do not hold a message channel open
+    // while the NIMS page may be navigating/reloading.
+    void handleDashboardSessionState(message.state || {}, sender).catch(() => {});
+    return false;
   }
 
   if (message.type === "NIMS_DASHBOARD_STATUS") {
-    getDashboardSessionStatus().then(sendResponse);
-    return true;
+    return respondAsync(getDashboardSessionStatus(), sendResponse, "Unable to check the NIMS browser session.");
   }
-
   if (message.type === "NIMS_DASHBOARD_LOGIN") {
-    openDashboardLogin(sender).then(sendResponse);
-    return true;
+    return respondAsync(openDashboardLogin(sender), sendResponse, "Unable to open the NIMS login window.");
   }
-
   if (message.type === "NIMS_DASHBOARD_FETCH_CR") {
-    fetchCrForDashboard(message.crNo, sender).then(sendResponse);
-    return true;
+    return respondAsync(fetchCrForDashboard(message.crNo, sender), sendResponse, "NIMS CR retrieval failed.");
   }
 
   return false;
