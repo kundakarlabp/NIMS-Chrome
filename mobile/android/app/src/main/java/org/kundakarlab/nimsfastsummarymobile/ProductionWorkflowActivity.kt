@@ -1109,6 +1109,16 @@ class ProductionWorkflowActivity : ComponentActivity() {
         return ""
     }
 
+    private fun isCrResultsRoute(url: String): Boolean =
+        url.contains("viewcrnowisereportprocess.cnt", ignoreCase = true)
+
+    private fun isAllowedNimsUrl(url: String): Boolean = runCatching {
+        val uri = android.net.Uri.parse(url)
+        uri.scheme.equals("https", ignoreCase = true) &&
+            (uri.host.equals("www.nimsts.edu.in", ignoreCase = true) ||
+                uri.host.equals("nimsts.edu.in", ignoreCase = true))
+    }.getOrDefault(false)
+
     private fun assetText(name: String): String = runCatching {
         assets.open(name).bufferedReader().use { it.readText() }
     }.getOrDefault("")
