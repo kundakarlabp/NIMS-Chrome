@@ -129,3 +129,14 @@ test('bulk interceptor recognizes GETMETABOLICDATA in URL or request body', () =
   assert.match(capture, /URLSearchParams/);
   assert.match(capture, /FormData/);
 });
+
+
+test('GETMETABOLICDATA interceptor runs in the NIMS page world', () => {
+  const captureEntry = manifest.content_scripts.find(entry =>
+    Array.isArray(entry.js) && entry.js.includes('src/bulkCaptureMain.js')
+  );
+  assert.ok(captureEntry);
+  assert.equal(captureEntry.world, 'MAIN');
+  assert.equal(captureEntry.run_at, 'document_start');
+  assert.equal(captureEntry.all_frames, true);
+});
