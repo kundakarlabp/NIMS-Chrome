@@ -276,7 +276,12 @@
       return false;
     }
     if (message.type === "NIMS_BRIDGE_RUN_SUMMARY") {
-      runSummary(message.mode || "bulk_full").then(sendResponse);
+      Promise.resolve(runSummary(message.mode || "bulk_full"))
+        .then(sendResponse)
+        .catch((error) => sendResponse({
+          ok: false,
+          error: error && error.message ? error.message : "NIMS result processing failed."
+        }));
       return true;
     }
     return false;
