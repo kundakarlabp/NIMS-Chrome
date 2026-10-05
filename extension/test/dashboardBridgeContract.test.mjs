@@ -10,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.8');
+  assert.equal(manifest.version, '0.5.9');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);
@@ -253,4 +253,33 @@ test('REST authentication expiry reopens manual login instead of entering browse
   assert.ok(auth < fallback);
   assert.match(body, /openDashboardLogin\(sender\)/);
   assert.match(body, /KBP_NIMS_AUTH_REQUIRED/);
+});
+
+
+test('desktop CR navigation uses native frame contract before direct-leaf fallback', () => {
+  const start = sessionBridge.indexOf('function openCrWise()');
+  const end = sessionBridge.indexOf('function setInputValue', start);
+  const body = sessionBridge.slice(start, end);
+  assert.ok(body.indexOf('navigateCurrentDocumentStep') >= 0);
+  assert.ok(body.indexOf('openCrWiseResultsDirect') >= 0);
+  assert.ok(body.indexOf('navigateCurrentDocumentStep') < body.indexOf('openCrWiseResultsDirect'));
+});
+
+test('fallback navigation advances all NIMS frames instead of returning on first ok frame', () => {
+  const start = background.indexOf('async function openOneCrNavigationStep(tabId)');
+  const end = background.indexOf('async function findCrFrame(tabId)', start);
+  const body = background.slice(start, end);
+  assert.match(body, /for \(const frameId of ordered\)/);
+  assert.match(body, /responses\.push\(\{ frameId, response \}\)/);
+  assert.match(body, /responses\.sort/);
+  assert.doesNotMatch(body, /if \(response && response\.ok\) return/);
+});
+
+test('CR navigation timeout preserves last stage/action for safe diagnosis', () => {
+  const start = background.indexOf('async function findCrFrame(tabId)');
+  const end = background.indexOf('async function waitForReportFrame', start);
+  const body = background.slice(start, end);
+  assert.match(body, /lastStep/);
+  assert.match(body, /last navigation:/);
+  assert.match(body, /attempt < 24/);
 });
