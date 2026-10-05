@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - release/android-auto-bulk
   pull_request:
     branches:
       - main
