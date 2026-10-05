@@ -1177,54 +1177,65 @@ async function ensureDashboardWorkerTab() {
 }
 
 async function openOneCrNavigationStep(tabId) {
-  // Page-defined callMenu/addTab are invisible to isolated content scripts.
-  // Run the existing direct-leaf routine in NIMS's main world only after its
-  // exact CR-wise menu item appears; the ticketed URL stays inside that page.
-  try {
-    const target = { tabId, frameIds: [0] };
-    const found = await chrome.scripting.executeScript({
-      target, world: "MAIN",
-      func: () => {
-        const id = "Cr_No_Wise_Result_Report_Printing_New";
-        const menu = document.getElementById("frmMainMenu");
-        let item = document.getElementById(id);
-        if (!item && menu) { try { item = menu.contentDocument && menu.contentDocument.getElementById(id); } catch {} }
-        return Boolean(item && item.isConnected && (item.getAttribute("onclick") || "").includes("/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"));
-      }
-    });
-    if (found && found[0] && found[0].result) {
-      await chrome.scripting.executeScript({ target, world: "MAIN", files: ["src/navigationCore.js"] });
-      const direct = await chrome.scripting.executeScript({
-        target, world: "MAIN",
-        func: () => {
-          const result = globalThis.NimsReportCore && globalThis.NimsReportCore.openCrWiseResultsDirect(document);
-          return { ok: Boolean(result && result.ok), action: result && result.action || "none" };
-        }
-      });
-      if (direct && direct[0] && direct[0].result && direct[0].result.ok) {
-        return { ok: true, frameId: 0, response: direct[0].result };
-      }
-    }
-  } catch {}
   const frameIds = await frameIdsForTab(tabId);
   const ordered = [0, ...frameIds.filter(frameId => frameId !== 0)];
+  const responses = [];
+
+  // Important: do not stop at the first frame that merely says "ok".
+  // In the NIMS frameset the top shell can be waiting/cooldown while the menu
+  // frame is the one that can actually click Investigation or the CR-wise item.
+  // Give every injected frame one bounded navigation opportunity per cycle.
   for (const frameId of ordered) {
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_OPEN_CR" }, { frameId });
-      if (response && response.ok) return { ok: true, frameId, response };
+      const response = await chrome.tabs.sendMessage(
+        tabId,
+        { type: "NIMS_BRIDGE_OPEN_CR" },
+        { frameId }
+      );
+      if (response) responses.push({ frameId, response });
     } catch {}
   }
-  return { ok: false };
+
+  if (!responses.length) return { ok: false };
+
+  const score = (item) => {
+    const response = item.response || {};
+    const stage = String(response.stage || response.detectedStage || "");
+    const action = String(response.action || "");
+    let value = response.ok ? 10 : 0;
+    if (response.done) value += 1000;
+    if (stage === "report_list") value += 900;
+    if (stage === "cr_search") value += 800;
+    if (stage === "investigation_menu") value += 500;
+    if (stage === "home") value += 300;
+    if (/clicked_|selected_|called_|navigated_/i.test(action)) value += 200;
+    if (/waiting|cooldown|none/i.test(action)) value -= 50;
+    if (item.frameId !== 0) value += 5;
+    return value;
+  };
+
+  responses.sort((a, b) => score(b) - score(a));
+  const best = responses[0];
+  return { ok: Boolean(best.response && best.response.ok), frameId: best.frameId, response: best.response };
 }
 
 async function findCrFrame(tabId) {
-  for (let attempt = 0; attempt < 18; attempt += 1) {
+  let lastStep = null;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
     const probe = await probeNimsTab(tabId);
     if (probe.crFrame) return probe.crFrame.frameId;
-    await openOneCrNavigationStep(tabId);
-    await delay(attempt < 5 ? 550 : 900);
+    lastStep = await openOneCrNavigationStep(tabId);
+    await delay(attempt < 6 ? 550 : 850);
   }
-  throw new Error("Unable to open the NIMS CR-wise results page.");
+  const response = lastStep && lastStep.response ? lastStep.response : {};
+  const stage = String(response.stage || response.detectedStage || "").trim();
+  const action = String(response.action || "").trim();
+  const detail = [stage, action].filter(Boolean).join("/");
+  throw new Error(
+    "Unable to open the NIMS CR-wise results page"
+    + (detail ? " (last navigation: " + detail + ")" : "")
+    + "."
+  );
 }
 
 async function waitForReportFrame(tabId) {
