@@ -116,3 +116,16 @@ test('runtime scripts compile', () => {
   assert.doesNotThrow(() => new Function(capture));
   assert.doesNotThrow(() => new Function(normalizerSource));
 });
+
+
+test('bulk capture can be armed by the authenticated top NIMS frame', () => {
+  assert.match(capture, /NIMS_ORIGINS\.has\(event\.origin\)/);
+  assert.match(capture, /__nimsBulkCaptureArm/);
+  assert.doesNotMatch(capture, /event\.source !== window/);
+});
+
+test('bulk interceptor recognizes GETMETABOLICDATA in URL or request body', () => {
+  assert.match(capture, /GETMETABOLICDATA/);
+  assert.match(capture, /URLSearchParams/);
+  assert.match(capture, /FormData/);
+});
