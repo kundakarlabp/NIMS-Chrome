@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.5.7",
-  "description": "Desktop NIMS Results Dashboard connector: manual authenticated login, REST-first report discovery, and proven browser bridge fallback.",
+  "version": "0.5.8",
+  "description": "Desktop NIMS Results Dashboard connector: manual authenticated login with automatic CR resume, REST-first report discovery, and proven browser bridge fallback.",
   "permissions": [
     "storage",
     "activeTab",
@@ -58,7 +58,9 @@
       "matches": [
         "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
       ],
-      "js": ["src/dashboardBridge.js"],
+      "js": [
+        "src/dashboardBridge.js"
+      ],
       "run_at": "document_start"
     },
     {
@@ -76,7 +78,9 @@
         "https://www.nimsts.edu.in/HISUtilities/*",
         "https://www.nimsts.edu.in/HBIMS/*"
       ],
-      "js": ["src/nimsSessionBridge.js"],
+      "js": [
+        "src/nimsSessionBridge.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true

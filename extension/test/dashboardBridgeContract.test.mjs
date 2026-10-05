@@ -10,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.7');
+  assert.equal(manifest.version, '0.5.8');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);
@@ -198,4 +198,59 @@ test('manual session rediscovery scans every NIMS module supported by the bridge
     assert.ok(background.includes('https://nimsts.edu.in/' + moduleName + '/*'));
     assert.ok(background.includes('https://www.nimsts.edu.in/' + moduleName + '/*'));
   }
+});
+
+
+test('CR fetch opens visible manual login instead of failing when session is absent', async () => {
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const source = background.slice(start);
+  const events = [];
+  let loginOpened = false;
+  let workerTouched = false;
+  const context = {
+    getDashboardSessionStatus: async () => ({ ok: true, loggedIn: false, state: 'logged_out' }),
+    openDashboardLogin: async () => { loginOpened = true; return { ok: true, state: 'signing_in' }; },
+    pushDashboardEvent: async (type, payload) => { events.push({ type, payload }); },
+    ensureDashboardWorkerTab: async () => { workerTouched = true; throw new Error('should not create hidden worker before login'); },
+    tryRestApiForDashboard: async () => ({ ok: false }),
+    fetchCrForDashboardLegacy: async () => ({ results: [], reports: [] })
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  const result = await context.fetchCrForDashboard('331012600000001', { tab: { id: 99, windowId: 1 } });
+  assert.equal(result.ok, true);
+  assert.equal(result.pendingAuth, true);
+  assert.equal(loginOpened, true);
+  assert.equal(workerTouched, false);
+  assert.equal(events.some(event => event.type === 'KBP_NIMS_AUTH_REQUIRED'), true);
+});
+
+test('authenticated session probe accepts supported protected routes but excludes the login endpoint', () => {
+  assert.match(sessionBridge, /supportedProtectedRoute/);
+  assert.match(sessionBridge, /HISInvestigationG5\|HIS\|hislogin\|HISUtilities\|HBIMS/);
+  assert.match(sessionBridge, /explicitLoginRoute/);
+  assert.match(sessionBridge, /loginLogin\\\.action/);
+  assert.match(sessionBridge, /!explicitLoginRoute && protectedModule/);
+});
+
+test('auth-required event remains separate from REST fallback and identity mismatch', () => {
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const body = background.slice(start);
+  assert.ok(body.indexOf('KBP_NIMS_AUTH_REQUIRED') < body.indexOf('tryRestApiForDashboard(crNo)'));
+  assert.ok(body.indexOf('NIMS_IDENTITY_MISMATCH') < body.indexOf('KBP_NIMS_SOURCE_FALLBACK'));
+});
+
+
+test('REST authentication expiry reopens manual login instead of entering browser fallback', () => {
+  const start = background.indexOf('const rest = await tryRestApiForDashboard(crNo);');
+  const end = background.indexOf('await pushDashboardEvent("KBP_NIMS_BULK_RESULTS"', start);
+  const body = background.slice(start, end);
+  const auth = body.indexOf('NIMS_AUTH_REQUIRED');
+  const mismatch = body.indexOf('NIMS_IDENTITY_MISMATCH');
+  const fallback = body.indexOf('KBP_NIMS_SOURCE_FALLBACK');
+  assert.ok(auth >= 0);
+  assert.ok(auth < mismatch);
+  assert.ok(auth < fallback);
+  assert.match(body, /openDashboardLogin\(sender\)/);
+  assert.match(body, /KBP_NIMS_AUTH_REQUIRED/);
 });
