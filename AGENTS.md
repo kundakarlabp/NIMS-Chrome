@@ -1,40 +1,20 @@
 # AGENTS.md
 
-## Canonical product
+## Product boundary
 
-Maintain one desktop NIMS Results Dashboard workflow:
+Maintain one desktop NIMS Results Dashboard connector:
 
-Dashboard → authenticated Chrome/NIMS session → REST reportList first → existing browser bridge fallback → deterministic parser → canonical result bundle.
+Dashboard → authenticated NIMS session → Investigation Trends → Custom Sheet GETMETABOLICDATA JSON → normalized dashboard bundle.
 
-## Preserve
-
-- manual NIMS login and CAPTCHA
-- dashboardBridge contract
-- nimsSessionBridge session detection and CR submission
-- nimsRestApi REST-first adapter
-- navigationCore
-- contentUtils/contentScript fallback processor
-- helper parser
-- fail-closed identity verification
-- explicit source/fallback events
+Manual login/CAPTCHA is the only authentication fallback.
 
 ## Do not reintroduce
 
-- Android/mobile runtime
-- mobile or ChatGPT relay
-- side panel
-- manual-analysis UI
-- Chrome Web Store publication workflow
-- duplicated navigation engines
-- CAPTCHA solving or credential capture
+- CR-wise Results List / View Report parsing as the normal results path
+- direct-report mapping/discovery
+- PDF/OCR/helper parsing for structured values
+- Android/APK/mobile relay
+- side-panel/manual-analysis UI
+- CAPTCHA solving
 
-The old content processor is retained only because the working authenticated browser fallback depends on it. Its visible toolbar is disabled.
-
-## Required validation
-
-```bash
-npm ci
-npm test
-pip install -r helper/requirements-dev.txt
-PYTHONPATH=helper python -m pytest -q tests/test_parsers.py
-```
+The HBIMS reportList endpoint may be used only for optional report metadata/source links. It must never block the structured bulk results path.

@@ -1,92 +1,59 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.5.10",
-  "description": "Desktop NIMS Results Dashboard connector: reliable dashboard messaging, manual authenticated login with automatic CR resume, REST-first discovery, and native multi-frame browser fallback.",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "tabs",
-    "webRequest",
-    "webNavigation"
-  ],
+  "version": "0.6.0",
+  "description": "NIMS Results Dashboard connector: authenticated Custom Sheet bulk API capture with manual login when required and optional report metadata.",
+  "permissions": ["tabs"],
   "host_permissions": [
     "https://nimsts.edu.in/AHIMSG5/*",
-    "https://nimsts.edu.in/HISInvestigationG5/*",
-    "https://nimsts.edu.in/HIS/*",
-    "https://nimsts.edu.in/hislogin/*",
-    "https://nimsts.edu.in/HISUtilities/*",
-    "https://nimsts.edu.in/HBIMS/*",
     "https://www.nimsts.edu.in/AHIMSG5/*",
+    "https://nimsts.edu.in/HISInvestigationG5/*",
     "https://www.nimsts.edu.in/HISInvestigationG5/*",
+    "https://nimsts.edu.in/HIS/*",
     "https://www.nimsts.edu.in/HIS/*",
+    "https://nimsts.edu.in/hislogin/*",
     "https://www.nimsts.edu.in/hislogin/*",
+    "https://nimsts.edu.in/HISUtilities/*",
     "https://www.nimsts.edu.in/HISUtilities/*",
+    "https://nimsts.edu.in/HBIMS/*",
     "https://www.nimsts.edu.in/HBIMS/*",
-    "http://127.0.0.1:8765/*",
-    "https://*.railway.app/*",
-    "https://*.up.railway.app/*",
     "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
   ],
   "content_scripts": [
     {
-      "matches": [
-        "https://nimsts.edu.in/AHIMSG5/*",
-        "https://nimsts.edu.in/HISInvestigationG5/*",
-        "https://nimsts.edu.in/HIS/*",
-        "https://nimsts.edu.in/hislogin/*",
-        "https://nimsts.edu.in/HISUtilities/*",
-        "https://nimsts.edu.in/HBIMS/*",
-        "https://www.nimsts.edu.in/AHIMSG5/*",
-        "https://www.nimsts.edu.in/HISInvestigationG5/*",
-        "https://www.nimsts.edu.in/HIS/*",
-        "https://www.nimsts.edu.in/hislogin/*",
-        "https://www.nimsts.edu.in/HISUtilities/*",
-        "https://www.nimsts.edu.in/HBIMS/*"
-      ],
-      "js": [
-        "src/navigationCore.js",
-        "src/contentUtils.js",
-        "src/contentScript.js"
-      ],
-      "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true
-    },
-    {
-      "matches": [
-        "https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"
-      ],
-      "js": [
-        "src/dashboardBridge.js"
-      ],
+      "matches": ["https://nims-results-cockpit-ne5nig.v2.appdeploy.ai/*"],
+      "js": ["src/dashboardBridge.js"],
       "run_at": "document_start"
     },
     {
       "matches": [
-        "https://nimsts.edu.in/AHIMSG5/*",
         "https://nimsts.edu.in/HISInvestigationG5/*",
-        "https://nimsts.edu.in/HIS/*",
-        "https://nimsts.edu.in/hislogin/*",
-        "https://nimsts.edu.in/HISUtilities/*",
-        "https://nimsts.edu.in/HBIMS/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*"
+      ],
+      "js": ["src/bulkCaptureMain.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://nimsts.edu.in/AHIMSG5/*",
         "https://www.nimsts.edu.in/AHIMSG5/*",
+        "https://nimsts.edu.in/HISInvestigationG5/*",
         "https://www.nimsts.edu.in/HISInvestigationG5/*",
+        "https://nimsts.edu.in/HIS/*",
         "https://www.nimsts.edu.in/HIS/*",
+        "https://nimsts.edu.in/hislogin/*",
         "https://www.nimsts.edu.in/hislogin/*",
+        "https://nimsts.edu.in/HISUtilities/*",
         "https://www.nimsts.edu.in/HISUtilities/*",
+        "https://nimsts.edu.in/HBIMS/*",
         "https://www.nimsts.edu.in/HBIMS/*"
       ],
-      "js": [
-        "src/nimsSessionBridge.js"
-      ],
+      "js": ["src/nimsUiBridge.js"],
       "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true
+      "all_frames": true
     }
   ],
-  "background": {
-    "service_worker": "src/background.js"
-  }
+  "background": {"service_worker": "src/background.js"}
 }
