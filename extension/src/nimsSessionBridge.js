@@ -95,12 +95,12 @@
   function openCrWise() {
     const core = window.NimsReportCore;
     if (!core) return { ok: false, error: "NIMS navigation core is not ready." };
-    try {
-      if (typeof core.openCrWiseResultsDirect === "function") {
-        const direct = core.openCrWiseResultsDirect(document);
-        if (direct && direct.ok) return direct;
-      }
-    } catch {}
+
+    // Desktop Chrome must follow the native e-Sushrut contract first:
+    // menuSelected('Investigation') -> CR-wise menu anchor/callMenu -> addTab iframe.
+    // The direct-leaf helper was added for WebView isolation problems and is only
+    // a last resort here because forcing top-level navigation can bypass the
+    // normal desktop frame transition we are waiting to detect.
     try {
       if (typeof core.navigateCurrentDocumentStep === "function") {
         const step = core.navigateCurrentDocumentStep(document);
@@ -108,7 +108,16 @@
       }
     } catch {}
     try {
-      if (typeof core.navigateToCrWiseReports === "function") return core.navigateToCrWiseReports(document);
+      if (typeof core.navigateToCrWiseReports === "function") {
+        const native = core.navigateToCrWiseReports(document);
+        if (native && native.ok) return native;
+      }
+    } catch {}
+    try {
+      if (typeof core.openCrWiseResultsDirect === "function") {
+        const direct = core.openCrWiseResultsDirect(document);
+        if (direct && direct.ok) return direct;
+      }
     } catch {}
     return { ok: false, error: "CR-wise results navigation is not ready in this frame." };
   }
