@@ -10,7 +10,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.5.9');
+  assert.equal(manifest.version, '0.5.10');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   assert.equal(manifest.content_scripts.some(entry => entry.match_origin_as_fallback), false);
@@ -282,4 +282,42 @@ test('CR navigation timeout preserves last stage/action for safe diagnosis', () 
   assert.match(body, /lastStep/);
   assert.match(body, /last navigation:/);
   assert.match(body, /attempt < 24/);
+});
+
+
+test('all async background RPC paths return a structured response on rejection', () => {
+  assert.match(background, /function respondAsync\(/);
+  assert.match(background, /\.catch\(\(error\) => sendResponse\(safeAsyncError/);
+  for (const token of [
+    'NIMS_DASHBOARD_STATUS',
+    'NIMS_DASHBOARD_LOGIN',
+    'NIMS_DASHBOARD_FETCH_CR'
+  ]) {
+    const index = background.indexOf('message.type === "' + token + '"');
+    assert.ok(index >= 0, token + ' handler missing');
+    const body = background.slice(index, index + 450);
+    assert.match(body, /respondAsync\(/);
+  }
+});
+
+test('session-state notifications do not keep a navigation-sensitive message channel open', () => {
+  const start = background.indexOf('message.type === "NIMS_SESSION_STATE"');
+  const body = background.slice(start, start + 450);
+  assert.match(body, /void handleDashboardSessionState/);
+  assert.match(body, /return false/);
+  assert.doesNotMatch(body, /sendResponse/);
+});
+
+test('dashboard bridge retries only transient status-channel closures and hides raw Chrome port errors', () => {
+  assert.match(dashboardBridge, /function isTransientChannelError/);
+  assert.match(dashboardBridge, /message channel closed\|port closed\|receiving end does not exist/);
+  assert.match(dashboardBridge, /retryTransient: true/);
+  assert.match(dashboardBridge, /NIMS connector communication restarted/);
+});
+
+test('async browser-fallback summary always returns a structured error response', () => {
+  const start = sessionBridge.indexOf('message.type === "NIMS_BRIDGE_RUN_SUMMARY"');
+  const body = sessionBridge.slice(start, start + 650);
+  assert.match(body, /\.catch\(\(error\) => sendResponse/);
+  assert.match(body, /NIMS result processing failed/);
 });
