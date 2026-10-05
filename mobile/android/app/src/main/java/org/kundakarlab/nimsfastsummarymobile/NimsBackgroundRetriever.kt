@@ -51,7 +51,13 @@ class NimsBackgroundRetriever(context: Context) {
             fetchReportListRest(crNo)
         } catch (identity: NimsIdentityMismatchException) {
             throw identity
+        } catch (auth: NimsAuthenticationRequiredException) {
+            // Authentication is not a REST capability failure. Preserve the relay
+            // contract so the same CR job enters LoginGate and resumes after auth.
+            throw auth
         } catch (_: Throwable) {
+            // REST payload/transport incompatibility only: use the proven
+            // authenticated SHOWPATDETAILS path as the retrieval fallback.
             val (body, finalUrl) = fetchReportListLegacy(crNo)
             if (NimsBackgroundReportListParser.looksLikeLoginOrExpired(body, finalUrl)) {
                 throw NimsAuthenticationRequiredException()
