@@ -200,7 +200,16 @@ class ProductionWorkflowActivity : ComponentActivity() {
             }
             addLog("SESSION_HANDOFF verified=true target=cr_module pendingCr=${pendingCrSubmitAfterReady}")
             CookieManager.getInstance().flush()
-            webView.loadUrl(CR_RESULTS_URL)
+            // Never open the CR leaf endpoint directly after login: NIMS attaches
+            // the SSO ticket through its authenticated shell/callMenu contract.
+            val verifiedShellUrl = intent.getStringExtra(LoginGateActivity.EXTRA_HANDOFF_URL)
+                .orEmpty()
+                .takeIf(::isAllowedNimsUrl)
+            if (!verifiedShellUrl.isNullOrBlank() && !isCrResultsRoute(verifiedShellUrl)) {
+                webView.loadUrl(verifiedShellUrl)
+            } else {
+                webView.loadUrl(NIMS_LOGIN_URL)
+            }
         } else {
             addLog("SESSION_HANDOFF verified=false target=login")
             webView.loadUrl(NIMS_LOGIN_URL)
