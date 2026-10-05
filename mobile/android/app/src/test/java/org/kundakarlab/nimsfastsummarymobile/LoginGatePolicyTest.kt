@@ -86,10 +86,10 @@ class LoginGatePolicyTest {
     }
 
     @Test
-    fun explicitlyVerifiedProtectedCrRouteMayEnterResultsEvenBeforeCrDomIsReady() {
+    fun settledProtectedCrRouteMayReuseExistingSessionEvenBeforeCrDomIsReady() {
         assertTrue(
             LoginGatePolicy.canAcceptProtectedVerification(
-                loginFormSeen = true,
+                loginFormSeen = false,
                 loginVisible = false,
                 sessionExpired = false,
                 verificationStarted = true,
@@ -99,10 +99,10 @@ class LoginGatePolicyTest {
     }
 
     @Test
-    fun unrequestedProtectedRouteCannotBypassLoginGate() {
+    fun unverifiedProtectedRouteCannotBypassLoginGate() {
         assertFalse(
             LoginGatePolicy.canAcceptProtectedVerification(
-                loginFormSeen = true,
+                loginFormSeen = false,
                 loginVisible = false,
                 sessionExpired = false,
                 verificationStarted = false,
