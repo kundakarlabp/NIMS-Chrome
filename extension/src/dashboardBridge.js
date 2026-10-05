@@ -12,16 +12,39 @@
     window.postMessage({ type, ...bridgePayload(payload) }, window.location.origin);
   }
 
-  async function send(type, payload) {
-    try {
-      return await chrome.runtime.sendMessage({ type, ...(payload || {}) });
-    } catch (error) {
-      return { ok: false, error: error && error.message ? error.message : "NIMS browser bridge unavailable." };
+  function isTransientChannelError(error) {
+    const message = String(error && error.message || "");
+    return /message channel closed|port closed|receiving end does not exist/i.test(message);
+  }
+
+  function friendlyBridgeError(error) {
+    if (isTransientChannelError(error)) {
+      return "NIMS connector communication restarted. Retrying the browser-session check…";
     }
+    return error && error.message ? error.message : "NIMS browser bridge unavailable.";
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function send(type, payload, options = {}) {
+    const attempts = options.retryTransient ? 3 : 1;
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await chrome.runtime.sendMessage({ type, ...(payload || {}) });
+      } catch (error) {
+        lastError = error;
+        if (!isTransientChannelError(error) || attempt === attempts - 1) break;
+        await delay(120 * (attempt + 1));
+      }
+    }
+    return { ok: false, transient: isTransientChannelError(lastError), error: friendlyBridgeError(lastError) };
   }
 
   async function emitStatus() {
-    const response = await send("NIMS_DASHBOARD_STATUS");
+    const response = await send("NIMS_DASHBOARD_STATUS", null, { retryTransient: true });
     post("KBP_NIMS_STATUS", response || { ok: false, loggedIn: false });
   }
 
