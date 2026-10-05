@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.5.9",
-  "description": "Desktop NIMS Results Dashboard connector: manual authenticated login with automatic CR resume, REST-first discovery, and native multi-frame browser fallback.",
+  "version": "0.5.10",
+  "description": "Desktop NIMS Results Dashboard connector: reliable dashboard messaging, manual authenticated login with automatic CR resume, REST-first discovery, and native multi-frame browser fallback.",
   "permissions": [
     "storage",
     "activeTab",
