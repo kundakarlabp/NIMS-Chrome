@@ -65,15 +65,19 @@
     const sessionExpired = /session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again|session\s*timeout/i.test(body);
     const crFieldReady = Boolean(findCrInput());
     const rows = reportRows();
-    const protectedModule = /\/HISInvestigationG5\//i.test(href)
-      || /\/AHIMSG5\/hislogin\/transactions\//i.test(href)
+    let pathname = "";
+    try { pathname = new URL(href).pathname || ""; } catch {}
+    const explicitLoginRoute = /\/AHIMSG5\/hissso\/loginLogin\.action$/i.test(pathname);
+    const supportedProtectedRoute = /\/(?:HISInvestigationG5|HIS|hislogin|HISUtilities|HBIMS)(?:\/|$)/i.test(pathname)
+      || /\/AHIMSG5\/hislogin\/transactions(?:\/|$)/i.test(pathname);
+    const protectedModule = supportedProtectedRoute
       || crFieldReady
       || rows.length > 0
       || /\blog\s*out\b/i.test(body);
     return {
       href,
       loginForm,
-      authenticated: Boolean(!loginForm && !sessionExpired && protectedModule),
+      authenticated: Boolean(!loginForm && !sessionExpired && !explicitLoginRoute && protectedModule),
       sessionExpired,
       crFieldReady,
       reportRows: rows.length,
