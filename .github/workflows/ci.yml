@@ -68,17 +68,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Package validated extension
+      - name: Verify unpacked extension layout
         shell: bash
         run: |
           set -euo pipefail
-          version="$(python -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
-          mkdir -p dist
-          cd extension
-          zip -qr "../dist/nims-results-connector-$version.zip" manifest.json src
+          test -f extension/manifest.json
+          test -d extension/src
       - uses: actions/upload-artifact@v4
         with:
-          name: nims-results-connector
-          path: dist/nims-results-connector-*.zip
+          name: nims-results-connector-v0.6.0
+          path: |
+            extension/manifest.json
+            extension/src
           if-no-files-found: error
           retention-days: 14
