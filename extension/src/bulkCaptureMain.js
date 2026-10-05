@@ -5,9 +5,26 @@
 
   let activeRequestId = '';
 
+  const NIMS_ORIGINS = new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']);
+
+  function bodyContainsMarker(body) {
+    if (body == null) return false;
+    if (/GETMETABOLICDATA/i.test(String(body))) return true;
+    try {
+      if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+        return [...body.entries()].some(([key, value]) => /GETMETABOLICDATA/i.test(key + '=' + value));
+      }
+    } catch {}
+    try {
+      if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        return [...body.entries()].some(([key, value]) => /GETMETABOLICDATA/i.test(key + '=' + String(value)));
+      }
+    } catch {}
+    return false;
+  }
+
   const isBulkRequest = (url, body) =>
-    /GETMETABOLICDATA/i.test(String(url || '')) ||
-    /GETMETABOLICDATA/i.test(String(body || ''));
+    /GETMETABOLICDATA/i.test(String(url || '')) || bodyContainsMarker(body);
 
   const emit = body => {
     if (!activeRequestId || body == null || typeof body !== 'object') return;
@@ -35,8 +52,11 @@
   };
 
   window.addEventListener('message', event => {
-    if (event.source !== window || event.origin !== location.origin) return;
+    if (!NIMS_ORIGINS.has(event.origin)) return;
     if (event.data?.__nimsBulkCaptureArm !== true) return;
+    // The authenticated top NIMS shell arms the Trends iframe immediately
+    // before Custom Sheet Apply. Do not require event.source === window:
+    // in the real frameset the source is window.top.
     activeRequestId = String(event.data.requestId || '');
   });
 
