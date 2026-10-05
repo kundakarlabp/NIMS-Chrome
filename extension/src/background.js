@@ -1420,6 +1420,19 @@ async function fetchCrForDashboard(rawCrNo, sender) {
   const crNo = String(rawCrNo || "").replace(/\D/g, "");
   if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
   try {
+    // Do not create or poll a hidden unauthenticated worker tab. If the clinician
+    // session is absent, open the normal visible NIMS login flow and let the
+    // dashboard retain this CR in memory for automatic resume after login.
+    const session = await getDashboardSessionStatus();
+    if (!session.loggedIn) {
+      await openDashboardLogin(sender);
+      await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
+        state: "signing_in",
+        preferredSource: "nims_rest_api"
+      });
+      return { ok: true, pendingAuth: true };
+    }
+
     await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_rest_api" });
     // Preserve the existing trust boundary: REST is an optimization inside an
     // already authenticated clinician NIMS session, never an authentication bypass.
