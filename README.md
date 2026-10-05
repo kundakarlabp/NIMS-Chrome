@@ -35,3 +35,5 @@ The HBIMS `reportList` REST endpoint is secondary metadata only. Failure of `rep
 - CAPTCHA automation
 
 This restores the earlier validated dashboard bridge design: Custom Sheet bulk JSON drives matrices and trends; report metadata is supplementary.
+
+Operational rule: structured values must never depend on opening the NIMS CR-wise Results List or locating a View Report button.
