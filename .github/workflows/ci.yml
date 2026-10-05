@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - release/android-nims-results
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
