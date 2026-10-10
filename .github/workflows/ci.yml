@@ -18,37 +18,30 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Enforce bulk-API-only desktop connector
+      - name: Enforce desktop Results-only repository
         shell: bash
         run: |
           set -euo pipefail
-          test ! -e helper
-          test ! -e mobile
-          test ! -e shared
-          test ! -e tests
+          for removed in mobile shared docs scripts railway.json .dockerignore; do
+            test ! -e "$removed"
+          done
+          test ! -e dashboard/mobileRelay.ts
+          test ! -e dashboard/APPDEPLOY_MOBILE_BRIDGE_PATCH.md
+          ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manualAnalysis*' -o -name 'manualSidepanel*' \) | grep .
+      - name: Verify connector manifest
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import json
-          from pathlib import Path
-          m = json.load(open('extension/manifest.json'))
-          assert m['version'] == '0.6.0'
-          expected = {
-              'background.js',
-              'bulkCaptureMain.js',
-              'bulkNormalizer.js',
-              'dashboardBridge.js',
-              'nimsRestApi.js',
-              'nimsUiBridge.js',
-          }
-          assert {p.name for p in Path('extension/src').iterdir() if p.is_file()} == expected
-          runtime = '\n'.join(Path('extension/src', name).read_text() for name in expected)
-          forbidden = [
-              'NIMS_BRIDGE_RUN_SUMMARY',
-              'NIMS_DISCOVER_MAPPING',
-              'NIMS_HELPER_PARSE_REPORT',
-              'No View Report button found for row',
-              'Cr No Wise Result Report Printing New',
-          ]
-          assert all(token not in runtime for token in forbidden)
+          m = json.load(open("extension/manifest.json"))
+          assert m["version"] == "0.6.1"
+          assert "side_panel" not in m and "action" not in m
+          scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
+          assert "src/contentScript.js" in scripts
+          assert "src/contentUtils.js" in scripts
+          assert "src/nimsSessionBridge.js" in scripts
+          assert not any("manual" in p.lower() or "sidepanel" in p.lower() for p in scripts)
           PY
 
   javascript:
@@ -58,27 +51,39 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm test
 
-  extension-package:
-    needs: javascript
+  helper:
+    needs: repository-contract
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Verify unpacked extension layout
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r helper/requirements-dev.txt
+      - run: PYTHONPATH=helper python -m pytest -q tests/test_parsers.py tests/test_remote_helper.py
+      - run: python -m py_compile helper/main.py helper/models.py helper/cache.py helper/parsers/*.py
+
+  extension-package:
+    needs: [javascript, helper]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package validated extension
         shell: bash
         run: |
           set -euo pipefail
-          test -f extension/manifest.json
-          test -d extension/src
+          version="$(python -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          mkdir -p dist
+          cd extension
+          zip -qr "../dist/nims-results-connector-$version.zip" manifest.json src
       - uses: actions/upload-artifact@v4
         with:
-          name: nims-results-connector-v0.6.0
-          path: |
-            extension/manifest.json
-            extension/src
+          name: nims-results-connector
+          path: dist/nims-results-connector-*.zip
           if-no-files-found: error
           retention-days: 14
