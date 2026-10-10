@@ -1368,9 +1368,9 @@ async function fetchCrForDashboard(rawCrNo, sender) {
     // already authenticated clinician NIMS session, never an authentication bypass.
     await ensureDashboardWorkerTab();
     const rest = await tryRestApiForDashboard(crNo);
-    if (!rest.ok && rest.code === "NIMS_IDENTITY_MISMATCH") {
+    if (!rest.ok && ["NIMS_IDENTITY_MISMATCH", "NIMS_IDENTITY_UNVERIFIED"].includes(rest.code)) {
       const mismatch = new Error("NIMS identity verification failed. Results were not retrieved.");
-      mismatch.code = "NIMS_IDENTITY_MISMATCH";
+      mismatch.code = rest.code;
       throw mismatch;
     }
     let bundle;
