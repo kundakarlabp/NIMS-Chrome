@@ -1230,7 +1230,10 @@ function cultureNarrative(culture) {
 }
 
 function bundleFromParsedReports(crNo, extracted, state) {
-  const reports = (extracted && extracted.reports) || [];
+  const reports = ((extracted && extracted.reports) || []).map(report => ({
+    ...report,
+    provenance: { source: "nims" }
+  }));
   const linkByKey = new Map(reports.map(report => [[report.title || "", report.date || ""].join("|"), report.url || ""]));
   const results = [];
   let resultIndex = 0;
@@ -1250,7 +1253,8 @@ function bundleFromParsedReports(crNo, extracted, state) {
         refRange: parameter.reference_range || "",
         abnormal: parameter.abnormal_flag || "unknown",
         reportId: report.report_id || "",
-        pdfUrl
+        pdfUrl,
+        provenance: { source: "nims" }
       });
     }
     const cultures = [];
@@ -1267,18 +1271,27 @@ function bundleFromParsedReports(crNo, extracted, state) {
         date: culture.reporting_date || culture.collection_date || culture.date_sent || report.date_sent || "",
         value: narrative,
         reportId: report.report_id || "",
-        pdfUrl
+        pdfUrl,
+        provenance: { source: "nims" }
       });
     }
   }
   return {
+    schemaVersion: "nims-clinical-bundle/1.0",
+    generatedAt: new Date().toISOString(),
     patient: {
       name: extracted && extracted.patient ? extracted.patient.name || "" : "",
-      crNo: extracted && extracted.patient && extracted.patient.crNo ? extracted.patient.crNo : crNo
+      crNo: extracted && extracted.patient && extracted.patient.crNo ? extracted.patient.crNo : crNo,
+      provenance: { source: "nims", identityVerified: true }
     },
     results,
     reports,
-    enquiryRows: []
+    enquiryRows: [],
+    coverage: {
+      resultCount: results.length,
+      reportCount: reports.length,
+      parsedReportCount: parsedReports.length
+    }
   };
 }
 
@@ -1348,6 +1361,12 @@ async function fetchCrForDashboardLegacy(crNo) {
   if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
   const reportFrameId = await waitForReportFrame(tabId);
   const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
+  const returnedCr = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
+  if (!returnedCr || returnedCr !== crNo) {
+    const error = new Error("NIMS browser fallback could not verify the requested CR number.");
+    error.code = returnedCr ? "NIMS_IDENTITY_MISMATCH" : "NIMS_IDENTITY_UNVERIFIED";
+    throw error;
+  }
   const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
   if (!processed || processed.ok === false) {
     const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
@@ -1363,6 +1382,15 @@ async function fetchCrForDashboard(rawCrNo, sender) {
   const crNo = String(rawCrNo || "").replace(/\D/g, "");
   if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
   try {
+    const session = await getDashboardSessionStatus();
+    if (!session.loggedIn) {
+      await openDashboardLogin(sender);
+      await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
+        state: "signing_in",
+        preferredSource: "nims_rest_api"
+      });
+      return { ok: true, pendingAuth: true };
+    }
     await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_rest_api" });
     // Preserve the existing trust boundary: REST is an optimization inside an
     // already authenticated clinician NIMS session, never an authentication bypass.
@@ -1392,6 +1420,15 @@ async function fetchCrForDashboard(rawCrNo, sender) {
     return { ok: true, source, resultCount: bundle.results.length, reportCount: bundle.reports.length };
   } catch (error) {
     const message = error && error.message ? error.message : "NIMS retrieval failed.";
+    if (/session.*not authenticated|authentication required|sign in again|session expired|please login again/i.test(message)) {
+      await openDashboardLogin(sender);
+      await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
+        state: "signing_in",
+        reason: "session_expired",
+        preferredSource: "nims_rest_api"
+      });
+      return { ok: true, pendingAuth: true };
+    }
     await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", { error: message });
     return { ok: false, error: message };
   }
