@@ -9,7 +9,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.6.1');
+  assert.equal(manifest.version, '0.6.2');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
@@ -31,7 +31,9 @@ test('dashboard bridge preserves manual login and CR fetch contracts', () => {
     'KBP_NIMS_STATUS_REQUEST',
     'KBP_NIMS_LOGIN_REQUEST',
     'KBP_NIMS_FETCH_REQUEST',
-    'KBP_NIMS_BULK_RESULTS'
+    'KBP_NIMS_BULK_RESULTS',
+    'KBP_NIMS_HELPER_STATUS_REQUEST',
+    'KBP_NIMS_HELPER_SAVE_REQUEST'
   ]) {
     assert.match(dashboardBridge + background, new RegExp(token));
   }
@@ -77,6 +79,40 @@ test('legacy visible toolbar is disabled', () => {
   const start = processor.indexOf('function start()');
   const body = processor.slice(start, processor.indexOf('function scanAndInject', start));
   assert.doesNotMatch(body, /scanAndInject\(\)/);
+});
+
+test('logged-out CR fetch opens normal login and preserves automatic resume contract', () => {
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const body = background.slice(start);
+  assert.match(body, /getDashboardSessionStatus\(\)/);
+  assert.match(body, /KBP_NIMS_AUTH_REQUIRED/);
+  assert.match(body, /pendingAuth:\s*true/);
+  assert.match(body, /openDashboardLogin\(sender\)/);
+});
+
+test('browser fallback verifies CR identity before parsing results', () => {
+  const start = background.indexOf('async function fetchCrForDashboardLegacy(crNo)');
+  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)', start);
+  const body = background.slice(start, end);
+  assert.match(body, /returnedCr/);
+  assert.match(body, /NIMS_IDENTITY_MISMATCH/);
+  assert.match(body, /NIMS_IDENTITY_UNVERIFIED/);
+});
+
+test('live bundles carry NIMS provenance for the clinical handoff', () => {
+  const start = background.indexOf('function bundleFromParsedReports');
+  const end = background.indexOf('async function tryRestApiForDashboard', start);
+  const body = background.slice(start, end);
+  assert.match(body, /nims-clinical-bundle\/1\.0/);
+  assert.match(body, /identityVerified:\s*true/);
+  assert.match(body, /provenance:\s*\{ source: "nims" \}/);
+});
+
+test('helper API key remains extension-local and is never echoed to the dashboard', () => {
+  assert.match(dashboardBridge, /NIMS_GET_HELPER_SETTINGS/);
+  assert.match(dashboardBridge, /NIMS_SAVE_HELPER_SETTINGS/);
+  assert.match(background, /apiKeyMasked/);
+  assert.doesNotMatch(dashboardBridge, /apiKeyMasked:\s*String\(event\.data\.apiKey/);
 });
 
 test('runtime scripts compile', () => {

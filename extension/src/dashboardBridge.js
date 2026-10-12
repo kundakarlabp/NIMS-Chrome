@@ -36,6 +36,33 @@
       post("KBP_NIMS_LOGIN_RESPONSE", response || { ok: false });
       return;
     }
+    if (event.data.type === "KBP_NIMS_HELPER_STATUS_REQUEST") {
+      const settings = await send("NIMS_GET_HELPER_SETTINGS");
+      const health = settings && settings.ok ? await send("NIMS_HELPER_HEALTH") : { ok: false, error: "Helper settings unavailable." };
+      post("KBP_NIMS_HELPER_STATUS", {
+        ok: Boolean(settings && settings.ok),
+        settings: settings && settings.settings ? settings.settings : null,
+        health: health ? { ok: Boolean(health.ok), error: health.error || "" } : { ok: false, error: "Helper health unavailable." }
+      });
+      return;
+    }
+    if (event.data.type === "KBP_NIMS_HELPER_SAVE_REQUEST") {
+      const response = await send("NIMS_SAVE_HELPER_SETTINGS", {
+        settings: {
+          mode: "remote",
+          url: String(event.data.url || ""),
+          apiKey: String(event.data.apiKey || "")
+        }
+      });
+      const health = response && response.ok ? await send("NIMS_HELPER_HEALTH") : { ok: false, error: response && response.error ? response.error : "Helper settings were not saved." };
+      post("KBP_NIMS_HELPER_SAVE_RESPONSE", {
+        ok: Boolean(response && response.ok),
+        settings: response && response.settings ? response.settings : null,
+        health: health ? { ok: Boolean(health.ok), error: health.error || "" } : { ok: false, error: "Helper health unavailable." },
+        error: response && response.error ? response.error : ""
+      });
+      return;
+    }
     if (event.data.type === "KBP_NIMS_FETCH_REQUEST") {
       const response = await send("NIMS_DASHBOARD_FETCH_CR", { crNo: String(event.data.crNo || "") });
       if (response && response.ok === false) {
