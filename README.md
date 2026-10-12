@@ -51,10 +51,11 @@ The REST endpoint is an optimization layered on top of the existing working brid
 1. Keep the validated connector loaded in Chrome.
 2. Open the dashboard.
 3. Click **Connect NIMS**.
-4. Complete NIMS login and CAPTCHA manually.
+4. Complete NIMS login and CAPTCHA manually. If a CR request started while logged out, the same CR resumes automatically after login.
 5. Return to the dashboard; it detects the authenticated session.
 6. Enter the 15-digit CR and click **Get results**.
 7. REST is attempted first. If it cannot supply usable reports, the dashboard automatically uses the authenticated browser bridge.
+8. The dashboard's connection help can read masked parser-helper status and save the Railway helper URL/API key directly into extension-local storage; the full key is never read back into the page.
 
 ## Development validation
 
