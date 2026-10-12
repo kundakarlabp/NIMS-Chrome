@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.6.1",
-  "description": "Desktop NIMS Results Dashboard connector: authenticated REST-first report discovery with proven browser fallback.",
+  "version": "0.6.2",
+  "description": "Desktop NIMS Results Dashboard connector: authenticated REST-first retrieval, automatic login resume, verified browser fallback, and local helper configuration.",
   "permissions": [
     "storage",
     "activeTab",
