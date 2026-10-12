@@ -35,7 +35,7 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.6.1"
+          assert m["version"] == "0.6.2"
           assert "side_panel" not in m and "action" not in m
           scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
           assert "src/contentScript.js" in scripts
