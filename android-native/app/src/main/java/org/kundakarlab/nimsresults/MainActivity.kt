@@ -438,7 +438,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             crInput = localCr
                             requestFetch()
                         },
-                        enabled = localCr.length == 15
+                        enabled = localCr.length == 15 && loadStage in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)
                     ) {
                         if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
