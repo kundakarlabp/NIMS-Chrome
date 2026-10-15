@@ -150,9 +150,29 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         if (sessionState == SessionState.CONNECTED) {
             startFetch(cr)
-        } else {
-            pendingCrAfterLogin = cr
-            openLogin()
+            return
+        }
+
+        pendingCrAfterLogin = cr
+        sessionState = SessionState.CHECKING
+        loadStage = LoadStage.CHECKING_SESSION
+        statusText = "Checking the existing NIMS session…"
+        engine.checkSession { state ->
+            runOnUiThread {
+                if (pendingCrAfterLogin != cr) return@runOnUiThread
+                if (state == SessionState.CONNECTED) {
+                    pendingCrAfterLogin = ""
+                    startFetch(cr)
+                } else {
+                    loadStage = LoadStage.IDLE
+                    statusText = if (state == SessionState.EXPIRED) {
+                        "NIMS session expired. Login once to continue."
+                    } else {
+                        "NIMS login is required."
+                    }
+                    openLogin()
+                }
+            }
         }
     }
 
@@ -178,13 +198,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun refreshCurrent() {
         val cr = bundle?.patient?.crNo?.takeIf { it.matches(Regex("""\d{15}""")) } ?: crInput
         crInput = cr
-        if (cr.matches(Regex("""\d{15}"""))) {
-            if (sessionState == SessionState.CONNECTED) startFetch(cr)
-            else {
-                pendingCrAfterLogin = cr
-                openLogin()
-            }
-        }
+        if (cr.matches(Regex("""\d{15}"""))) requestFetch()
     }
 
     private fun openLogin() {
