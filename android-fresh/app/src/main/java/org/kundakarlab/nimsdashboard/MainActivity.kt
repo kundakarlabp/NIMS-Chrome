@@ -6,6 +6,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.webkit.CookieManager
@@ -32,12 +34,15 @@ class MainActivity : Activity() {
     private lateinit var loginStatus: TextView
 
     private val executor = Executors.newFixedThreadPool(2)
+    private val handler = Handler(Looper.getMainLooper())
     private val reportInventory by lazy { ReportInventory() }
 
     @Volatile private var loggedIn = false
     @Volatile private var activeRequestId = ""
     @Volatile private var activeCrNo = ""
     @Volatile private var activePatientJson = "{}"
+    @Volatile private var retryStructuredOnNextAuthenticatedPage = false
+    @Volatile private var structuredRetryCount = 0
     private val bulkHandled = AtomicBoolean(false)
 
     private lateinit var bulkNormalizerScript: String
@@ -219,6 +224,16 @@ class MainActivity : Activity() {
                         .put("loggedIn", loggedIn)
                         .put("state", if (loggedIn) "ready" else "signing_in")
                 )
+                if (!loggedIn && !loginForm && loginOverlay.visibility == View.VISIBLE) {
+                    nims.evaluateJavascript(
+                        "window.AndroidNimsStructured && window.AndroidNimsStructured.prepareLogin ? window.AndroidNimsStructured.prepareLogin() : 'not_found';",
+                        null
+                    )
+                }
+                if (loggedIn && retryStructuredOnNextAuthenticatedPage) {
+                    retryStructuredOnNextAuthenticatedPage = false
+                    runStructuredCurrent()
+                }
                 if (loggedIn && autoCloseLogin && loginOverlay.visibility == View.VISIBLE) {
                     loginOverlay.visibility = View.GONE
                     postDashboard(
@@ -254,6 +269,8 @@ class MainActivity : Activity() {
         activeCrNo = crNo
         activeRequestId = requestId
         activePatientJson = JSONObject().put("crNo", crNo).toString()
+        structuredRetryCount = 0
+        retryStructuredOnNextAuthenticatedPage = false
         bulkHandled.set(false)
 
         if (!loggedIn) {
@@ -285,11 +302,28 @@ class MainActivity : Activity() {
         )
 
         runOnUiThread {
-            injectNimsRunner {
-                val js = "window.AndroidNimsStructured.run(" +
-                    JSONObject.quote(crNo) + "," + JSONObject.quote(requestId) + ");"
-                nims.evaluateJavascript(js, null)
-            }
+            runStructuredCurrent()
+            handler.postDelayed({
+                if (activeRequestId == requestId && !bulkHandled.get()) {
+                    bulkHandled.set(true)
+                    postFetchError(
+                        requestId,
+                        crNo,
+                        "NIMS structured retrieval timed out. Reopen NIMS login and retry this CR."
+                    )
+                }
+            }, STRUCTURED_TIMEOUT_MS)
+        }
+    }
+
+    private fun runStructuredCurrent() {
+        val requestId = activeRequestId
+        val crNo = activeCrNo
+        if (requestId.isBlank() || crNo.isBlank()) return
+        injectNimsRunner {
+            val js = "window.AndroidNimsStructured.run(" +
+                JSONObject.quote(crNo) + "," + JSONObject.quote(requestId) + ");"
+            nims.evaluateJavascript(js, null)
         }
     }
 
@@ -529,11 +563,29 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun onStructuredError(requestId: String, error: String) {
-            if (requestId != activeRequestId) return
+            if (requestId != activeRequestId || bulkHandled.get()) return
             if (Regex("(?i)auth|login|session").containsMatchIn(error)) {
                 loggedIn = false
+                bulkHandled.set(true)
                 showLogin()
+                postFetchError(requestId, activeCrNo, error)
+                return
             }
+            if (structuredRetryCount < 1) {
+                structuredRetryCount += 1
+                retryStructuredOnNextAuthenticatedPage = true
+                postDashboard(
+                    "KBP_NIMS_RETRIEVAL_STAGE",
+                    JSONObject()
+                        .put("requestId", requestId)
+                        .put("crNo", activeCrNo)
+                        .put("stage", "structured_api")
+                        .put("detail", "Reopening the authenticated NIMS shell and retrying once.")
+                )
+                runOnUiThread { nims.loadUrl(NIMS_LOGIN_URL) }
+                return
+            }
+            bulkHandled.set(true)
             postFetchError(requestId, activeCrNo, error)
         }
     }
@@ -563,6 +615,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         runCatching { dashboard.destroy() }
         runCatching { nims.destroy() }
@@ -576,5 +629,6 @@ class MainActivity : Activity() {
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private val NIMS_HOSTS = setOf("nimsts.edu.in", "www.nimsts.edu.in")
         private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        private const val STRUCTURED_TIMEOUT_MS = 65_000L
     }
 }
