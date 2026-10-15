@@ -1101,16 +1101,9 @@ async function probeNimsTab(tabId) {
 }
 
 async function getDashboardSessionStatus() {
-  const tabs = await chrome.tabs.query({
-    url: [
-      "https://nimsts.edu.in/AHIMSG5/*",
-      "https://www.nimsts.edu.in/AHIMSG5/*",
-      "https://nimsts.edu.in/HISInvestigationG5/*",
-      "https://www.nimsts.edu.in/HISInvestigationG5/*",
-      "https://nimsts.edu.in/hislogin/*",
-      "https://www.nimsts.edu.in/hislogin/*"
-    ]
-  }).catch(() => []);
+  // Manual login can finish in any protected NIMS module. Keep session
+  // rediscovery aligned with the same allow-list used by the content bridge.
+  const tabs = await chrome.tabs.query({ url: NIMS_URL_FILTERS }).catch(() => []);
   for (const tab of tabs) {
     if (!tab.id) continue;
     const probe = await probeNimsTab(tab.id);
@@ -1184,23 +1177,63 @@ async function ensureDashboardWorkerTab() {
 async function openOneCrNavigationStep(tabId) {
   const frameIds = await frameIdsForTab(tabId);
   const ordered = [0, ...frameIds.filter(frameId => frameId !== 0)];
+  const responses = [];
+
+  // Important: do not stop at the first frame that merely says "ok".
+  // In the NIMS frameset the top shell can be waiting/cooldown while the menu
+  // frame is the one that can actually click Investigation or the CR-wise item.
+  // Give every injected frame one bounded navigation opportunity per cycle.
   for (const frameId of ordered) {
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_OPEN_CR" }, { frameId });
-      if (response && response.ok) return { ok: true, frameId, response };
+      const response = await chrome.tabs.sendMessage(
+        tabId,
+        { type: "NIMS_BRIDGE_OPEN_CR" },
+        { frameId }
+      );
+      if (response) responses.push({ frameId, response });
     } catch {}
   }
-  return { ok: false };
+
+  if (!responses.length) return { ok: false };
+
+  const score = (item) => {
+    const response = item.response || {};
+    const stage = String(response.stage || response.detectedStage || "");
+    const action = String(response.action || "");
+    let value = response.ok ? 10 : 0;
+    if (response.done) value += 1000;
+    if (stage === "report_list") value += 900;
+    if (stage === "cr_search") value += 800;
+    if (stage === "investigation_menu") value += 500;
+    if (stage === "home") value += 300;
+    if (/clicked_|selected_|called_|navigated_/i.test(action)) value += 200;
+    if (/waiting|cooldown|none/i.test(action)) value -= 50;
+    if (item.frameId !== 0) value += 5;
+    return value;
+  };
+
+  responses.sort((a, b) => score(b) - score(a));
+  const best = responses[0];
+  return { ok: Boolean(best.response && best.response.ok), frameId: best.frameId, response: best.response };
 }
 
 async function findCrFrame(tabId) {
-  for (let attempt = 0; attempt < 18; attempt += 1) {
+  let lastStep = null;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
     const probe = await probeNimsTab(tabId);
     if (probe.crFrame) return probe.crFrame.frameId;
-    await openOneCrNavigationStep(tabId);
-    await delay(attempt < 5 ? 550 : 900);
+    lastStep = await openOneCrNavigationStep(tabId);
+    await delay(attempt < 6 ? 550 : 850);
   }
-  throw new Error("Unable to open the NIMS CR-wise results page.");
+  const response = lastStep && lastStep.response ? lastStep.response : {};
+  const stage = String(response.stage || response.detectedStage || "").trim();
+  const action = String(response.action || "").trim();
+  const detail = [stage, action].filter(Boolean).join("/");
+  throw new Error(
+    "Unable to open the NIMS CR-wise results page"
+    + (detail ? " (last navigation: " + detail + ")" : "")
+    + "."
+  );
 }
 
 async function waitForReportFrame(tabId) {
@@ -1356,15 +1389,37 @@ async function tryRestApiForDashboard(crNo) {
 
 async function fetchCrForDashboardLegacy(crNo) {
   const tabId = await ensureDashboardWorkerTab();
-  const crFrameId = await findCrFrame(tabId);
-  const submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
-  if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
-  const reportFrameId = await waitForReportFrame(tabId);
+  const existing = await probeNimsTab(tabId);
+  let reportFrameId = null;
+  if (existing.reportFrame) {
+    const displayedCrNo = String(existing.reportFrame.patient && existing.reportFrame.patient.crNo || "").replace(/\D/g, "");
+    if (displayedCrNo === crNo) reportFrameId = existing.reportFrame.frameId;
+    else {
+      // A previous CR's list must never be reused for a new request. Return to
+      // the authenticated shell and let its native menu build a fresh SSO URL.
+      await chrome.tabs.update(tabId, { url: NIMS_LOGIN_URL_DASHBOARD });
+      await waitForTabCompleteSafe(tabId);
+    }
+  }
+  if (reportFrameId === null) {
+    const crFrameId = await findCrFrame(tabId);
+    let submitted;
+    try {
+      submitted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_SUBMIT_CR", crNo }, { frameId: crFrameId });
+    } catch (error) {
+      // A successful form submission can navigate before Chrome delivers the
+      // reply, closing the old content-script port as it enters page cache.
+      if (!/back\/forward cache|message channel is closed/i.test(String(error && error.message || ""))) throw error;
+      submitted = { ok: true };
+    }
+    if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number.");
+    reportFrameId = await waitForReportFrame(tabId);
+  }
   const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
-  const returnedCr = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
-  if (!returnedCr || returnedCr !== crNo) {
-    const error = new Error("NIMS browser fallback could not verify the requested CR number.");
-    error.code = returnedCr ? "NIMS_IDENTITY_MISMATCH" : "NIMS_IDENTITY_UNVERIFIED";
+  const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
+  if (!returnedCrNo || returnedCrNo !== crNo) {
+    const error = new Error("NIMS identity verification failed. Results were not retrieved.");
+    error.code = returnedCrNo ? "NIMS_IDENTITY_MISMATCH" : "NIMS_IDENTITY_UNVERIFIED";
     throw error;
   }
   const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
