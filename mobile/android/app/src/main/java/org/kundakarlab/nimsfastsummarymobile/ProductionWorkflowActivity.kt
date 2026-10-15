@@ -223,7 +223,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     processing = isProcessing,
                     issues = issueController.allIssues(),
                     corrections = issueController.allCorrections(),
-                    onCrChange = { crNumber = it.filter(Char::isDigit).take(20) },
+                    onCrChange = { crNumber = it.filter(Char::isDigit).take(15) },
                     onContinueLogin = { probePortal(manual = true) },
                     onLogoutOtherSessions = ::logoutOtherSessions,
                     onFetch = ::submitCrAndFetch,
@@ -234,8 +234,6 @@ class ProductionWorkflowActivity : ComponentActivity() {
                     onLoginAgain = ::loginAgain,
                     onLogout = ::logout,
                     onCopyLogs = ::copyLogs,
-                    onShareSummary = ::shareClinicalSummary,
-                    onOpenBridge = { startActivity(Intent(this, NimsRelayPairingActivity::class.java)) },
                     onChangePatient = ::changePatient,
                     onManualCorrection = ::addManualCorrection,
                     onUndoCorrection = ::undoCorrection,
@@ -403,8 +401,8 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun submitCrAndFetch() {
-        if (crNumber.length < 6) {
-            status = "Enter a valid CR number."
+        if (!crNumber.matches(Regex("""\d{15}"""))) {
+            status = "Enter the 15-digit NIMS CR number."
             return
         }
         if (!crModuleReady) {
@@ -417,7 +415,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
     }
 
     private fun beginCrSubmission() {
-        if (crNumber.length < 6 || phase in setOf(ProductionPhase.SUBMITTING_CR, ProductionPhase.WAITING_RESULTS, ProductionPhase.PROCESSING)) return
+        if (!crNumber.matches(Regex("""\d{15}""")) || phase in setOf(ProductionPhase.SUBMITTING_CR, ProductionPhase.WAITING_RESULTS, ProductionPhase.PROCESSING)) return
         phase = ProductionPhase.SUBMITTING_CR
         status = "Preparing CR submission…"
         webView.evaluateJavascript(NimsPortalBridge.resultListProbeScript(crNumber)) { raw ->
@@ -863,7 +861,7 @@ class ProductionWorkflowActivity : ComponentActivity() {
         crReadinessPollActive = false
         authenticated = false
         crModuleReady = false
-        val resumeCr = activeCrNumber.ifBlank { crNumber }.filter(Char::isDigit).take(20)
+        val resumeCr = activeCrNumber.ifBlank { crNumber }.filter(Char::isDigit).take(15)
         status = "Opening streamlined NIMS authentication…"
         startActivity(
             Intent(this, LoginGateActivity::class.java)
