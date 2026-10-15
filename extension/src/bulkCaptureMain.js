@@ -4,6 +4,7 @@
   window.__KBP_NIMS_BULK_CAPTURE_MAIN__ = true;
 
   let activeRequestId = '';
+  let activeTargetOrigin = '';
 
   const NIMS_ORIGINS = new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']);
 
@@ -33,9 +34,12 @@
       requestId: activeRequestId,
       body
     };
-    for (const targetOrigin of ['https://nimsts.edu.in', 'https://www.nimsts.edu.in']) {
-      try { window.top.postMessage(message, targetOrigin); } catch {}
-    }
+    if (!NIMS_ORIGINS.has(activeTargetOrigin)) return;
+    try {
+      window.top.postMessage(message, activeTargetOrigin);
+      activeRequestId = '';
+      activeTargetOrigin = '';
+    } catch {}
   };
 
   const parseAndEmit = value => {
@@ -53,11 +57,13 @@
 
   window.addEventListener('message', event => {
     if (!NIMS_ORIGINS.has(event.origin)) return;
+    if (event.source !== window.top) return;
     if (event.data?.__nimsBulkCaptureArm !== true) return;
-    // The authenticated top NIMS shell arms the Trends iframe immediately
-    // before Custom Sheet Apply. Do not require event.source === window:
-    // in the real frameset the source is window.top.
+    // Bind this capture request to the exact trusted NIMS top-window origin.
+    // Replying only to this origin avoids Chrome target-origin mismatch errors
+    // when NIMS switches between apex and www hosts.
     activeRequestId = String(event.data.requestId || '');
+    activeTargetOrigin = event.origin;
   });
 
   const originalFetch = window.fetch;
