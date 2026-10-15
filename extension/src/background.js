@@ -1417,9 +1417,14 @@ async function fetchCrForDashboardLegacy(crNo) {
   }
   const extracted = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" }, { frameId: reportFrameId });
   const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
-  if (!returnedCrNo || returnedCrNo !== crNo) {
-    const error = new Error("NIMS identity verification failed. Results were not retrieved.");
-    error.code = returnedCrNo ? "NIMS_IDENTITY_MISMATCH" : "NIMS_IDENTITY_UNVERIFIED";
+  if ((extracted && extracted.patient && extracted.patient.identityConflict) || (returnedCrNo && returnedCrNo !== crNo)) {
+    const error = new Error("NIMS identity verification failed: the returned page contains a conflicting CR number. Results were not retrieved.");
+    error.code = "NIMS_IDENTITY_MISMATCH";
+    throw error;
+  }
+  if (!returnedCrNo) {
+    const error = new Error("NIMS identity verification failed: the returned report page does not display a verifiable CR number. Results were not retrieved.");
+    error.code = "NIMS_IDENTITY_UNVERIFIED";
     throw error;
   }
   const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
@@ -1451,8 +1456,10 @@ async function fetchCrForDashboard(rawCrNo, sender) {
     // already authenticated clinician NIMS session, never an authentication bypass.
     await ensureDashboardWorkerTab();
     const rest = await tryRestApiForDashboard(crNo);
-    if (!rest.ok && ["NIMS_IDENTITY_MISMATCH", "NIMS_IDENTITY_UNVERIFIED"].includes(rest.code)) {
-      const mismatch = new Error("NIMS identity verification failed. Results were not retrieved.");
+    // Missing REST identity is not a mismatch. Give authenticated browser fallback
+    // a chance to verify the patient; an explicit mismatch must still fail closed.
+    if (!rest.ok && rest.code === "NIMS_IDENTITY_MISMATCH") {
+      const mismatch = new Error("NIMS identity verification failed: the API returned a different CR number. Results were not retrieved.");
       mismatch.code = rest.code;
       throw mismatch;
     }
