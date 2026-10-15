@@ -53,6 +53,24 @@ test('primary structured API path does not depend on parser helper', () => {
   assert.match(body, /NimsBulkNormalizer\.normalizeBulk/);
 });
 
+test('bulk capture uses exact trusted origin instead of posting to both NIMS origins', () => {
+  const source = fs.readFileSync(new URL('../src/bulkCaptureMain.js', import.meta.url), 'utf8');
+  assert.match(source, /activeTargetOrigin/);
+  assert.match(source, /event\.source !== window\.top/);
+  assert.match(source, /activeTargetOrigin = event\.origin/);
+  assert.match(source, /window\.top\.postMessage\(message, activeTargetOrigin\)/);
+  assert.doesNotMatch(source, /for \(const targetOrigin of \['https:\/\/nimsts\.edu\.in', 'https:\/\/www\.nimsts\.edu\.in'\]\)/);
+});
+
+test('NIMS UI bridge verifies actual Trends frame origin before arming capture', () => {
+  const source = fs.readFileSync(new URL('../src/nimsUiBridge.js', import.meta.url), 'utf8');
+  assert.match(source, /function verifiedFrameOrigin/);
+  assert.match(source, /NIMS_ORIGINS\.has\(direct\)/);
+  assert.match(source, /NIMS_ORIGINS\.has\(srcOrigin\)/);
+  assert.match(source, /const targetOrigin = verifiedFrameOrigin\(trendFrame\)/);
+  assert.doesNotMatch(source, /NIMS_ORIGINS\.has\(location\.origin\) \? location\.origin : 'https:\/\/www\.nimsts\.edu\.in'/);
+});
+
 test('manifest injects the XHR capture in MAIN world before page requests', () => {
   const capture = manifest.content_scripts.find(entry => (entry.js || []).includes('src/bulkCaptureMain.js'));
   assert.ok(capture);

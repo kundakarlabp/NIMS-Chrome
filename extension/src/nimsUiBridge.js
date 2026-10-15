@@ -26,6 +26,18 @@
   };
   let notifyTimer = null;
 
+  function verifiedFrameOrigin(frame) {
+    try {
+      const direct = String(frame?.contentWindow?.location?.origin || '');
+      if (NIMS_ORIGINS.has(direct)) return direct;
+    } catch {}
+    try {
+      const srcOrigin = new URL(String(frame?.src || ''), location.href).origin;
+      if (NIMS_ORIGINS.has(srcOrigin)) return srcOrigin;
+    } catch {}
+    return '';
+  }
+
   const waitFor = async (find, label, timeoutMs = 20000) => {
     const until = Date.now() + timeoutMs;
     while (Date.now() < until) {
@@ -202,13 +214,18 @@
 
     if (applies.length !== 1) throw new Error('NIMS Custom Sheet Apply control was ambiguous.');
 
-    const targetOrigin = NIMS_ORIGINS.has(location.origin) ? location.origin : 'https://www.nimsts.edu.in';
+    const targetOrigin = verifiedFrameOrigin(trendFrame);
+    if (!targetOrigin) {
+      throw new Error('NIMS Trends frame origin could not be verified. Reload NIMS and retry.');
+    }
     try {
       trendFrame.contentWindow.postMessage(
         { __nimsBulkCaptureArm: true, requestId: String(requestId || '') },
         targetOrigin
       );
-    } catch {}
+    } catch (error) {
+      throw new Error('NIMS Trends frame could not be armed for structured retrieval.');
+    }
 
     applies[0].click();
 
