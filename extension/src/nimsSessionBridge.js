@@ -28,13 +28,51 @@
 
   function reportRows() {
     try {
-      const core = window.NimsReportCore;
-      if (core && typeof core.extractReportRows === "function") return core.extractReportRows(document, location.href) || [];
+      // Prefer the richer legacy row reader because it preserves the real
+      // View Report href/onclick metadata needed for source-PDF links.
       if (window.NimsFastSummaryUtils && typeof window.NimsFastSummaryUtils.extractReportRows === "function") {
         return window.NimsFastSummaryUtils.extractReportRows(document, location.href) || [];
       }
+      const core = window.NimsReportCore;
+      if (core && typeof core.extractReportRows === "function") return core.extractReportRows(document, location.href) || [];
     } catch {}
     return [];
+  }
+
+  const REPORT_PATH = "/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt";
+  const REPORT_HOSTS = new Set(["nimsts.edu.in", "www.nimsts.edu.in"]);
+
+  function safeSourceReportUrl(raw) {
+    const value = String(raw || "").trim();
+    if (!value) return "";
+    try {
+      const url = new URL(value, location.href);
+      if (!REPORT_HOSTS.has(url.hostname)) return "";
+      if (url.pathname !== REPORT_PATH) return "";
+      if (url.searchParams.get("hmode") !== "PRINTREPORT") return "";
+      return url.href;
+    } catch {
+      return "";
+    }
+  }
+
+  function safeReportToken(raw) {
+    const token = String(raw || "").trim();
+    if (!token || token.length > 512 || token.includes("..") || token.includes("://") || /[\\/]/.test(token)) return "";
+    for (let i = 0; i < token.length; i += 1) {
+      const code = token.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) return "";
+    }
+    return token;
+  }
+
+  function sourceReportUrlFromToken(raw) {
+    const token = safeReportToken(raw);
+    if (!token) return "";
+    const url = new URL(REPORT_PATH, "https://www.nimsts.edu.in");
+    url.searchParams.set("hmode", "PRINTREPORT");
+    url.searchParams.set("fileName", token);
+    return url.href;
   }
 
   function patientIdentity() {
@@ -178,16 +216,25 @@
 
   function extractDashboardData() {
     const core = window.NimsReportCore;
+    const utils = window.NimsFastSummaryUtils;
     const rows = reportRows();
     let template = null;
     try { if (core && typeof core.discoverSetPdfTemplate === "function") template = core.discoverSetPdfTemplate(document); } catch {}
     const reports = rows.map((row, index) => {
-      let url = row.source_url || row.href || "";
+      let url = safeSourceReportUrl(row.source_url || row.href || "");
+      try {
+        if (!url && utils && typeof utils.getTransientReportRequestPayload === "function") {
+          const payload = utils.getTransientReportRequestPayload(row, document);
+          const arg = payload && (payload.transientPrintReportArg || payload.transient_print_report_arg);
+          if (arg) url = sourceReportUrlFromToken(arg);
+        }
+      } catch {}
       try {
         if (!url && core && template && typeof core.transientPayloadForRow === "function" && typeof core.buildReportUrl === "function") {
           const payload = core.transientPayloadForRow(row, document);
-          const arg = payload && (payload.transientPrintReportArg || payload.transient_print_report_arg || payload.transient_print_report_arg);
-          if (arg) url = core.buildReportUrl(template, arg) || "";
+          const arg = payload && (payload.transientPrintReportArg || payload.transient_print_report_arg);
+          const built = arg ? core.buildReportUrl(template, arg) || "" : "";
+          url = safeSourceReportUrl(built);
         }
       } catch {}
       return {
@@ -195,10 +242,17 @@
         title: row.report_name || "Investigation report",
         date: row.date_sent || "",
         department: row.department || "",
-        url
+        url,
+        provenance: { source: "nims", retrieval: "authenticated_report_inventory" }
       };
     });
-    return { ok: true, patient: patientIdentity(), reports, reportCount: rows.length };
+    return {
+      ok: true,
+      patient: patientIdentity(),
+      reports,
+      reportCount: rows.length,
+      linkedReportCount: reports.filter(report => report.url).length
+    };
   }
 
   async function readSummaryState() {
