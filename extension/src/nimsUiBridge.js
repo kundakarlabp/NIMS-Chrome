@@ -5,6 +5,25 @@
   window.__KBP_NIMS_UI_BRIDGE__ = true;
 
   const NIMS_ORIGINS = new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']);
+  const UI = {
+    trendFrameId: 'Cr No Wise Investigation Trends_iframe',
+    menuFrame: '#frmMainMenu',
+    crInput: '#patCrNo',
+    patientBar: '#labTrendsPatientBar',
+    customButton: '#labTrendsCustomBtn',
+    customPanel: '#labTrendsMetabolicPanel',
+    testChecks: '#labTrendsMetabolicPanel .labTrendsMetaTestChk',
+    checkedTests: '.labTrendsMetaTestChk:checked',
+    dateChecks: '.labTrendsMetaDateChk',
+    checkedDates: '.labTrendsMetaDateChk:checked'
+  };
+  const LABELS = {
+    investigation: ['Investigation'],
+    trends: ['Cr No Wise Investigation Trends', 'CR No Wise Investigation Trends'],
+    go: ['Go'],
+    custom: ['Custom Sheet'],
+    apply: ['Apply']
+  };
   let notifyTimer = null;
 
   const waitFor = async (find, label, timeoutMs = 20000) => {
@@ -31,6 +50,8 @@
   const compact = value => String(value || '').replace(/\s+/g, ' ').trim();
   const findText = (root, selector, exact) =>
     [...(root?.querySelectorAll?.(selector) || [])].find(element => compact(element.textContent || element.value) === exact);
+  const findTextAny = (root, selector, labels) =>
+    labels.map(label => findText(root, selector, label)).find(Boolean) || null;
 
   function bodyText() {
     try { return compact(document.body?.innerText || document.body?.textContent || '').slice(0, 12000); }
@@ -49,13 +70,18 @@
     const protectedRoute = /\/(?:HISInvestigationG5|HIS|hislogin|HISUtilities|HBIMS)(?:\/|$)/i.test(pathname) ||
       /\/AHIMSG5\/hislogin\/transactions(?:\/|$)/i.test(pathname);
     const shellEvidence = /home\s*menu|investigation|welcome|e-?sushrut/i.test(text) ||
-      Boolean(document.querySelector('#frmMainMenu'));
+      Boolean(document.querySelector(UI.menuFrame));
     return {
       href,
       loginForm,
       sessionExpired,
       authenticated: Boolean(!loginForm && !sessionExpired && !loginRoute && (protectedRoute || shellEvidence)),
-      trendsReady: Boolean(document.getElementById('Cr No Wise Investigation Trends_iframe'))
+      trendsReady: Boolean(document.getElementById(UI.trendFrameId)),
+      uiCompatibility: {
+        selectorVersion: 'v1',
+        menuFramePresent: Boolean(document.querySelector(UI.menuFrame)),
+        trendFramePresent: Boolean(document.getElementById(UI.trendFrameId))
+      }
     };
   }
 
@@ -71,26 +97,26 @@
   async function openTrends() {
     if (probe().sessionExpired) throw new Error('NIMS session expired. Sign in again.');
 
-    const existingFrame = document.getElementById('Cr No Wise Investigation Trends_iframe');
+    const existingFrame = document.getElementById(UI.trendFrameId);
     try {
-      if (existingFrame?.contentDocument?.querySelector('#patCrNo')) return true;
+      if (existingFrame?.contentDocument?.querySelector(UI.crInput)) return true;
     } catch {}
 
     let menu = null;
-    try { menu = document.querySelector('#frmMainMenu')?.contentDocument || null; } catch {}
+    try { menu = document.querySelector(UI.menuFrame)?.contentDocument || null; } catch {}
 
-    if (!menu || !findText(menu, 'a', 'Cr No Wise Investigation Trends')) {
-      const tab = findText(document, 'a', 'Investigation') ||
-        findText(document, '[role="tab"]', 'Investigation') ||
-        findText(document, 'button', 'Investigation');
+    if (!menu || !findTextAny(menu, 'a', LABELS.trends)) {
+      const tab = findTextAny(document, 'a', LABELS.investigation) ||
+        findTextAny(document, '[role="tab"]', LABELS.investigation) ||
+        findTextAny(document, 'button', LABELS.investigation);
       if (!tab) throw new Error('NIMS Investigation menu was not found.');
       tab.click();
     }
 
     const link = await waitFor(() => {
       try {
-        menu = document.querySelector('#frmMainMenu')?.contentDocument || null;
-        return menu ? findText(menu, 'a', 'Cr No Wise Investigation Trends') : null;
+        menu = document.querySelector(UI.menuFrame)?.contentDocument || null;
+        return menu ? findTextAny(menu, 'a', LABELS.trends) : null;
       } catch { return null; }
     }, 'CR trends service', 20000);
 
@@ -98,8 +124,8 @@
 
     await waitFor(() => {
       try {
-        const frame = document.getElementById('Cr No Wise Investigation Trends_iframe');
-        return frame?.contentDocument?.querySelector('#patCrNo') ? frame : null;
+        const frame = document.getElementById(UI.trendFrameId);
+        return frame?.contentDocument?.querySelector(UI.crInput) ? frame : null;
       } catch { return null; }
     }, 'CR trends page', 25000);
 
@@ -117,25 +143,25 @@
     if (!/^\d{15}$/.test(String(crNo || ''))) throw new Error('Enter the 15-digit NIMS CR number.');
     await openTrends();
 
-    const trendFrame = document.getElementById('Cr No Wise Investigation Trends_iframe');
+    const trendFrame = document.getElementById(UI.trendFrameId);
     const trendDocument = () => {
       try { return trendFrame?.contentDocument || null; } catch { return null; }
     };
-    const input = await waitFor(() => trendDocument()?.querySelector('#patCrNo'), 'CR input');
+    const input = await waitFor(() => trendDocument()?.querySelector(UI.crInput), 'CR input');
 
     input.value = crNo;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
 
-    const go = findText(trendDocument(), 'button', 'Go') ||
-      findText(trendDocument(), 'input[type="button"],input[type="submit"]', 'Go');
+    const go = findTextAny(trendDocument(), 'button', LABELS.go) ||
+      findTextAny(trendDocument(), 'input[type="button"],input[type="submit"]', LABELS.go);
     if (!go) throw new Error('NIMS CR search button was not found.');
 
-    const currentBar = trendDocument()?.querySelector('#labTrendsPatientBar');
+    const currentBar = trendDocument()?.querySelector(UI.patientBar);
     if (!visible(currentBar) || !compact(currentBar.textContent).includes(crNo)) go.click();
 
     await waitFor(() => {
-      const bar = trendDocument()?.querySelector('#labTrendsPatientBar');
+      const bar = trendDocument()?.querySelector(UI.patientBar);
       return visible(bar) && compact(bar.textContent).includes(crNo) ? bar : null;
     }, 'requested CR results', 30000);
 
@@ -145,34 +171,34 @@
     }
 
     const custom = await waitFor(() => {
-      const button = trendDocument()?.querySelector('#labTrendsCustomBtn');
+      const button = trendDocument()?.querySelector(UI.customButton);
       return visible(button) ? button : null;
     }, 'Custom Sheet control', 30000);
 
-    if (compact(custom.textContent) === 'Custom Sheet') custom.click();
+    if (LABELS.custom.includes(compact(custom.textContent))) custom.click();
 
     await waitFor(() => {
-      const panel = trendDocument()?.querySelector('#labTrendsMetabolicPanel');
+      const panel = trendDocument()?.querySelector(UI.customPanel);
       return visible(panel) ? panel : null;
     }, 'Custom Sheet panel');
 
     const testChecks = await waitFor(() => {
-      const list = [...(trendDocument()?.querySelectorAll('#labTrendsMetabolicPanel .labTrendsMetaTestChk') || [])];
+      const list = [...(trendDocument()?.querySelectorAll(UI.testChecks) || [])];
       return list.length ? list : null;
     }, 'Custom Sheet tests');
 
     for (const check of testChecks) if (!check.checked) check.click();
 
-    const dateChecks = [...(trendDocument()?.querySelectorAll('.labTrendsMetaDateChk') || [])];
+    const dateChecks = [...(trendDocument()?.querySelectorAll(UI.dateChecks) || [])];
     for (const check of dateChecks) if (!check.checked) check.click();
 
-    if (trendDocument().querySelectorAll('.labTrendsMetaTestChk:checked').length !== testChecks.length ||
-        (dateChecks.length && trendDocument().querySelectorAll('.labTrendsMetaDateChk:checked').length !== dateChecks.length)) {
+    if (trendDocument().querySelectorAll(UI.checkedTests).length !== testChecks.length ||
+        (dateChecks.length && trendDocument().querySelectorAll(UI.checkedDates).length !== dateChecks.length)) {
       throw new Error('NIMS did not select all Custom Sheet tests and dates.');
     }
 
     const applies = [...trendDocument().querySelectorAll('#labTrendsMetabolicPanel button,input[type="button"],input[type="submit"]')]
-      .filter(button => compact(button.textContent || button.value) === 'Apply' && visible(button));
+      .filter(button => LABELS.apply.includes(compact(button.textContent || button.value)) && visible(button));
 
     if (applies.length !== 1) throw new Error('NIMS Custom Sheet Apply control was ambiguous.');
 
@@ -195,7 +221,7 @@
 
   window.addEventListener('message', event => {
     if (!NIMS_ORIGINS.has(event.origin) || event.data?.__nimsBulkCapture !== true) return;
-    const trendWindow = document.getElementById('Cr No Wise Investigation Trends_iframe')?.contentWindow;
+    const trendWindow = document.getElementById(UI.trendFrameId)?.contentWindow;
     if (trendWindow && event.source !== trendWindow) return;
     try {
       chrome.runtime.sendMessage({
