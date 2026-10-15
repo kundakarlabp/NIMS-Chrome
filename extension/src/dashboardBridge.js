@@ -12,21 +12,42 @@
     window.postMessage({ type, ...bridgePayload(payload) }, window.location.origin);
   }
 
-  async function send(type, payload) {
-    try {
-      return await chrome.runtime.sendMessage({ type, ...(payload || {}) });
-    } catch (error) {
-      return { ok: false, error: error && error.message ? error.message : "NIMS browser bridge unavailable." };
+  function transient(error) {
+    return /message channel closed|port closed|receiving end does not exist/i.test(String(error && error.message || ""));
+  }
+
+  async function send(type, payload, retry) {
+    const attempts = retry ? 3 : 1;
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        return await chrome.runtime.sendMessage({ type, ...(payload || {}) });
+      } catch (error) {
+        lastError = error;
+        if (!transient(error) || attempt === attempts - 1) break;
+        await new Promise(resolve => setTimeout(resolve, 120 * (attempt + 1)));
+      }
     }
+    return {
+      ok: false,
+      transient: transient(lastError),
+      error: transient(lastError)
+        ? "NIMS connector communication restarted. Retry the request."
+        : String(lastError && lastError.message || "NIMS browser bridge unavailable.")
+    };
   }
 
   async function emitStatus() {
-    const response = await send("NIMS_DASHBOARD_STATUS");
+    const response = await send("NIMS_DASHBOARD_STATUS", {}, true);
     post("KBP_NIMS_STATUS", response || { ok: false, loggedIn: false });
   }
 
   window.addEventListener("message", async (event) => {
     if (event.source !== window || event.origin !== window.location.origin || !event.data) return;
+    if (event.data.type === "KBP_NIMS_PING") {
+      post("KBP_NIMS_PONG", { ready: true });
+      return;
+    }
     if (event.data.type === "KBP_NIMS_STATUS_REQUEST") {
       await emitStatus();
       return;
@@ -64,9 +85,15 @@
       return;
     }
     if (event.data.type === "KBP_NIMS_FETCH_REQUEST") {
-      const response = await send("NIMS_DASHBOARD_FETCH_CR", { crNo: String(event.data.crNo || "") });
+      const crNo = String(event.data.crNo || "");
+      const requestId = String(event.data.requestId || "").slice(0, 128);
+      const response = await send("NIMS_DASHBOARD_FETCH_CR", { crNo, requestId }, true);
       if (response && response.ok === false) {
-        post("KBP_NIMS_FETCH_ERROR", { error: response.error || "NIMS retrieval failed." });
+        post("KBP_NIMS_FETCH_ERROR", {
+          error: response.error || "NIMS retrieval failed.",
+          requestId,
+          crNo
+        });
       }
     }
   });
