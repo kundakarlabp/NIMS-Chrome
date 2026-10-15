@@ -60,7 +60,7 @@ test('dashboard bridge preserves manual login and CR fetch contracts', () => {
 });
 
 test('structured NIMS API is primary, reportList REST second and verified browser path final', () => {
-  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender, rawRequestId)');
   const body = background.slice(start);
   assert.ok(start >= 0);
   assert.ok(body.indexOf('ensureDashboardWorkerTab()') >= 0);
@@ -103,7 +103,7 @@ test('legacy visible toolbar is disabled', () => {
 });
 
 test('logged-out CR fetch opens normal login and preserves automatic resume contract', () => {
-  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender, rawRequestId)');
   const body = background.slice(start);
   assert.match(body, /getDashboardSessionStatus\(\)/);
   assert.match(body, /KBP_NIMS_AUTH_REQUIRED/);
@@ -113,7 +113,7 @@ test('logged-out CR fetch opens normal login and preserves automatic resume cont
 
 test('browser fallback verifies CR identity before parsing results', () => {
   const start = background.indexOf('async function fetchCrForDashboardLegacy(crNo)');
-  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)', start);
+  const end = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender, rawRequestId)', start);
   const body = background.slice(start, end);
   assert.match(body, /returnedCr/);
   assert.match(body, /NIMS_IDENTITY_MISMATCH/);
