@@ -1353,53 +1353,67 @@ function mergeReportInventories(...lists) {
 
 async function fetchBrowserReportInventory(tabId, crNo) {
   const existing = await probeNimsTab(tabId);
+  let inventoryTabId = tabId;
+  let temporaryTabId = null;
   let reportFrameId = null;
+
   if (existing.reportFrame) {
     const displayedCrNo = String(existing.reportFrame.patient && existing.reportFrame.patient.crNo || "").replace(/\D/g, "");
     if (displayedCrNo === crNo) reportFrameId = existing.reportFrame.frameId;
   }
 
-  if (reportFrameId === null) {
-    const crFrameId = await findCrFrame(tabId);
-    let submitted;
-    try {
-      submitted = await chrome.tabs.sendMessage(
-        tabId,
-        { type: "NIMS_BRIDGE_SUBMIT_CR", crNo },
-        { frameId: crFrameId }
-      );
-    } catch (error) {
-      if (!/back\/forward cache|message channel is closed/i.test(String(error && error.message || ""))) throw error;
-      submitted = { ok: true };
+  try {
+    if (reportFrameId === null) {
+      // Isolate report inventory from the Trends tab used by the structured API.
+      // The inactive tab shares the already-authenticated NIMS browser session.
+      const created = await chrome.tabs.create({ url: NIMS_LOGIN_URL_DASHBOARD, active: false });
+      if (!created.id) throw new Error("Unable to open NIMS source-report inventory.");
+      temporaryTabId = created.id;
+      inventoryTabId = created.id;
+      await waitForTabCompleteSafe(inventoryTabId);
+
+      const crFrameId = await findCrFrame(inventoryTabId);
+      let submitted;
+      try {
+        submitted = await chrome.tabs.sendMessage(
+          inventoryTabId,
+          { type: "NIMS_BRIDGE_SUBMIT_CR", crNo },
+          { frameId: crFrameId }
+        );
+      } catch (error) {
+        if (!/back\/forward cache|message channel is closed/i.test(String(error && error.message || ""))) throw error;
+        submitted = { ok: true };
+      }
+      if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number for report inventory.");
+      reportFrameId = await waitForReportFrame(inventoryTabId);
     }
-    if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number for report inventory.");
-    reportFrameId = await waitForReportFrame(tabId);
-  }
 
-  const extracted = await chrome.tabs.sendMessage(
-    tabId,
-    { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" },
-    { frameId: reportFrameId }
-  );
-  const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
-  if ((extracted && extracted.patient && extracted.patient.identityConflict) || (returnedCrNo && returnedCrNo !== crNo)) {
-    const error = new Error("NIMS identity verification failed while loading source reports.");
-    error.code = "NIMS_IDENTITY_MISMATCH";
-    throw error;
-  }
-  if (!returnedCrNo) {
-    const error = new Error("NIMS source-report page did not expose a verifiable CR number.");
-    error.code = "NIMS_IDENTITY_UNVERIFIED";
-    throw error;
-  }
+    const extracted = await chrome.tabs.sendMessage(
+      inventoryTabId,
+      { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" },
+      { frameId: reportFrameId }
+    );
+    const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
+    if ((extracted && extracted.patient && extracted.patient.identityConflict) || (returnedCrNo && returnedCrNo !== crNo)) {
+      const error = new Error("NIMS identity verification failed while loading source reports.");
+      error.code = "NIMS_IDENTITY_MISMATCH";
+      throw error;
+    }
+    if (!returnedCrNo) {
+      const error = new Error("NIMS source-report page did not expose a verifiable CR number.");
+      error.code = "NIMS_IDENTITY_UNVERIFIED";
+      throw error;
+    }
 
-  return {
-    reports: Array.isArray(extracted && extracted.reports) ? extracted.reports : [],
-    reportCount: Number(extracted && extracted.reportCount || 0),
-    linkedReportCount: Number(extracted && extracted.linkedReportCount || 0)
-  };
+    return {
+      reports: Array.isArray(extracted && extracted.reports) ? extracted.reports : [],
+      reportCount: Number(extracted && extracted.reportCount || 0),
+      linkedReportCount: Number(extracted && extracted.linkedReportCount || 0)
+    };
+  } finally {
+    if (temporaryTabId) chrome.tabs.remove(temporaryTabId).catch(() => {});
+  }
 }
-
 async function enrichBulkReportInventory(tabId, crNo, restReports) {
   const current = Array.isArray(restReports) ? restReports : [];
   const directCount = current.filter(report => report && report.url).length;
