@@ -32,6 +32,7 @@ class NimsEngine(
     private val engineScript = context.assets.open("nims_engine.js").bufferedReader().use { it.readText() }
     private var pageReady = false
     private var pendingProbe: ((SessionState) -> Unit)? = null
+    private var pendingRun: Pair<String, String>? = null
 
     @Volatile
     var sessionState: SessionState = SessionState.UNKNOWN
@@ -42,8 +43,8 @@ class NimsEngine(
         private set
 
     init {
-        vault.restoreToWebView()
         configure()
+        vault.restoreToWebView()
         parent.addView(
             webView,
             0,
@@ -118,9 +119,10 @@ class NimsEngine(
     fun run(crNo: String, requestId: String) {
         activeRequestId = requestId
         if (!pageReady) {
-            listener.onError(requestId, "NIMS session engine is still loading. Retry in a moment.")
+            pendingRun = crNo to requestId
             return
         }
+        pendingRun = null
         val js = "window.NativeNimsEngine && window.NativeNimsEngine.run(" +
             JSONObject.quote(crNo) + "," + JSONObject.quote(requestId) + ");"
         webView.evaluateJavascript(js, null)
@@ -152,6 +154,16 @@ class NimsEngine(
             listener.onSession(state)
             pendingProbe?.invoke(state)
             pendingProbe = null
+            val queued = pendingRun
+            if (queued != null) {
+                if (state == SessionState.CONNECTED) {
+                    pendingRun = null
+                    run(queued.first, queued.second)
+                } else {
+                    pendingRun = null
+                    listener.onError(queued.second, "NIMS authentication required.")
+                }
+            }
         }
     }
 
