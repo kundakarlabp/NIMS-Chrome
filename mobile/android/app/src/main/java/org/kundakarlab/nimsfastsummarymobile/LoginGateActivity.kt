@@ -43,14 +43,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Manual-login launcher gate.
+ * NIMS login gate.
  *
- * Credentials and captcha are entered only into NIMS. The app never reads or
- * stores them. NIMS's login form is allowed to submit normally; once the form
- * disappears, the app deliberately verifies the resulting cookie session by
- * opening the protected CR-results endpoint. That verification is user-driven
- * (Continue to results) and also starts automatically after a short settle
- * period, avoiding both the old premature redirect and the newer infinite wait.
+ * CAPTCHA is always entered manually into the NIMS page. The user may
+ * optionally save the NIMS user ID/password in Android Keystore for local
+ * autofill; those credentials never leave this device. After login, the app
+ * verifies the protected CR-results endpoint before opening patient results.
  */
 class LoginGateActivity : ComponentActivity() {
     private lateinit var webView: WebView
@@ -70,17 +68,14 @@ class LoginGateActivity : ComponentActivity() {
     private var credentialUsernameInput by mutableStateOf("")
     private var credentialPasswordInput by mutableStateOf("")
     private var pendingCr = ""
-    private var relayJobId = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         secureSettings = SecureSettings(this)
-        if (secureSettings.relayEnabled()) runCatching { NimsRelayService.start(this) }
         savedUsername = secureSettings.nimsUsername()
         credentialUsernameInput = savedUsername
-        pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(20)
-        relayJobId = intent.getStringExtra(EXTRA_RELAY_JOB_ID).orEmpty()
+        pendingCr = intent.getStringExtra(EXTRA_PENDING_CR).orEmpty().filter(Char::isDigit).take(15)
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -123,8 +118,7 @@ class LoginGateActivity : ComponentActivity() {
                     onContinue = ::verifyLogin,
                     onLogoutOtherSessions = ::logoutOtherSessions,
                     onReloadLogin = ::beginFreshLogin,
-                    onCopyLogs = ::copyLogs,
-                    onOpenBridge = { startActivity(Intent(this, NimsRelayPairingActivity::class.java)) }
+                    onCopyLogs = ::copyLogs
                 )
             }
         }
@@ -390,13 +384,6 @@ class LoginGateActivity : ComponentActivity() {
         if (launched) return
         launched = true
         CookieManager.getInstance().flush()
-        if (relayJobId.isNotBlank()) {
-            status = "NIMS login verified. Resuming the encrypted request…"
-            log("AUTH verified; resuming relay job")
-            NimsRelayService.resumeAfterAuthentication(this, relayJobId)
-            finish()
-            return
-        }
         status = "NIMS login verified. Opening patient results…"
         log("AUTH verified; opening production workflow")
         val handoffUrl = lastFinishedUrl.takeIf(::isAllowedNimsUrl).orEmpty()
@@ -465,6 +452,7 @@ class LoginGateActivity : ComponentActivity() {
         internal const val EXTRA_VERIFIED_LOGIN = "nims_verified_login"
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
         internal const val EXTRA_PENDING_CR = "nims_pending_cr"
+        // Compatibility symbol for legacy source files; relay is not declared or exposed in this APK.
         internal const val EXTRA_RELAY_JOB_ID = "nims_relay_job_id"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
@@ -590,8 +578,7 @@ private fun LoginGateScreen(
     onContinue: () -> Unit,
     onLogoutOtherSessions: () -> Unit,
     onReloadLogin: () -> Unit,
-    onCopyLogs: () -> Unit,
-    onOpenBridge: () -> Unit
+    onCopyLogs: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -599,7 +586,7 @@ private fun LoginGateScreen(
     ) {
         Text("NIMS login", style = MaterialTheme.typography.headlineMedium)
         if (savedUsername.isBlank()) {
-            Text("Save the NIMS login once on this phone. It is encrypted with Android Keystore and never sent to the dashboard or ChatGPT.")
+            Text("Optional: save the NIMS login on this phone. It is encrypted with Android Keystore and never leaves this device.")
             OutlinedTextField(
                 value = credentialUsername,
                 onValueChange = onCredentialUsernameChange,
@@ -637,7 +624,6 @@ private fun LoginGateScreen(
             OutlinedButton(onClick = onContinue, modifier = Modifier.weight(1f)) { Text("Check login") }
         }
         OutlinedButton(onClick = onReloadLogin, modifier = Modifier.fillMaxWidth()) { Text("Reload login") }
-        OutlinedButton(onClick = onOpenBridge, modifier = Modifier.fillMaxWidth()) { Text("Dashboard / ChatGPT bridge") }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
