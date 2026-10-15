@@ -9,7 +9,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.6.6');
+  assert.equal(manifest.version, '0.6.7');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
@@ -44,6 +44,7 @@ test('dashboard origin is explicitly bridged', () => {
 
 test('dashboard bridge preserves manual login and CR fetch contracts', () => {
   for (const token of [
+    'KBP_NIMS_PING',
     'KBP_NIMS_STATUS_REQUEST',
     'KBP_NIMS_LOGIN_REQUEST',
     'KBP_NIMS_FETCH_REQUEST',
@@ -54,6 +55,8 @@ test('dashboard bridge preserves manual login and CR fetch contracts', () => {
     assert.match(dashboardBridge + background, new RegExp(token));
   }
   assert.match(dashboardBridge, /chrome\.runtime\.getManifest\(\)\.version/);
+  assert.match(dashboardBridge, /requestId/);
+  assert.match(background, /KBP_NIMS_RETRIEVAL_STAGE/);
 });
 
 test('structured NIMS API is primary, reportList REST second and verified browser path final', () => {
