@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.6.6",
-  "description": "Desktop NIMS Results Dashboard connector: structured Custom Sheet API first, reportList REST second, verified authenticated browser fallback.",
+  "version": "0.6.7",
+  "description": "Desktop NIMS Results Dashboard connector: structured API first, request-correlated retrieval, verified report inventory, safe diagnostics, reportList second, authenticated browser fallback.",
   "permissions": [
     "storage",
     "activeTab",

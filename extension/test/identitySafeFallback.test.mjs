@@ -21,6 +21,7 @@ test('missing REST CR uses verified browser fallback rather than stopping', asyn
   const events = [];
   let invoked = 0;
   const run = isolate(background, 'fetchCrForDashboard', {
+    normalizeDashboardRequestId: value => value || 'test-request',
     getDashboardSessionStatus: async () => ({ loggedIn: true }),
     ensureDashboardWorkerTab: async () => 42,
     pushDashboardEvent: async type => { events.push(type); },
@@ -43,6 +44,7 @@ test('missing REST CR uses verified browser fallback rather than stopping', asyn
 test('explicit REST identity mismatch prevents wrong-patient browser retrieval', async () => {
   let invoked = 0;
   const run = isolate(background, 'fetchCrForDashboard', {
+    normalizeDashboardRequestId: value => value || 'test-request',
     getDashboardSessionStatus: async () => ({ loggedIn: true }),
     ensureDashboardWorkerTab: async () => 42,
     pushDashboardEvent: async () => {},
