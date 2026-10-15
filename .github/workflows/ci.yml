@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - release/android-simple-v011
+  pull_request:
+    branches:
+      - release/android-simple-base
 
 concurrency:
   group: android-apk-${{ github.ref }}
