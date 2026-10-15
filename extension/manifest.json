@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "NIMS Results Connector",
-  "version": "0.6.5",
-  "description": "Desktop NIMS Results Dashboard connector: authenticated REST-first retrieval, automatic login resume, verified browser fallback, and local helper configuration.",
+  "version": "0.6.6",
+  "description": "Desktop NIMS Results Dashboard connector: structured Custom Sheet API first, reportList REST second, verified authenticated browser fallback.",
   "permissions": [
     "storage",
     "activeTab",
@@ -66,6 +66,29 @@
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://nimsts.edu.in/HISInvestigationG5/*",
+        "https://www.nimsts.edu.in/HISInvestigationG5/*"
+      ],
+      "js": [
+        "src/bulkCaptureMain.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://nimsts.edu.in/*",
+        "https://www.nimsts.edu.in/*"
+      ],
+      "js": [
+        "src/nimsUiBridge.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "background": {
