@@ -35,7 +35,7 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.6.5"
+          assert m["version"] == "0.6.6"
           for entry in m["content_scripts"]:
             if entry.get("match_origin_as_fallback"):
               assert entry.get("all_frames") is True
@@ -46,6 +46,8 @@ jobs:
           assert "src/contentScript.js" in scripts
           assert "src/contentUtils.js" in scripts
           assert "src/nimsSessionBridge.js" in scripts
+          assert "src/bulkCaptureMain.js" in scripts
+          assert "src/nimsUiBridge.js" in scripts
           assert not any("manual" in p.lower() or "sidepanel" in p.lower() for p in scripts)
           PY
 
