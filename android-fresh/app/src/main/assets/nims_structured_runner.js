@@ -285,5 +285,36 @@
     }
   }
 
-  window.AndroidNimsStructured = { probe, run };
+  function prepareLogin() {
+    try {
+      const docs = [];
+      const seen = new Set();
+      const collect = (doc, depth) => {
+        if (!doc || depth > 6 || seen.has(doc)) return;
+        seen.add(doc);
+        docs.push(doc);
+        let frames = [];
+        try { frames = [...doc.querySelectorAll('iframe,frame')]; } catch {}
+        for (const frame of frames) {
+          try { collect(frame.contentDocument || frame.contentWindow?.document, depth + 1); } catch {}
+        }
+      };
+      collect(document, 0);
+      const loginPattern = /^(?:nims\s+)?(?:user\s+|employee\s+|hospital\s+)?(?:login|log\s*in|sign\s*in)$/i;
+      for (const doc of docs) {
+        let actions = [];
+        try { actions = [...doc.querySelectorAll('a,button,input[type="button"],input[type="submit"],[role="button"]')]; } catch {}
+        const direct = actions.find(el => visible(el) && loginPattern.test(compact(el.textContent || el.value || el.title)) && !/logout|sign\s*out/i.test(compact(el.textContent || el.value || el.title)));
+        if (direct) {
+          direct.click();
+          return 'login_clicked';
+        }
+      }
+      return 'not_found';
+    } catch {
+      return 'not_found';
+    }
+  }
+
+  window.AndroidNimsStructured = { probe, run, prepareLogin };
 })();
