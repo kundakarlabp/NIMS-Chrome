@@ -63,7 +63,7 @@ test('manifest injects the XHR capture in MAIN world before page requests', () =
 });
 
 test('final retrieval order is bulk API then reportList REST then browser fallback', () => {
-  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
+  const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender, rawRequestId)');
   const body = background.slice(start);
   const bulk = body.indexOf('tryBulkApiForDashboard(workerTabId, crNo)');
   const rest = body.indexOf('tryRestApiForDashboard(crNo)');
