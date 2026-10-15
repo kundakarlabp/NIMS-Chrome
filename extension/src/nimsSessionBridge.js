@@ -38,9 +38,14 @@
   }
 
   function patientIdentity() {
-    let crNo = "";
     const input = findCrInput();
-    if (input && /patcrno/i.test(String(input.name || input.id || ""))) crNo = String(input.value || "").replace(/\D/g, "");
+    const digits15 = value => {
+      const match = String(value || "").match(/(?:^|\D)(\d{15})(?!\d)/);
+      return match ? match[1] : "";
+    };
+    const inputCr = input && /patcrno/i.test(String(input.name || input.id || ""))
+      ? digits15(input.value) : "";
+    const displayedCrs = new Set();
     let name = "";
     const cells = Array.from(document.querySelectorAll("td,th,label,span,div")).slice(0, 2000);
     for (const cell of cells) {
@@ -49,13 +54,26 @@
         const sibling = cell.nextElementSibling;
         if (sibling) name = text(sibling).replace(/^:\s*/, "").slice(0, 120);
       }
-      if (!crNo && /^(?:cr\s*(?:no|number)|patient\s*cr)\s*:?$/i.test(label)) {
+      // NIMS can render the returned CR in an adjacent cell or inline with
+      // its label. Compare both with the search field to detect stale pages.
+      if (/^(?:cr\s*(?:no\.?|number)|patient\s*cr(?:\s*(?:no\.?|number))?)\s*:?$/i.test(label)) {
         const sibling = cell.nextElementSibling;
-        if (sibling) crNo = text(sibling).replace(/\D/g, "");
+        if (sibling) {
+          const candidate = digits15(text(sibling));
+          if (candidate) displayedCrs.add(candidate);
+        }
       }
-      if (name && crNo) break;
+      const inline = label.match(/^(?:cr\s*(?:no\.?|number)|patient\s*cr(?:\s*(?:no\.?|number))?)\s*[:\-]\s*(\d{15})\s*$/i);
+      if (inline) displayedCrs.add(inline[1]);
     }
-    return { name, crNo };
+    const candidates = Array.from(displayedCrs);
+    const crNo = candidates[0] || inputCr;
+    return {
+      name,
+      crNo,
+      identityConflict: candidates.length > 1 || Boolean(inputCr && candidates.length && inputCr !== candidates[0]),
+      identitySource: candidates.length ? "patient_display" : (inputCr ? "cr_search_field" : "missing")
+    };
   }
 
   function probe() {
