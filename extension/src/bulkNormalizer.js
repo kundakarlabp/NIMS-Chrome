@@ -56,16 +56,21 @@
 
   function normalizeReports(items) {
     if (!Array.isArray(items)) return [];
-    return items.flatMap((report, index) => {
-      const url = reportUrl(report);
-      if (!url) return [];
-      return [{
-        id: String(report?.id || report?.reportId || `nims-report-${index}`),
-        title: String(report?.title || report?.testName || report?.labName || 'NIMS source report'),
-        date: toIsoDate(report?.date || report?.collectionDate || ''),
-        url
-      }];
-    });
+    return items.map((report, index) => ({
+      id: String(report?.id || report?.reportId || `nims-report-${index}`),
+      title: String(report?.title || report?.testName || report?.labName || 'NIMS source report'),
+      date: toIsoDate(report?.date || report?.collectionDate || ''),
+      url: reportUrl(report) || undefined,
+      provenance: { source: 'nims', retrieval: 'nims_rest_report_list' }
+    }));
+  }
+
+  function canonical(value) {
+    return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+
+  function resultSourceKey(test, parameter, date, unit, valueText) {
+    return ['nims_bulk_api', canonical(test), canonical(parameter), toIsoDate(date), canonical(unit), String(valueText ?? '').trim()].join('|');
   }
 
   function normalizeBulk(raw, crNo, options = {}) {
@@ -89,15 +94,24 @@
         for (const [date, rawValue] of Object.entries(row?.valuesByDate ?? {})) {
           const valueText = String(rawValue ?? '').trim();
           if (!valueText) continue;
+          const test = String(group?.testName ?? '');
+          const parameter = String(row?.parameterName ?? '');
+          const unit = row?.unit == null ? undefined : String(row.unit);
+          const refRange = row?.refRange == null ? undefined : String(row.refRange);
+          const sourceFlag = row?.flagsByDate?.[date] ?? row?.abnormalByDate?.[date] ?? row?.flagByDate?.[date] ?? row?.abnormal ?? row?.flag;
           results.push({
             id: `nims-${results.length}`,
-            group: String(group?.testName ?? ''),
-            test: String(group?.testName ?? ''),
-            parameter: String(row?.parameterName ?? ''),
+            sourceKey: resultSourceKey(test, parameter, date, unit, valueText),
+            group: test,
+            test,
+            parameter,
             date: toIsoDate(date),
             valueText,
-            unit: row?.unit == null ? undefined : String(row.unit),
-            refRange: row?.refRange == null ? undefined : String(row.refRange)
+            unit,
+            refRange,
+            abnormal: sourceFlag == null ? undefined : String(sourceFlag),
+            abnormalSource: sourceFlag == null ? 'unknown' : 'source',
+            provenance: { source: 'nims', retrieval: 'nims_bulk_api' }
           });
         }
       }
@@ -109,8 +123,9 @@
     const enquiryRows = Array.isArray(bulk.enquiryRows) ? bulk.enquiryRows : [];
 
     return {
-      schemaVersion: 'nims-dashboard-bulk/1.0',
+      schemaVersion: 'nims-dashboard-bulk/1.1',
       source: 'nims_bulk_api',
+      retrievedAt: new Date().toISOString(),
       patient: {
         name: String(options.patient?.name ?? bulk.patientName ?? bulk.identity?.name ?? '').trim(),
         crNo,
@@ -123,10 +138,12 @@
       coverage: {
         resultCount: results.length,
         reportCount: reports.length,
-        enquiryCount: enquiryRows.length
+        reportInventoryCount: reports.length,
+        enquiryCount: enquiryRows.length,
+        structuredValuesComplete: true
       }
     };
   }
 
-  root.NimsBulkNormalizer = { requireCr, toIsoDate, findBulk, normalizeBulk, normalizeReports };
+  root.NimsBulkNormalizer = { requireCr, toIsoDate, findBulk, normalizeBulk, normalizeReports, resultSourceKey };
 })(typeof self !== 'undefined' ? self : globalThis);
