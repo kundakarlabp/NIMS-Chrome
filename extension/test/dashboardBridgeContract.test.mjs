@@ -9,7 +9,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.6.5');
+  assert.equal(manifest.version, '0.6.6');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
@@ -17,6 +17,8 @@ test('manifest contains only dashboard retrieval runtime surfaces', () => {
   assert.ok(files.includes('src/contentUtils.js'));
   assert.ok(files.includes('src/contentScript.js'));
   assert.ok(files.includes('src/nimsSessionBridge.js'));
+  assert.ok(files.includes('src/bulkCaptureMain.js'));
+  assert.ok(files.includes('src/nimsUiBridge.js'));
 });
 
 test('Chrome match_origin_as_fallback content scripts use wildcard-only paths', () => {
@@ -54,12 +56,14 @@ test('dashboard bridge preserves manual login and CR fetch contracts', () => {
   assert.match(dashboardBridge, /chrome\.runtime\.getManifest\(\)\.version/);
 });
 
-test('REST is primary and proven authenticated browser path is fallback', () => {
+test('structured NIMS API is primary, reportList REST second and verified browser path final', () => {
   const start = background.indexOf('async function fetchCrForDashboard(rawCrNo, sender)');
   const body = background.slice(start);
   assert.ok(start >= 0);
   assert.ok(body.indexOf('ensureDashboardWorkerTab()') >= 0);
+  assert.ok(body.indexOf('tryBulkApiForDashboard(workerTabId, crNo)') >= 0);
   assert.ok(body.indexOf('tryRestApiForDashboard(crNo)') >= 0);
+  assert.ok(body.indexOf('tryBulkApiForDashboard(workerTabId, crNo)') < body.indexOf('tryRestApiForDashboard(crNo)'));
   assert.ok(body.indexOf('tryRestApiForDashboard(crNo)') < body.indexOf('fetchCrForDashboardLegacy(crNo)'));
   assert.match(body, /KBP_NIMS_SOURCE_FALLBACK/);
   assert.match(body, /authenticated_browser_fallback/);
@@ -74,7 +78,7 @@ test('browser fallback uses the previously validated bridge processor', () => {
 });
 
 test('identity mismatch fails closed before fallback', () => {
-  const start = background.indexOf('const rest = await tryRestApiForDashboard(crNo);');
+  const start = background.indexOf('const bulk = await tryBulkApiForDashboard(workerTabId, crNo);');
   const end = background.indexOf('await pushDashboardEvent("KBP_NIMS_BULK_RESULTS"', start);
   const body = background.slice(start, end);
   assert.ok(body.indexOf('NIMS_IDENTITY_MISMATCH') >= 0);
@@ -134,4 +138,10 @@ test('runtime scripts compile', () => {
   assert.doesNotThrow(() => new Function(sessionBridge));
   assert.doesNotThrow(() => new Function(background));
   assert.doesNotThrow(() => new Function(processor));
+  const bulkCapture = fs.readFileSync(new URL('../src/bulkCaptureMain.js', import.meta.url), 'utf8');
+  const bulkUi = fs.readFileSync(new URL('../src/nimsUiBridge.js', import.meta.url), 'utf8');
+  const bulkNormalizer = fs.readFileSync(new URL('../src/bulkNormalizer.js', import.meta.url), 'utf8');
+  assert.doesNotThrow(() => new Function(bulkCapture));
+  assert.doesNotThrow(() => new Function(bulkUi));
+  assert.doesNotThrow(() => new Function(bulkNormalizer));
 });
