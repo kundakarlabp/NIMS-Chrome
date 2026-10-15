@@ -3,6 +3,7 @@ package org.kundakarlab.nimsresults
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.net.Uri
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -33,6 +34,7 @@ class NimsEngine(
     private var pageReady = false
     private var pendingProbe: ((SessionState) -> Unit)? = null
     private var pendingRun: Pair<String, String>? = null
+    @Volatile private var lastProbeJson: String = "{}"
 
     @Volatile
     var sessionState: SessionState = SessionState.UNKNOWN
@@ -128,6 +130,40 @@ class NimsEngine(
         webView.evaluateJavascript(js, null)
     }
 
+    fun safeDiagnostics(): String {
+        val probe = runCatching { JSONObject(lastProbeJson) }.getOrDefault(JSONObject())
+        val current = runCatching { Uri.parse(webView.url.orEmpty()) }.getOrNull()
+        val path = buildString {
+            append(current?.scheme.orEmpty())
+            append("://")
+            append(current?.host.orEmpty())
+            append(current?.path.orEmpty())
+        }
+        val cookiePresent = runCatching {
+            CookieManager.getInstance().getCookie(NimsUrls.WWW_ORIGIN).orEmpty().isNotBlank() ||
+                CookieManager.getInstance().getCookie(NimsUrls.APEX_ORIGIN).orEmpty().isNotBlank()
+        }.getOrDefault(false)
+
+        return listOf(
+            "engine.sessionState=$sessionState",
+            "engine.pageReady=$pageReady",
+            "engine.currentPath=$path",
+            "engine.cookiePresent=$cookiePresent",
+            "probe.authenticated=${probe.optBoolean("authenticated", false)}",
+            "probe.loginRoute=${probe.optBoolean("loginRoute", false)}",
+            "probe.loginForm=${probe.optBoolean("loginForm", false)}",
+            "probe.sessionExpired=${probe.optBoolean("sessionExpired", false)}",
+            "probe.shellEvidence=${probe.optBoolean("shellEvidence", false)}",
+            "probe.welcomeEvidence=${probe.optBoolean("welcomeEvidence", false)}",
+            "probe.navEvidence=${probe.optBoolean("navEvidence", false)}",
+            "probe.menuPresent=${probe.optBoolean("menuPresent", false)}",
+            "probe.trendFramePresent=${probe.optBoolean("trendFramePresent", false)}",
+            "probe.documentCount=${probe.optInt("documentCount", 0)}",
+            "engine.pendingRun=${pendingRun != null}",
+            "engine.activeRequest=${activeRequestId.isNotBlank()}"
+        ).joinToString("\n")
+    }
+
     fun destroy() {
         runCatching { webView.removeJavascriptInterface("AndroidNimsBridge") }
         runCatching { webView.stopLoading() }
@@ -143,6 +179,7 @@ class NimsEngine(
         webView.evaluateJavascript(js) { raw ->
             val json = decodeJsString(raw)
             val probe = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
+            lastProbeJson = probe.toString()
             val state = when {
                 probe.optBoolean("sessionExpired", false) -> SessionState.EXPIRED
                 probe.optBoolean("authenticated", false) -> SessionState.CONNECTED
