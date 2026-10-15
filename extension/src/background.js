@@ -1,4 +1,4 @@
-if (typeof importScripts === "function") importScripts("nimsRestApi.js");
+if (typeof importScripts === "function") importScripts("nimsRestApi.js", "bulkNormalizer.js");
 const DEFAULT_HELPER = "http://127.0.0.1:8765";
 const NIMS_URL_FILTERS = [
   "https://nimsts.edu.in/AHIMSG5/*",
@@ -15,8 +15,14 @@ const NIMS_URL_FILTERS = [
   "https://www.nimsts.edu.in/HBIMS/*"
 ];
 let privateDirectMapping = null;
+const pendingBulk = new Map();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "NIMS_BULK_CAPTURE") {
+    sendResponse({ ok: acceptBulkCapture(message, sender) });
+    return false;
+  }
+
   if (message.type === "NIMS_OPEN_PANEL") {
     // Dashboard-driven runtime: acknowledge legacy processor progress without opening UI.
     sendResponse({ ok: true });
@@ -1262,6 +1268,142 @@ function cultureNarrative(culture) {
   return pieces.join(" · ");
 }
 
+function createBulkRequestId() {
+  return "bulk-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+function waitForBulkCapture(tabId, requestId, timeoutMs = 40000) {
+  const previous = pendingBulk.get(tabId);
+  if (previous) {
+    clearTimeout(previous.timer);
+    previous.reject(new Error("A newer NIMS bulk request replaced the previous request."));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingBulk.delete(tabId);
+      reject(new Error("NIMS Custom Sheet bulk API response was not captured."));
+    }, timeoutMs);
+    pendingBulk.set(tabId, { requestId, resolve, reject, timer });
+  });
+}
+
+function acceptBulkCapture(message, sender) {
+  const tabId = sender && sender.tab && sender.tab.id;
+  if (!tabId) return false;
+  const pending = pendingBulk.get(tabId);
+  if (!pending || pending.requestId !== String(message.requestId || "")) return false;
+  clearTimeout(pending.timer);
+  pendingBulk.delete(tabId);
+  pending.resolve(message.body);
+  return true;
+}
+
+async function optionalBulkReportMetadata(crNo) {
+  if (!self.NimsRestApi || !self.NimsRestApi.fetchReportList) return [];
+  try {
+    const timeout = new Promise(resolve => setTimeout(() => resolve(null), 3500));
+    const normalized = await Promise.race([
+      self.NimsRestApi.fetchReportList(crNo, fetch, "33101"),
+      timeout
+    ]);
+    if (!normalized) return [];
+    return (normalized.reports || []).map(report => ({
+      id: report.id,
+      title: report.title,
+      date: report.date,
+      url: report.url || (report.token && self.NimsRestApi.verifiedReportUrlForToken
+        ? self.NimsRestApi.verifiedReportUrlForToken(report.token)
+        : ""),
+      token: report.token || ""
+    }));
+  } catch (error) {
+    if (error && error.code === "NIMS_IDENTITY_MISMATCH") throw error;
+    return [];
+  }
+}
+
+async function fetchStructuredBulkResults(tabId, crNo) {
+  const opened = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BULK_OPEN_TRENDS" });
+  if (!opened || !opened.ok) throw new Error((opened && opened.error) || "Unable to open NIMS Investigation Trends.");
+
+  const requestId = createBulkRequestId();
+  const capturePromise = waitForBulkCapture(tabId, requestId);
+  let run;
+  try {
+    run = await chrome.tabs.sendMessage(tabId, {
+      type: "NIMS_BULK_RUN_CUSTOM",
+      crNo,
+      requestId
+    });
+  } catch (error) {
+    const pending = pendingBulk.get(tabId);
+    if (pending && pending.requestId === requestId) {
+      clearTimeout(pending.timer);
+      pendingBulk.delete(tabId);
+      pending.reject(error);
+    }
+    throw error;
+  }
+
+  if (!run || !run.ok) {
+    const pending = pendingBulk.get(tabId);
+    if (pending && pending.requestId === requestId) {
+      clearTimeout(pending.timer);
+      pendingBulk.delete(tabId);
+      pending.reject(new Error((run && run.error) || "NIMS Custom Sheet retrieval failed."));
+    }
+    throw new Error((run && run.error) || "NIMS Custom Sheet retrieval failed.");
+  }
+
+  const rawBulk = await capturePromise;
+  const reportIndex = await optionalBulkReportMetadata(crNo);
+  const bundle = self.NimsBulkNormalizer.normalizeBulk(rawBulk, crNo, {
+    patient: run.value && run.value.patient ? run.value.patient : { crNo },
+    reportIndex
+  });
+  bundle.schemaVersion = "nims-clinical-bundle/1.0";
+  bundle.source = "nims_bulk_api";
+  if (bundle.patient) {
+    bundle.patient.provenance = { source: "nims", identityVerified: true };
+  }
+  bundle.results = (bundle.results || []).map(result => ({
+    ...result,
+    provenance: { source: "nims" }
+  }));
+  bundle.reports = (bundle.reports || []).map(report => ({
+    ...report,
+    provenance: { source: "nims" }
+  }));
+  return bundle;
+}
+
+async function tryBulkApiForDashboard(tabId, crNo) {
+  if (!self.NimsBulkNormalizer) {
+    return { ok: false, reason: "Structured NIMS bulk normalizer unavailable.", code: "NIMS_BULK_UNAVAILABLE" };
+  }
+  try {
+    const bundle = await fetchStructuredBulkResults(tabId, crNo);
+    if (!bundle || !Array.isArray(bundle.results) || !bundle.results.length) {
+      return { ok: false, reason: "NIMS Custom Sheet API returned no structured values.", code: "NIMS_BULK_EMPTY" };
+    }
+    return {
+      ok: true,
+      bundle,
+      diagnostics: {
+        source: "nims_bulk_api",
+        resultCount: bundle.results.length,
+        reportCount: Array.isArray(bundle.reports) ? bundle.reports.length : 0
+      }
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error && error.message ? error.message : "NIMS Custom Sheet API retrieval failed.",
+      code: error && error.code ? error.code : "NIMS_BULK_FAILED"
+    };
+  }
+}
+
 function bundleFromParsedReports(crNo, extracted, state) {
   const reports = ((extracted && extracted.reports) || []).map(report => ({
     ...report,
@@ -1447,36 +1589,51 @@ async function fetchCrForDashboard(rawCrNo, sender) {
       await openDashboardLogin(sender);
       await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
         state: "signing_in",
-        preferredSource: "nims_rest_api"
+        preferredSource: "nims_bulk_api"
       });
       return { ok: true, pendingAuth: true };
     }
-    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_rest_api" });
-    // Preserve the existing trust boundary: REST is an optimization inside an
-    // already authenticated clinician NIMS session, never an authentication bypass.
-    await ensureDashboardWorkerTab();
-    const rest = await tryRestApiForDashboard(crNo);
-    // Missing REST identity is not a mismatch. Give authenticated browser fallback
-    // a chance to verify the patient; an explicit mismatch must still fail closed.
-    if (!rest.ok && rest.code === "NIMS_IDENTITY_MISMATCH") {
-      const mismatch = new Error("NIMS identity verification failed: the API returned a different CR number. Results were not retrieved.");
-      mismatch.code = rest.code;
+    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_bulk_api" });
+    // REST remains inside an already authenticated clinician NIMS session.
+    // Strategy order: structured Custom Sheet API -> reportList REST -> verified browser fallback.
+    const workerTabId = await ensureDashboardWorkerTab();
+    const bulk = await tryBulkApiForDashboard(workerTabId, crNo);
+    if (!bulk.ok && bulk.code === "NIMS_IDENTITY_MISMATCH") {
+      const mismatch = new Error("NIMS identity verification failed: the structured API returned a different CR number. Results were not retrieved.");
+      mismatch.code = bulk.code;
       throw mismatch;
     }
+
     let bundle;
     let source;
-    if (rest.ok) {
-      bundle = rest.bundle;
-      source = "nims_rest_api";
+    if (bulk.ok) {
+      bundle = bulk.bundle;
+      source = "nims_bulk_api";
     } else {
-      await pushDashboardEvent("KBP_NIMS_SOURCE_FALLBACK", {
-        from: "nims_rest_api",
-        to: "authenticated_browser_fallback",
-        reason: rest.reason || "REST path unavailable.",
-        diagnostics: rest.diagnostics || {}
-      });
-      bundle = await fetchCrForDashboardLegacy(crNo);
-      source = "authenticated_browser_fallback";
+      const rest = await tryRestApiForDashboard(crNo);
+      // Missing reportList identity may still be safely verified by the browser.
+      // An explicit different CR must always fail closed.
+      if (!rest.ok && rest.code === "NIMS_IDENTITY_MISMATCH") {
+        const mismatch = new Error("NIMS identity verification failed: the report-list API returned a different CR number. Results were not retrieved.");
+        mismatch.code = rest.code;
+        throw mismatch;
+      }
+      if (rest.ok) {
+        bundle = rest.bundle;
+        source = "nims_rest_api";
+      } else {
+        await pushDashboardEvent("KBP_NIMS_SOURCE_FALLBACK", {
+          from: "nims_api",
+          to: "authenticated_browser_fallback",
+          reason: [bulk.reason, rest.reason].filter(Boolean).join(" | ") || "NIMS API paths unavailable.",
+          diagnostics: {
+            structuredBulk: bulk.diagnostics || { code: bulk.code || "" },
+            reportList: rest.diagnostics || { code: rest.code || "" }
+          }
+        });
+        bundle = await fetchCrForDashboardLegacy(crNo);
+        source = "authenticated_browser_fallback";
+      }
     }
     await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", { payload: bundle });
     return { ok: true, source, resultCount: bundle.results.length, reportCount: bundle.reports.length };
@@ -1487,7 +1644,7 @@ async function fetchCrForDashboard(rawCrNo, sender) {
       await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
         state: "signing_in",
         reason: "session_expired",
-        preferredSource: "nims_rest_api"
+        preferredSource: "nims_bulk_api"
       });
       return { ok: true, pendingAuth: true };
     }
