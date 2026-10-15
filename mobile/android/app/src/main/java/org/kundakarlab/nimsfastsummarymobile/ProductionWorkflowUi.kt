@@ -102,8 +102,6 @@ internal fun ProductionWorkflowApp(
     onLoginAgain: () -> Unit,
     onLogout: () -> Unit,
     onCopyLogs: () -> Unit,
-    onShareSummary: () -> Unit,
-    onOpenBridge: () -> Unit,
     onChangePatient: () -> Unit,
     onManualCorrection: (String, String, String, String) -> Unit,
     onUndoCorrection: (String) -> Unit,
@@ -130,8 +128,6 @@ internal fun ProductionWorkflowApp(
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("Refresh results") }, onClick = { menuOpen = false; onRefresh() })
                         DropdownMenuItem(text = { Text("Retry failed reports") }, onClick = { menuOpen = false; onRetryAll() })
-                        DropdownMenuItem(text = { Text("Send to ChatGPT") }, onClick = { menuOpen = false; onShareSummary() })
-                        DropdownMenuItem(text = { Text("Dashboard / ChatGPT bridge") }, onClick = { menuOpen = false; onOpenBridge() })
                         DropdownMenuItem(text = { Text("Change CR number") }, onClick = { menuOpen = false; onChangePatient() })
                         DropdownMenuItem(text = { Text("Login again") }, onClick = { menuOpen = false; onLoginAgain() })
                         DropdownMenuItem(text = { Text("Copy diagnostic logs") }, onClick = { menuOpen = false; onCopyLogs() })
@@ -256,8 +252,8 @@ private fun CrScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        Button(onClick = onFetch, enabled = ready && cr.length >= 6, modifier = Modifier.fillMaxWidth()) {
-            Text("Fetch results")
+        Button(onClick = onFetch, enabled = ready && cr.length == 15, modifier = Modifier.fillMaxWidth()) {
+            Text("Get results")
         }
         Text(status, style = MaterialTheme.typography.bodySmall)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
