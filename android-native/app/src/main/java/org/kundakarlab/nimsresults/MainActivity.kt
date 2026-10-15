@@ -402,13 +402,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun AppHeader() {
         Surface(
-            modifier = Modifier.statusBarsPadding(),
             color = Color(0xFF0C2D4C),
             shadowElevation = 4.dp
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
