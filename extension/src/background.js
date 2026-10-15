@@ -1326,7 +1326,7 @@ function canonicalReportKey(report) {
   const title = String(report && report.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   const date = String(report && report.date || "").trim().toLowerCase();
   const id = String(report && report.id || "").trim();
-  return [id, title, date].join("|");
+  return title || date ? [title, date].join("|") : ("id|" + id);
 }
 
 function mergeReportInventories(...lists) {
