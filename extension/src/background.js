@@ -1322,6 +1322,124 @@ async function optionalBulkReportMetadata(crNo) {
   }
 }
 
+function canonicalReportKey(report) {
+  const title = String(report && report.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const date = String(report && report.date || "").trim().toLowerCase();
+  const id = String(report && report.id || "").trim();
+  return title || date ? [title, date].join("|") : ("id|" + id);
+}
+
+function mergeReportInventories(...lists) {
+  const merged = new Map();
+  for (const list of lists) {
+    for (const report of Array.isArray(list) ? list : []) {
+      if (!report || !report.title) continue;
+      const key = canonicalReportKey(report);
+      const previous = merged.get(key);
+      if (!previous) {
+        merged.set(key, { ...report });
+        continue;
+      }
+      merged.set(key, {
+        ...previous,
+        ...report,
+        url: previous.url || report.url || "",
+        provenance: report.provenance || previous.provenance
+      });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+async function fetchBrowserReportInventory(tabId, crNo) {
+  const existing = await probeNimsTab(tabId);
+  let inventoryTabId = tabId;
+  let temporaryTabId = null;
+  let reportFrameId = null;
+
+  if (existing.reportFrame) {
+    const displayedCrNo = String(existing.reportFrame.patient && existing.reportFrame.patient.crNo || "").replace(/\D/g, "");
+    if (displayedCrNo === crNo) reportFrameId = existing.reportFrame.frameId;
+  }
+
+  try {
+    if (reportFrameId === null) {
+      // Isolate report inventory from the Trends tab used by the structured API.
+      // The inactive tab shares the already-authenticated NIMS browser session.
+      const created = await chrome.tabs.create({ url: NIMS_LOGIN_URL_DASHBOARD, active: false });
+      if (!created.id) throw new Error("Unable to open NIMS source-report inventory.");
+      temporaryTabId = created.id;
+      inventoryTabId = created.id;
+      await waitForTabCompleteSafe(inventoryTabId);
+
+      const crFrameId = await findCrFrame(inventoryTabId);
+      let submitted;
+      try {
+        submitted = await chrome.tabs.sendMessage(
+          inventoryTabId,
+          { type: "NIMS_BRIDGE_SUBMIT_CR", crNo },
+          { frameId: crFrameId }
+        );
+      } catch (error) {
+        if (!/back\/forward cache|message channel is closed/i.test(String(error && error.message || ""))) throw error;
+        submitted = { ok: true };
+      }
+      if (!submitted || submitted.ok === false) throw new Error((submitted && submitted.error) || "Unable to submit CR number for report inventory.");
+      reportFrameId = await waitForReportFrame(inventoryTabId);
+    }
+
+    const extracted = await chrome.tabs.sendMessage(
+      inventoryTabId,
+      { type: "NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA" },
+      { frameId: reportFrameId }
+    );
+    const returnedCrNo = String(extracted && extracted.patient && extracted.patient.crNo || "").replace(/\D/g, "");
+    if ((extracted && extracted.patient && extracted.patient.identityConflict) || (returnedCrNo && returnedCrNo !== crNo)) {
+      const error = new Error("NIMS identity verification failed while loading source reports.");
+      error.code = "NIMS_IDENTITY_MISMATCH";
+      throw error;
+    }
+    if (!returnedCrNo) {
+      const error = new Error("NIMS source-report page did not expose a verifiable CR number.");
+      error.code = "NIMS_IDENTITY_UNVERIFIED";
+      throw error;
+    }
+
+    return {
+      reports: Array.isArray(extracted && extracted.reports) ? extracted.reports : [],
+      reportCount: Number(extracted && extracted.reportCount || 0),
+      linkedReportCount: Number(extracted && extracted.linkedReportCount || 0)
+    };
+  } finally {
+    if (temporaryTabId) chrome.tabs.remove(temporaryTabId).catch(() => {});
+  }
+}
+async function enrichBulkReportInventory(tabId, crNo, restReports) {
+  const current = Array.isArray(restReports) ? restReports : [];
+  const directCount = current.filter(report => report && report.url).length;
+  if (current.length && directCount === current.length) {
+    return { reports: current, source: "report_list_rest", browserUsed: false };
+  }
+  try {
+    const browser = await fetchBrowserReportInventory(tabId, crNo);
+    return {
+      reports: mergeReportInventories(current, browser.reports),
+      source: "authenticated_report_inventory",
+      browserUsed: true,
+      browserReportCount: browser.reportCount,
+      browserLinkedReportCount: browser.linkedReportCount
+    };
+  } catch (error) {
+    if (error && error.code === "NIMS_IDENTITY_MISMATCH") throw error;
+    return {
+      reports: current,
+      source: current.length ? "report_list_rest_partial" : "report_inventory_unavailable",
+      browserUsed: true,
+      error: error && error.message ? error.message : "Source-report inventory unavailable."
+    };
+  }
+}
+
 async function fetchStructuredBulkResults(tabId, crNo) {
   const opened = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BULK_OPEN_TRENDS" });
   if (!opened || !opened.ok) throw new Error((opened && opened.error) || "Unable to open NIMS Investigation Trends.");
@@ -1356,7 +1474,9 @@ async function fetchStructuredBulkResults(tabId, crNo) {
   }
 
   const rawBulk = await capturePromise;
-  const reportIndex = await optionalBulkReportMetadata(crNo);
+  const restReportIndex = await optionalBulkReportMetadata(crNo);
+  const inventory = await enrichBulkReportInventory(tabId, crNo, restReportIndex);
+  const reportIndex = inventory.reports;
   const bundle = self.NimsBulkNormalizer.normalizeBulk(rawBulk, crNo, {
     patient: run.value && run.value.patient ? run.value.patient : { crNo },
     reportIndex
@@ -1377,7 +1497,15 @@ async function fetchStructuredBulkResults(tabId, crNo) {
   bundle.coverage = {
     ...(bundle.coverage || {}),
     reportInventoryAvailable: reportIndex.length > 0,
+    reportInventorySource: inventory.source,
+    linkedReportCount: reportIndex.filter(report => report && report.url).length,
     structuredApiResultCount: Array.isArray(bundle.results) ? bundle.results.length : 0
+  };
+  bundle.reportInventory = {
+    source: inventory.source,
+    browserUsed: Boolean(inventory.browserUsed),
+    reportCount: reportIndex.length,
+    linkedReportCount: reportIndex.filter(report => report && report.url).length
   };
   return bundle;
 }

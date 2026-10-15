@@ -35,7 +35,7 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.6.8"
+          assert m["version"] == "0.6.9"
           for entry in m["content_scripts"]:
             if entry.get("match_origin_as_fallback"):
               assert entry.get("all_frames") is True
