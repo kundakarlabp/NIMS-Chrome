@@ -452,6 +452,8 @@ class LoginGateActivity : ComponentActivity() {
         internal const val EXTRA_VERIFIED_LOGIN = "nims_verified_login"
         internal const val EXTRA_HANDOFF_URL = "nims_handoff_url"
         internal const val EXTRA_PENDING_CR = "nims_pending_cr"
+        // Compatibility symbol for legacy source files; relay is not declared or exposed in this APK.
+        internal const val EXTRA_RELAY_JOB_ID = "nims_relay_job_id"
 
         private const val NIMS_LOGIN_URL = "https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action"
         private const val CR_RESULTS_URL = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/viewcrnowisereportprocess.cnt"
