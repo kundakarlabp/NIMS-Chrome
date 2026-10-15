@@ -120,7 +120,7 @@ class ReportViewerActivity : Activity() {
                     response.headers("Set-Cookie").forEach {
                         runCatching { CookieManager.getInstance().setCookie(response.request.url.toString(), it) }
                     }
-                    val bytes = response.body?.bytes().orEmpty()
+                    val bytes: ByteArray = response.body?.bytes() ?: ByteArray(0)
                     val contentType = response.header("Content-Type").orEmpty().lowercase()
                     if (response.code == 401 || response.code == 403 || bytes.isEmpty()) {
                         throw IllegalStateException("NIMS report could not be opened. Login again and retry.")
