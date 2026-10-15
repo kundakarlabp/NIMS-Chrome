@@ -84,13 +84,27 @@
     const expired = /session\s*(?:has\s*)?expired|invalid\s*session|not a authenticated user|please\s*login\s*again|session\s*timeout/i.test(text);
     const protectedRoute = /\/(?:HISInvestigationG5|HIS|hislogin|HISUtilities|HBIMS)(?:\/|$)/i.test(pathname) ||
       /\/AHIMSG5\/hislogin\/transactions(?:\/|$)/i.test(pathname);
-    const shell = menuPresent || /home\s*menu|investigation|welcome|e-?sushrut/i.test(text);
+    const welcomeEvidence = /welcome\s*,|welcome\s+[^\n]{2,80}/i.test(text);
+    const navEvidence = /\bregistration\b.*\bopd\b.*\binvestigation\b/i.test(text);
+    const shell = menuPresent || welcomeEvidence || navEvidence || /home\s*menu|logout|sign\s*out/i.test(text);
+
+    // NIMS can keep the top-level URL at loginLogin.action even after replacing
+    // the page with the authenticated e-Sushrut frameset. Therefore URL alone
+    // must never override strong authenticated-shell evidence.
+    const authenticated = Boolean(!loginForm && !expired && (protectedRoute || shell));
+
     return {
       href,
+      pathname,
+      loginRoute,
       loginForm,
       sessionExpired: expired,
-      authenticated: Boolean(!loginForm && !expired && !loginRoute && (protectedRoute || shell)),
+      authenticated,
+      shellEvidence: shell,
+      welcomeEvidence,
+      navEvidence,
       menuPresent,
+      documentCount: docs.length,
       trendFramePresent: Boolean(document.getElementById(UI.trendFrameId))
     };
   }
@@ -111,23 +125,39 @@
       if (frame?.contentDocument?.querySelector(UI.crInput)) return frame;
     } catch {}
 
-    let menuDoc = null;
-    try { menuDoc = document.querySelector(UI.menuFrame)?.contentDocument || null; } catch {}
+    const docs = () => collectDocuments();
+    const menuDocument = () => {
+      for (const doc of docs()) {
+        try {
+          const frame = doc.querySelector(UI.menuFrame);
+          if (frame?.contentDocument) return frame.contentDocument;
+        } catch {}
+      }
+      return null;
+    };
+    const findAcrossDocs = (selector, labels) => {
+      for (const doc of docs()) {
+        try {
+          const found = textExact(doc, selector, labels);
+          if (found) return found;
+        } catch {}
+      }
+      return null;
+    };
 
+    let menuDoc = menuDocument();
     let trendLink = menuDoc ? textExact(menuDoc, 'a', LABELS.trends) : null;
     if (!trendLink) {
       const investigation =
-        textExact(document, 'a', LABELS.investigation) ||
-        textExact(document, '[role="tab"]', LABELS.investigation) ||
-        textExact(document, 'button', LABELS.investigation);
+        findAcrossDocs('a', LABELS.investigation) ||
+        findAcrossDocs('[role="tab"]', LABELS.investigation) ||
+        findAcrossDocs('button', LABELS.investigation);
       if (!investigation) throw new Error('NIMS Investigation menu was not found.');
       investigation.click();
 
       trendLink = await waitFor(() => {
-        try {
-          menuDoc = document.querySelector(UI.menuFrame)?.contentDocument || null;
-          return menuDoc ? textExact(menuDoc, 'a', LABELS.trends) : null;
-        } catch { return null; }
+        menuDoc = menuDocument();
+        return menuDoc ? textExact(menuDoc, 'a', LABELS.trends) : null;
       }, 'CR trends service', 22000);
     }
 

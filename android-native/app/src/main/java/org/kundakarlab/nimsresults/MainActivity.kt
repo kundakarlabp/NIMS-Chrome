@@ -1,11 +1,15 @@
 package org.kundakarlab.nimsresults
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,8 +29,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -143,9 +150,29 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         if (sessionState == SessionState.CONNECTED) {
             startFetch(cr)
-        } else {
-            pendingCrAfterLogin = cr
-            openLogin()
+            return
+        }
+
+        pendingCrAfterLogin = cr
+        sessionState = SessionState.CHECKING
+        loadStage = LoadStage.CHECKING_SESSION
+        statusText = "Checking the existing NIMS session…"
+        engine.checkSession { state ->
+            runOnUiThread {
+                if (pendingCrAfterLogin != cr) return@runOnUiThread
+                if (state == SessionState.CONNECTED) {
+                    pendingCrAfterLogin = ""
+                    startFetch(cr)
+                } else {
+                    loadStage = LoadStage.IDLE
+                    statusText = if (state == SessionState.EXPIRED) {
+                        "NIMS session expired. Login once to continue."
+                    } else {
+                        "NIMS login is required."
+                    }
+                    openLogin()
+                }
+            }
         }
     }
 
@@ -171,13 +198,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun refreshCurrent() {
         val cr = bundle?.patient?.crNo?.takeIf { it.matches(Regex("""\d{15}""")) } ?: crInput
         crInput = cr
-        if (cr.matches(Regex("""\d{15}"""))) {
-            if (sessionState == SessionState.CONNECTED) startFetch(cr)
-            else {
-                pendingCrAfterLogin = cr
-                openLogin()
-            }
-        }
+        if (cr.matches(Regex("""\d{15}"""))) requestFetch()
     }
 
     private fun openLogin() {
@@ -301,6 +322,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    private fun diagnosticsText(): String {
+        val current = bundle
+        return buildString {
+            appendLine("NIMS Results diagnostics")
+            appendLine("app.version=${BuildConfig.VERSION_NAME}")
+            appendLine("app.sessionState=$sessionState")
+            appendLine("app.loadStage=$loadStage")
+            appendLine("app.status=$statusText")
+            appendLine("app.crInputLength=${crInput.length}")
+            appendLine("app.activeCr=${activeCr.ifBlank { "none" }}")
+            appendLine("app.pendingCrAfterLogin=${pendingCrAfterLogin.isNotBlank()}")
+            appendLine("app.hasBundle=${current != null}")
+            appendLine("app.resultCount=${current?.results?.size ?: 0}")
+            appendLine("app.reportCount=${current?.reports?.size ?: 0}")
+            append(engine.safeDiagnostics())
+        }
+    }
+
+    private fun copyDiagnostics() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS diagnostics", diagnosticsText()))
+        Toast.makeText(this, "Safe diagnostics copied", Toast.LENGTH_SHORT).show()
+    }
+
     private fun openReport(url: String) {
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) return
         startActivity(Intent(this, ReportActivity::class.java).putExtra(ReportActivity.EXTRA_URL, url))
@@ -325,6 +370,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
+                        .navigationBarsPadding()
                 ) {
                     ConnectionPanel()
                     if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
@@ -355,10 +401,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun AppHeader() {
-        Surface(color = Color(0xFF0C2D4C), shadowElevation = 4.dp) {
+        Surface(
+            color = Color(0xFF0C2D4C),
+            shadowElevation = 4.dp
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -388,21 +438,33 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun ConnectionPanel() {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.White)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(statusText, fontSize = 13.sp, color = Color(0xFF33475B))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(statusText, fontSize = 13.sp, color = Color(0xFF33475B))
+                }
+                if (sessionState != SessionState.CONNECTED) {
+                    Button(onClick = { openLogin() }) { Text("Login") }
+                } else {
+                    TextButton(onClick = { engine.checkSession() }) { Text("Check") }
+                    TextButton(onClick = { logout() }) { Text("Logout") }
+                }
             }
-            if (sessionState != SessionState.CONNECTED) {
-                Button(onClick = { openLogin() }) { Text("Login") }
-            } else {
-                TextButton(onClick = { engine.checkSession() }) { Text("Check") }
-                TextButton(onClick = { logout() }) { Text("Logout") }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = { copyDiagnostics() }) {
+                    Text("Copy diagnostics")
+                }
             }
         }
     }
@@ -419,32 +481,63 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             Column(modifier = Modifier.padding(12.dp)) {
                 Text("CR NUMBER", fontSize = 11.sp, color = Color(0xFF66788A), fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(5.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = localCr,
-                        onValueChange = {
-                            val next = it.filter(Char::isDigit).take(15)
-                            localCr = next
-                            crInput = next
-                        },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        placeholder = { Text("15-digit CR number") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            crInput = localCr
-                            requestFetch()
-                        },
-                        enabled = localCr.length == 15 && loadStage in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)
-                    ) {
-                        if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                            Spacer(Modifier.width(6.dp))
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val compact = maxWidth < 560.dp
+                    if (compact) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = localCr,
+                                onValueChange = {
+                                    val next = it.filter(Char::isDigit).take(15)
+                                    localCr = next
+                                    crInput = next
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                placeholder = { Text("15-digit CR number") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    crInput = localCr
+                                    requestFetch()
+                                },
+                                enabled = localCr.length == 15 && loadStage in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(if (bundle?.patient?.crNo == localCr) "Refresh results" else "Get results")
+                            }
                         }
-                        Text(if (bundle?.patient?.crNo == localCr) "Refresh" else "Get results")
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = localCr,
+                                onValueChange = {
+                                    val next = it.filter(Char::isDigit).take(15)
+                                    localCr = next
+                                    crInput = next
+                                },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                placeholder = { Text("15-digit CR number") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    crInput = localCr
+                                    requestFetch()
+                                },
+                                enabled = localCr.length == 15 && loadStage in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)
+                            ) {
+                                Text(if (bundle?.patient?.crNo == localCr) "Refresh" else "Get results")
+                            }
+                        }
                     }
                 }
             }
