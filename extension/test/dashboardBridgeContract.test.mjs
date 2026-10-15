@@ -9,7 +9,7 @@ const background = fs.readFileSync(new URL('../src/background.js', import.meta.u
 const processor = fs.readFileSync(new URL('../src/contentScript.js', import.meta.url), 'utf8');
 
 test('manifest contains only dashboard retrieval runtime surfaces', () => {
-  assert.equal(manifest.version, '0.6.3');
+  assert.equal(manifest.version, '0.6.4');
   assert.equal(manifest.side_panel, undefined);
   assert.equal(manifest.action, undefined);
   const files = manifest.content_scripts.flatMap(entry => entry.js || []);
@@ -17,6 +17,20 @@ test('manifest contains only dashboard retrieval runtime surfaces', () => {
   assert.ok(files.includes('src/contentUtils.js'));
   assert.ok(files.includes('src/contentScript.js'));
   assert.ok(files.includes('src/nimsSessionBridge.js'));
+});
+
+test('Chrome match_origin_as_fallback content scripts use wildcard-only paths', () => {
+  const fallbackScripts = manifest.content_scripts.filter(script => script.match_origin_as_fallback);
+  assert.equal(fallbackScripts.length, 2);
+  for (const entry of fallbackScripts) {
+    assert.equal(entry.all_frames, true);
+    assert.deepEqual(entry.matches, ['https://nimsts.edu.in/*', 'https://www.nimsts.edu.in/*']);
+    assert.ok(entry.matches.every(pattern => /^https:\/\/[^/]+\/\*$/.test(pattern)),
+      'Chrome requires /*, not a subdirectory, when match_origin_as_fallback is enabled');
+  }
+  const dashboard = manifest.content_scripts.find(entry => entry.js.includes('src/dashboardBridge.js'));
+  assert.ok(dashboard);
+  assert.equal(Boolean(dashboard.match_origin_as_fallback), false);
 });
 
 test('dashboard origin is explicitly bridged', () => {
