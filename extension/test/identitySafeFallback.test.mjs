@@ -24,6 +24,7 @@ test('missing REST CR uses verified browser fallback rather than stopping', asyn
     getDashboardSessionStatus: async () => ({ loggedIn: true }),
     ensureDashboardWorkerTab: async () => 42,
     pushDashboardEvent: async type => { events.push(type); },
+    tryBulkApiForDashboard: async () => ({ ok: false, code: 'NIMS_BULK_FAILED', reason: 'Bulk fixture unavailable' }),
     tryRestApiForDashboard: async () => ({ ok: false, code: 'NIMS_IDENTITY_UNVERIFIED', reason: 'API did not confirm CR' }),
     fetchCrForDashboardLegacy: async requested => {
       assert.equal(requested, CR);
@@ -45,6 +46,7 @@ test('explicit REST identity mismatch prevents wrong-patient browser retrieval',
     getDashboardSessionStatus: async () => ({ loggedIn: true }),
     ensureDashboardWorkerTab: async () => 42,
     pushDashboardEvent: async () => {},
+    tryBulkApiForDashboard: async () => ({ ok: false, code: 'NIMS_BULK_FAILED', reason: 'Bulk fixture unavailable' }),
     tryRestApiForDashboard: async () => ({ ok: false, code: 'NIMS_IDENTITY_MISMATCH' }),
     fetchCrForDashboardLegacy: async () => { invoked += 1; }
   });
