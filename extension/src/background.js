@@ -138,7 +138,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "NIMS_DASHBOARD_FETCH_CR") {
-    fetchCrForDashboard(message.crNo, sender).then(sendResponse);
+    fetchCrForDashboard(message.crNo, sender, message.requestId).then(sendResponse);
     return true;
   }
 
@@ -1368,12 +1368,17 @@ async function fetchStructuredBulkResults(tabId, crNo) {
   }
   bundle.results = (bundle.results || []).map(result => ({
     ...result,
-    provenance: { source: "nims" }
+    provenance: { ...(result.provenance || {}), source: "nims", retrieval: "nims_bulk_api" }
   }));
   bundle.reports = (bundle.reports || []).map(report => ({
     ...report,
-    provenance: { source: "nims" }
+    provenance: { ...(report.provenance || {}), source: "nims", retrieval: "nims_rest_report_list" }
   }));
+  bundle.coverage = {
+    ...(bundle.coverage || {}),
+    reportInventoryAvailable: reportIndex.length > 0,
+    structuredApiResultCount: Array.isArray(bundle.results) ? bundle.results.length : 0
+  };
   return bundle;
 }
 
@@ -1488,13 +1493,21 @@ async function tryRestApiForDashboard(crNo) {
 
     const parsedReports = [];
     const sourceReports = [];
+    const reportDiagnostics = { attempted: usable.length, fetchFailures: 0, classificationFailures: 0, parseFailures: 0, parsed: 0 };
     for (const report of usable) {
       try {
         const response = await fetch(report.resolvedUrl, { method: "GET", credentials: "include", redirect: "follow" });
         const contentType = response.headers.get("content-type") || "";
         const buffer = await response.arrayBuffer();
         const classified = classifyReportResponse(buffer, contentType, response.status, safeHostPath(response.url));
-        if (!response.ok || directFetchErrorForClassification(classified.classification)) continue;
+        if (!response.ok) {
+          reportDiagnostics.fetchFailures += 1;
+          continue;
+        }
+        if (directFetchErrorForClassification(classified.classification)) {
+          reportDiagnostics.classificationFailures += 1;
+          continue;
+        }
         const parsed = await callHelper("/parse-report", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1509,9 +1522,15 @@ async function tryRestApiForDashboard(crNo) {
         if (parsed && parsed.ok && parsed.data) {
           parsedReports.push(parsed.data);
           sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department });
+          reportDiagnostics.parsed += 1;
+        } else {
+          reportDiagnostics.parseFailures += 1;
         }
-      } catch {}
+      } catch {
+        reportDiagnostics.fetchFailures += 1;
+      }
     }
+    Object.assign(diagnostics, reportDiagnostics);
     if (!parsedReports.length) return { ok: false, fallback: true, diagnostics, reason: "REST discovery succeeded but no report parsed through the verified report URLs." };
     const extracted = { patient: { name: reportList.patientName || "", crNo: reportList.returnedCrNo || crNo }, reports: sourceReports };
     const bundle = bundleFromParsedReports(crNo, extracted, { parsedReports });
@@ -1580,24 +1599,52 @@ async function fetchCrForDashboardLegacy(crNo) {
   return bundle;
 }
 
-async function fetchCrForDashboard(rawCrNo, sender) {
+function normalizeDashboardRequestId(value) {
+  const raw = String(value || "").trim();
+  if (/^[A-Za-z0-9._:-]{8,128}$/.test(raw)) return raw;
+  return "dash-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+async function fetchCrForDashboard(rawCrNo, sender, rawRequestId) {
   const crNo = String(rawCrNo || "").replace(/\D/g, "");
-  if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number." };
+  const requestId = normalizeDashboardRequestId(rawRequestId);
+  if (!/^\d{15}$/.test(crNo)) return { ok: false, error: "Enter the 15-digit NIMS CR number.", requestId };
+  const startedAt = Date.now();
+  const attempts = [];
+  const context = { requestId, crNo };
+  const stage = async (name, detail) => pushDashboardEvent("KBP_NIMS_RETRIEVAL_STAGE", {
+    ...context,
+    stage: name,
+    detail: detail || ""
+  });
   try {
     const session = await getDashboardSessionStatus();
     if (!session.loggedIn) {
       await openDashboardLogin(sender);
       await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
+        ...context,
         state: "signing_in",
         preferredSource: "nims_bulk_api"
       });
-      return { ok: true, pendingAuth: true };
+      return { ok: true, pendingAuth: true, requestId };
     }
-    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", { crNo, preferredSource: "nims_bulk_api" });
-    // REST remains inside an already authenticated clinician NIMS session.
-    // Strategy order: structured Custom Sheet API -> reportList REST -> verified browser fallback.
+
+    await pushDashboardEvent("KBP_NIMS_FETCH_STARTED", {
+      ...context,
+      preferredSource: "nims_bulk_api"
+    });
+    await stage("structured_api", "Opening NIMS Investigation Trends and requesting structured values.");
+
     const workerTabId = await ensureDashboardWorkerTab();
+    const bulkStarted = Date.now();
     const bulk = await tryBulkApiForDashboard(workerTabId, crNo);
+    attempts.push({
+      source: "nims_bulk_api",
+      ok: Boolean(bulk.ok),
+      code: bulk.ok ? "" : (bulk.code || "NIMS_BULK_FAILED"),
+      durationMs: Date.now() - bulkStarted,
+      diagnostics: bulk.diagnostics || {}
+    });
     if (!bulk.ok && bulk.code === "NIMS_IDENTITY_MISMATCH") {
       const mismatch = new Error("NIMS identity verification failed: the structured API returned a different CR number. Results were not retrieved.");
       mismatch.code = bulk.code;
@@ -1610,9 +1657,16 @@ async function fetchCrForDashboard(rawCrNo, sender) {
       bundle = bulk.bundle;
       source = "nims_bulk_api";
     } else {
+      await stage("report_list", "Structured values were unavailable; checking verified report-list REST retrieval.");
+      const restStarted = Date.now();
       const rest = await tryRestApiForDashboard(crNo);
-      // Missing reportList identity may still be safely verified by the browser.
-      // An explicit different CR must always fail closed.
+      attempts.push({
+        source: "nims_rest_api",
+        ok: Boolean(rest.ok),
+        code: rest.ok ? "" : (rest.code || "NIMS_REST_UNAVAILABLE"),
+        durationMs: Date.now() - restStarted,
+        diagnostics: rest.diagnostics || {}
+      });
       if (!rest.ok && rest.code === "NIMS_IDENTITY_MISMATCH") {
         const mismatch = new Error("NIMS identity verification failed: the report-list API returned a different CR number. Results were not retrieved.");
         mismatch.code = rest.code;
@@ -1623,6 +1677,7 @@ async function fetchCrForDashboard(rawCrNo, sender) {
         source = "nims_rest_api";
       } else {
         await pushDashboardEvent("KBP_NIMS_SOURCE_FALLBACK", {
+          ...context,
           from: "nims_api",
           to: "authenticated_browser_fallback",
           reason: [bulk.reason, rest.reason].filter(Boolean).join(" | ") || "NIMS API paths unavailable.",
@@ -1631,24 +1686,74 @@ async function fetchCrForDashboard(rawCrNo, sender) {
             reportList: rest.diagnostics || { code: rest.code || "" }
           }
         });
+        await stage("browser_fallback", "Using authenticated CR-wise browser retrieval.");
+        const browserStarted = Date.now();
         bundle = await fetchCrForDashboardLegacy(crNo);
+        attempts.push({
+          source: "authenticated_browser_fallback",
+          ok: true,
+          code: "",
+          durationMs: Date.now() - browserStarted,
+          diagnostics: {}
+        });
         source = "authenticated_browser_fallback";
       }
     }
-    await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", { payload: bundle });
-    return { ok: true, source, resultCount: bundle.results.length, reportCount: bundle.reports.length };
+
+    const completedAt = new Date().toISOString();
+    bundle.source = source;
+    bundle.retrievedAt = bundle.retrievedAt || completedAt;
+    bundle.retrieval = {
+      strategy: source,
+      completedAt,
+      durationMs: Date.now() - startedAt,
+      attempts: attempts.map(item => ({
+        source: item.source,
+        ok: item.ok,
+        code: item.code,
+        durationMs: item.durationMs,
+        diagnostics: item.diagnostics
+      }))
+    };
+    bundle.coverage = {
+      ...(bundle.coverage || {}),
+      resultCount: Array.isArray(bundle.results) ? bundle.results.length : 0,
+      reportCount: Array.isArray(bundle.reports) ? bundle.reports.length : 0,
+      completenessScope: source === "nims_bulk_api"
+        ? "structured_values_plus_verified_report_inventory_when_available"
+        : "source_dependent"
+    };
+
+    await pushDashboardEvent("KBP_NIMS_BULK_RESULTS", {
+      ...context,
+      payload: bundle,
+      diagnostics: bundle.retrieval
+    });
+    return {
+      ok: true,
+      requestId,
+      source,
+      resultCount: bundle.results.length,
+      reportCount: bundle.reports.length,
+      durationMs: Date.now() - startedAt
+    };
   } catch (error) {
     const message = error && error.message ? error.message : "NIMS retrieval failed.";
     if (/session.*not authenticated|authentication required|sign in again|session expired|please login again/i.test(message)) {
       await openDashboardLogin(sender);
       await pushDashboardEvent("KBP_NIMS_AUTH_REQUIRED", {
+        ...context,
         state: "signing_in",
         reason: "session_expired",
         preferredSource: "nims_bulk_api"
       });
-      return { ok: true, pendingAuth: true };
+      return { ok: true, pendingAuth: true, requestId };
     }
-    await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", { error: message });
-    return { ok: false, error: message };
+    await pushDashboardEvent("KBP_NIMS_FETCH_ERROR", {
+      ...context,
+      error: message,
+      diagnostics: { durationMs: Date.now() - startedAt, attempts }
+    });
+    return { ok: false, requestId, error: message };
   }
 }
