@@ -98,4 +98,39 @@ class BulkParserTest {
         }
         assertTrue(failed)
     }
+
+    @Test
+    fun onlyClinicallyUsefulNumericParametersAppearInTrends() {
+        val sample = LabResult("1","AEROBIC CULTURE","Sample Processed:","2025-06-23","80",80.0)
+        val wbc = LabResult("2","CBC","WBC","2025-06-23","10.4",10.4,"10^3/uL")
+        val lowCount = LabResult("3","Blood culture","Test Done By","2025-06-23","-1",-1.0)
+        assertTrue(!ClinicalResultRules.isTrendEligible(sample))
+        assertTrue(!ClinicalResultRules.isTrendEligible(lowCount))
+        assertTrue(ClinicalResultRules.isTrendEligible(wbc))
+        assertTrue(ClinicalResultRules.inWindow("2025-06-23","2025-07-15",30))
+        assertTrue(!ClinicalResultRules.inWindow("2025-06-23","2025-07-15",7))
+    }
+
+    @Test
+    fun salmonellaSensitivityAndResistanceAreNotFlattenedTogether() {
+        val raw = "CULTURE REPORT CULTURE SHOWS GROWTH OF SALMONELLA SPECIES " +
+            "SENSITIVITY REPORT CEFOTAXIME CEFTRIAXONE CIPROFLOXACIN LEVOFLOXACIN COTRIMOXAZOLE " +
+            "RESISTANCE REPORT NIL ADVICE TO SEND BLOOD CULTURES"
+        val summary = CultureNarrative.parse(raw)
+        assertTrue(summary.culture.contains("SALMONELLA SPECIES"))
+        assertTrue(summary.susceptible.contains("CEFTRIAXONE"))
+        assertTrue(!summary.susceptible.contains("RESISTANCE REPORT"))
+        assertEquals("NIL", summary.resistant)
+        assertTrue(summary.advice.contains("SEND BLOOD CULTURES"))
+    }
+
+    @Test
+    fun nonSectionedCultureRetainsFullNarrativeAndDoesNotInventAst() {
+        val raw = "NO GROWTH AFTER 5 DAYS; SENSITIVITY NOT APPLICABLE"
+        val result = CultureNarrative.parse(raw)
+        assertEquals(raw, result.culture)
+        assertEquals("", result.susceptible)
+        assertEquals("", result.resistant)
+    }
+
 }
