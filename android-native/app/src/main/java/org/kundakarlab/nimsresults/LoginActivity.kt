@@ -262,7 +262,7 @@ class LoginActivity : Activity() {
               try {
                 for (const el of doc.querySelectorAll('a,button,input[type="button"],input[type="submit"]')) {
                   const label = (el.innerText || el.textContent || el.value || '').trim();
-                  if (/^(log\\s*out|logout|sign\\s*out)$/i.test(label)) {
+                  if (/^(log\s*out|logout|sign\s*out)$/i.test(label)) {
                     el.click();
                     return 'clicked';
                   }
