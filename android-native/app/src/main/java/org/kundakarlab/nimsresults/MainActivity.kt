@@ -1098,76 +1098,121 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+
     @Composable
     private fun TrendsScreen(current: ClinicalBundle) {
-        val series = current.results
-            .filter { it.numericValue != null && it.parameter.isNotBlank() }
-            .groupBy { it.parameter }
-            .filterValues { it.size >= 2 }
-            .toList()
-            .sortedByDescending { it.second.size }
-
-        var selected by remember(current.patient.crNo) { mutableStateOf(series.firstOrNull()?.first.orEmpty()) }
-        val selectedRows = series.firstOrNull { it.first == selected }?.second
-            ?.sortedBy { BulkParser.dateKey(it.date) }
-            .orEmpty()
-
+        val series = remember(current.results) {
+            current.results.filter { ClinicalResultRules.isTrendEligible(it) }
+                .groupBy { ClinicalResultRules.parameterKey(it) }
+                .mapValues { (_, values) ->
+                    values.sortedByDescending { BulkParser.dateKey(it.date) }
+                        .distinctBy { it.date }.sortedBy { BulkParser.dateKey(it.date) }
+                }
+                .filterValues { it.size >= 2 }
+                .toList().sortedByDescending { it.second.size }
+        }
+        var chosen by remember(current.patient.crNo) {
+            mutableStateOf(series.firstOrNull()?.first.orEmpty())
+        }
+        var span by remember(current.patient.crNo) { mutableStateOf("All") }
+        val selected = series.firstOrNull { it.first == chosen }
+            ?: series.firstOrNull()
+        val period: Long? = when (span) {
+            "7D" -> 7L
+            "30D" -> 30L
+            "90D" -> 90L
+            "1Y" -> 365L
+            else -> null
+        }
+        val latest = selected?.second?.lastOrNull()?.date.orEmpty()
+        val rows = selected?.second?.filter {
+            ClinicalResultRules.inWindow(it.date, latest, period)
+        }.orEmpty()
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            item { Text("Longitudinal trends", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
             item {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    series.take(18).forEach { (name, rows) ->
-                        FilterChip(
-                            selected = selected == name,
-                            onClick = { selected = name },
-                            label = { Text("$name (${rows.size})") }
-                        )
+                Text("Clinical laboratory trends", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Only validated quantitative lab parameters are plotted. Administrative fields, specimen codes and processing counts are excluded.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    series.forEach { (key, measurements) ->
+                        val label = measurements.first().parameter
+                        FilterChip(selected = key == selected?.first,
+                            onClick = { chosen = key },
+                            label = { Text(label, fontSize = 11.sp, maxLines = 1) })
+                    }
+                }
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("7D", "30D", "90D", "1Y", "All").forEach { option ->
+                        FilterChip(selected = span == option, onClick = { span = option },
+                            label = { Text(option, fontSize = 11.sp) })
                     }
                 }
             }
-            if (selectedRows.size >= 2) {
+            if (rows.size >= 2) {
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(12.dp)) {
-                            Text(selected, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(10.dp))
-                            TrendChart(selectedRows, Modifier.fillMaxWidth().height(180.dp))
+                            val first = rows.first()
+                            val last = rows.last()
+                            Text(first.parameter + if (first.unit.isNotBlank()) " (" + first.unit + ")" else "",
+                                fontWeight = FontWeight.Bold)
+                            Text(rows.size.toString() + " measurements · " +
+                                first.date + " → " + last.date, fontSize = 11.sp,
+                                color = Color(0xFF66788A))
                             Spacer(Modifier.height(6.dp))
-                            val last = selectedRows.last()
-                            val first = selectedRows.first()
-                            Text("${first.date}: ${first.valueText}  →  ${last.date}: ${last.valueText}", fontSize = 12.sp, color = Color(0xFF486581))
+                            TrendChart(rows, Modifier.fillMaxWidth().height(180.dp))
+                            Text("Dates on the horizontal axis reflect actual elapsed time.",
+                                fontSize = 10.sp, color = Color(0xFF829AB1))
+                            Text("Latest: " + last.valueText + " · " + last.date,
+                                fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
-                items(selectedRows.reversed()) { row -> ResultRow(row) }
+                items(rows.reversed(), key = { it.id }) { row -> ResultRow(row) }
             } else {
-                item { Text("No numeric parameter has enough measurements for a trend.", color = Color(0xFF66788A)) }
+                item {
+                    Text(if (series.isEmpty()) "No eligible lab parameter has repeated numeric measurements."
+                         else "Fewer than two measurements in this date range. Select a longer interval.",
+                        color = Color(0xFF66788A))
+                }
             }
         }
     }
 
     @Composable
     private fun TrendChart(rows: List<LabResult>, modifier: Modifier = Modifier) {
-        val values = rows.mapNotNull { it.numericValue }
-        if (values.size < 2) return
+        val points = rows.mapNotNull { row ->
+            val day = runCatching {
+                java.time.LocalDate.parse(row.date).toEpochDay().toDouble()
+            }.getOrNull()
+            val value = row.numericValue
+            if (day != null && value != null) day to value else null
+        }
+        if (points.size < 2) return
+        val values = points.map { it.second }
         val min = values.minOrNull() ?: return
         val max = values.maxOrNull() ?: return
-        val range = (max - min).takeIf { it != 0.0 } ?: 1.0
-        Canvas(modifier = modifier.background(Color(0xFFF7FAFC), RoundedCornerShape(10.dp)).border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(10.dp))) {
+        val days = points.map { it.first }
+        val minDay = days.minOrNull() ?: return
+        val maxDay = days.maxOrNull() ?: return
+        val valueRange = (max - min).takeIf { it != 0.0 } ?: 1.0
+        val dayRange = (maxDay - minDay).takeIf { it != 0.0 } ?: 1.0
+        Canvas(modifier = modifier.background(Color(0xFFF7FAFC),
+            RoundedCornerShape(10.dp)).border(1.dp,
+            Color(0xFFE2E8F0), RoundedCornerShape(10.dp))) {
             val pad = 18f
             val usableW = size.width - 2 * pad
             val usableH = size.height - 2 * pad
             val path = Path()
-            values.forEachIndexed { index, value ->
-                val x = pad + usableW * index / (values.size - 1).coerceAtLeast(1)
-                val y = pad + usableH * (1f - ((value - min) / range).toFloat())
+            points.forEachIndexed { index, point ->
+                val x = pad + usableW * ((point.first - minDay) / dayRange).toFloat()
+                val y = pad + usableH * (1f - ((point.second - min) / valueRange).toFloat())
                 if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 drawCircle(Color(0xFF0B5CAB), radius = 4f, center = Offset(x, y))
             }
