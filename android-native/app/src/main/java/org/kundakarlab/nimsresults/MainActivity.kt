@@ -273,6 +273,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun logout() {
         cancelTimeout()
         vault.clear()
+        cacheDir.listFiles { file ->
+            file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
+        }?.forEach { it.delete() }
         bundle = null
         sessionState = SessionState.LOGIN_REQUIRED
         loadStage = LoadStage.IDLE
