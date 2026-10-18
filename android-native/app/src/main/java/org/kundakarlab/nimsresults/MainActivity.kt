@@ -361,6 +361,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             surfaceVariant = Color(0xFFEAF0F7),
             error = Color(0xFFB3261E)
         )
+        val current = bundle
+        var toolsOpen by remember(current?.patient?.crNo) { mutableStateOf(false) }
         MaterialTheme(colorScheme = colors) {
             Scaffold(
                 topBar = { AppHeader() },
@@ -372,16 +374,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         .padding(padding)
                         .navigationBarsPadding()
                 ) {
-                    ConnectionPanel()
+                    // Keep CR entry and connection tools accessible without permanently
+                    // occupying the clinical results viewport.
+                    if (current == null || toolsOpen) {
+                        ConnectionPanel()
+                        CrPanel()
+                    }
                     if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(statusText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+                            color = Color(0xFF486581), fontSize = 11.sp, maxLines = 2)
+                    } else if (loadStage == LoadStage.ERROR) {
+                        Text(statusText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+                            color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
-                    CrPanel()
-                    val current = bundle
                     if (current == null) {
                         EmptyHome()
                     } else {
-                        PatientStrip(current)
+                        PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
@@ -409,12 +419,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 21.sp)
-                    Text("Fast longitudinal investigations · cultures · reports", color = Color(0xFFC8D9E8), fontSize = 12.sp)
+                    Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
                 SessionBadge(sessionState)
             }
@@ -564,29 +573,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun PatientStrip(current: ClinicalBundle) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF))
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
+        Surface(color = Color(0xFFEFF6FF)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(current.patient.name.ifBlank { "Current patient" }, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color(0xFF102A43))
+                    Text(current.patient.name.ifBlank { "Current patient" },
+                        fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                        color = Color(0xFF102A43), maxLines = 1)
                     Text(
-                        listOfNotNull(
-                            "CR: ${current.patient.crNo}",
-                            current.patient.age.takeIf { it.isNotBlank() }?.let { "Age: $it" },
-                            current.patient.sex.takeIf { it.isNotBlank() }?.let { "Sex: $it" },
-                            "${current.results.size} results",
-                            "${current.reports.size} reports"
-                        ).joinToString(" · "),
-                        color = Color(0xFF486581),
-                        fontSize = 12.sp
+                        "CR " + current.patient.crNo + " · " + current.results.size +
+                            " results · " + current.reports.size + " PDFs",
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1
                     )
                 }
-                OutlinedButton(onClick = { refreshCurrent() }) { Text("Refresh") }
+                TextButton(onClick = { refreshCurrent() }) { Text("Refresh", fontSize = 12.sp) }
+                TextButton(onClick = onToggleTools) { Text("CR / Menu", fontSize = 12.sp) }
             }
         }
     }
@@ -627,7 +631,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             "Sodium" to listOf("sodium", "na")
         )
         val cards = wanted.mapNotNull { (label, aliases) ->
-            latestByParameter.entries.firstOrNull { (key, _) -> aliases.any { key.contains(it) } }?.value?.let { label to it }
+            latestByParameter.entries.firstOrNull { (key, _) -> aliases.any { key.contains(it) } }?.value?.takeIf { it.numericValue != null && it.valueText.length <= 24 }?.let { label to it }
         }
 
         LazyColumn(
@@ -665,7 +669,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     row.valueText + if (row.unit.isNotBlank()) " ${row.unit}" else "",
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
-                    color = abnormalColor(row.abnormal)
+                    color = abnormalColor(row.abnormal),
+                    maxLines = 1
                 )
                 Text(row.date, fontSize = 11.sp, color = Color(0xFF829AB1))
             }
@@ -710,13 +715,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (rows.isEmpty()) {
                 item { Text("No microbiology rows were identified in the structured result set.", color = Color(0xFF66788A)) }
             } else {
-                items(rows) { row ->
+                items(rows, key = { it.id }) { row ->
+                    var expanded by remember(current.patient.crNo, row.id) { mutableStateOf(false) }
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(row.test, fontWeight = FontWeight.Bold)
-                            Text(row.parameter, color = Color(0xFF486581), fontSize = 12.sp)
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text(row.test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+                            if (row.parameter.isNotBlank()) {
+                                Text(row.parameter, color = Color(0xFF486581), fontSize = 12.sp)
+                            }
                             Spacer(Modifier.height(4.dp))
-                            Text(row.valueText, fontSize = 14.sp)
+                            Text(row.valueText, fontSize = 14.sp, maxLines = if (expanded) Int.MAX_VALUE else 4)
+                            if (row.valueText.length > 180) {
+                                TextButton(onClick = { expanded = !expanded }) {
+                                    Text(if (expanded) "Show less" else "Read full result")
+                                }
+                            }
                             Text(row.date, color = Color(0xFF829AB1), fontSize = 11.sp)
                         }
                     }
