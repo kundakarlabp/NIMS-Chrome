@@ -10,7 +10,7 @@ class BulkParserTest {
         val raw = """
             {
               "status":1,
-              "crNo":"331012600350500",
+              "crNo":"123456789012345",
               "groups":[
                 {
                   "testName":"Complete Blood Count",
@@ -30,8 +30,8 @@ class BulkParserTest {
 
         val bundle = BulkParser.parse(
             raw,
-            "331012600350500",
-            PatientInfo(name = "Test", crNo = "331012600350500"),
+            "123456789012345",
+            PatientInfo(name = "Test", crNo = "123456789012345"),
             emptyList()
         )
 
@@ -44,7 +44,7 @@ class BulkParserTest {
     @Test
     fun narrativeNumbersNeverBecomeQuantitativeTrends() {
         val raw = """
-            {"status":1,"crNo":"331012600350500","groups":[
+            {"status":1,"crNo":"123456789012345","groups":[
               {"testName":"Culture","rows":[
                 {"parameterName":"Report","valuesByDate":{
                   "15-Oct-2026":"No growth after 48 hours. Final after 5 days",
@@ -56,11 +56,31 @@ class BulkParserTest {
               ]}
             ]}
         """.trimIndent()
-        val bundle = BulkParser.parse(raw, "331012600350500",
-            PatientInfo(crNo = "331012600350500"), emptyList())
+        val bundle = BulkParser.parse(raw, "123456789012345",
+            PatientInfo(crNo = "123456789012345"), emptyList())
         assertEquals(3, bundle.results.size)
         assertTrue(bundle.results.filter { it.test == "Culture" }.all { it.numericValue == null })
         assertEquals(12.5, bundle.results.first { it.test == "CBC" }.numericValue!!, 0.001)
+    }
+
+    @Test
+    fun preservesCultureFormattingAndLabSourceText() {
+        val raw = """
+            {"status":1,"crNo":"123456789012345","groups":[
+              {"testName":"Blood culture","rows":[
+                {"parameterName":"Result","valuesByDate":{
+                  "15-Oct-2026":"CULTURE REPORT &ndash; NO GROWTH<br>SENSITIVITY: Not provided"
+                }}
+              ]}
+            ]}
+        """.trimIndent()
+        val bundle = BulkParser.parse(raw, "123456789012345",
+            PatientInfo(crNo = "123456789012345"), emptyList())
+        val value = bundle.results.single().valueText
+        assertTrue(value.contains("–"))
+        assertTrue(value.contains("\n"))
+        assertTrue(value.contains("SENSITIVITY: Not provided"))
+        assertEquals(null, bundle.results.single().numericValue)
     }
 
     @Test
@@ -68,9 +88,9 @@ class BulkParserTest {
         var failed = false
         try {
             BulkParser.parse(
-                """{"status":1,"crNo":"331012600350501","groups":[{"testName":"RFT","rows":[{"parameterName":"Creatinine","valuesByDate":{"15-Oct-2026":"1.1"}}]}]}""",
-                "331012600350500",
-                PatientInfo(crNo = "331012600350500"),
+                """{"status":1,"crNo":"123456789012346","groups":[{"testName":"RFT","rows":[{"parameterName":"Creatinine","valuesByDate":{"15-Oct-2026":"1.1"}}]}]}""",
+                "123456789012345",
+                PatientInfo(crNo = "123456789012345"),
                 emptyList()
             )
         } catch (_: IllegalStateException) {
