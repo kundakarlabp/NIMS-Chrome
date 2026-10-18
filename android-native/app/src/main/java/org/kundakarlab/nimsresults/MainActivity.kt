@@ -672,26 +672,32 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
         Surface(color = Color(0xFFEFF6FF)) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(current.patient.name.ifBlank { "Current patient" },
-                        fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp,
                         color = Color(0xFF102A43), maxLines = 1)
-                    Text("CR " + current.patient.crNo,
-                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
-                    val sex = current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim()
-                    val demographics = listOf(current.patient.age, sex)
-                        .filter { it.isNotBlank() }.joinToString(" · ")
-                    Text(listOf(demographics,
-                        current.results.size.toString() + " results",
-                        current.reports.size.toString() + " PDFs")
-                        .filter { it.isNotBlank() }.joinToString(" · "),
-                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
+                    val sex = current.patient.sex
+                        .replace(Regex("(?i)age\\s*:.*"), "").trim()
+                    Text(
+                        listOf(
+                            "CR " + current.patient.crNo,
+                            current.patient.age,
+                            sex,
+                            current.results.size.toString() + " results",
+                            current.reports.size.toString() + " PDFs"
+                        ).filter { it.isNotBlank() }.joinToString(" · "),
+                        color = Color(0xFF486581), fontSize = 10.sp, maxLines = 2
+                    )
                 }
-                TextButton(onClick = { refreshCurrent() }) { Text("Refresh", fontSize = 12.sp) }
-                TextButton(onClick = onToggleTools) { Text("CR / Menu", fontSize = 12.sp) }
+                TextButton(onClick = { refreshCurrent() }) {
+                    Text("↻", fontSize = 21.sp)
+                }
+                TextButton(onClick = onToggleTools) {
+                    Text("CR ▾", fontSize = 12.sp)
+                }
             }
         }
     }
