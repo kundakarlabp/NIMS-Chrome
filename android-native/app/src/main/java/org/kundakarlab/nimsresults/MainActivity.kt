@@ -997,6 +997,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Column(Modifier.padding(10.dp)) {
                         Text(test + " · " + rows.size + " values", fontWeight = FontWeight.Bold,
                             fontSize = 14.sp, color = Color(0xFF102A43))
+                        if (Regex("(?i)blood grouping|antibody screening").containsMatchIn(test)) {
+                            Text("Source-coded result fields may not represent clinical values. Verify ABO/Rh and interpretation in the original PDF.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                        }
                         Text(dates.size.toString() + " dates · scroll horizontally for older values",
                             fontSize = 10.sp, color = Color(0xFF829AB1))
                         Spacer(Modifier.height(6.dp))
