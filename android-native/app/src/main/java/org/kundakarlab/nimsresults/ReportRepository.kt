@@ -36,17 +36,14 @@ class ReportRepository(
             emptyList()
         }
 
-        // REST is the preferred report inventory. Only open the slower NIMS
-        // HTML report page if REST has no rows or lacks usable PDF links.
-        // A failed optional enrichment must not hide already validated REST rows.
-        val shouldFallback = rest.isEmpty() || rest.any { it.url.isBlank() }
-        val html = if (shouldFallback) {
-            runCatching { loadHtml(crNo) }.getOrElse { error ->
-                if (error is IdentityMismatchException) throw error
-                if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
-                emptyList()
-            }
-        } else emptyList()
+        // REST is first, but a response containing only linked rows does not
+        // prove report-history completeness. Supplement it with NIMS HTML
+        // inventory in the background without holding up structured labs.
+        val html = runCatching { loadHtml(crNo) }.getOrElse { error ->
+            if (error is IdentityMismatchException) throw error
+            if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
+            emptyList()
+        }
 
         val merged = merge(rest, html)
         return Inventory(
@@ -148,7 +145,14 @@ class ReportRepository(
     private fun merge(a: List<ReportRef>, b: List<ReportRef>): List<ReportRef> {
         val map = linkedMapOf<String, ReportRef>()
         (a + b).forEach { report ->
-            val key = canonical(report.title) + "|" + report.date.trim().lowercase()
+            // Distinct same-day CBC/culture PDFs must not collapse into one
+            // merely because they share a test title and date.
+            val key = if (report.url.isNotBlank()) {
+                "pdf|" + report.url
+            } else {
+                "meta|" + canonical(report.title) + "|" +
+                    report.date.trim().lowercase() + "|" + report.id
+            }
             val previous = map[key]
             if (previous == null) map[key] = report
             else map[key] = previous.copy(
