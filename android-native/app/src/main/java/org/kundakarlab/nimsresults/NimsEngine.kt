@@ -34,6 +34,7 @@ class NimsEngine(
     private var pageReady = false
     private var pendingProbe: ((SessionState) -> Unit)? = null
     private var pendingRun: Pair<String, String>? = null
+    private var ambiguousProbeCount = 0
     @Volatile private var lastProbeJson: String = "{}"
 
     @Volatile
@@ -92,6 +93,7 @@ class NimsEngine(
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 pageReady = false
+                ambiguousProbeCount = 0
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -180,12 +182,31 @@ class NimsEngine(
             val json = decodeJsString(raw)
             val probe = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
             lastProbeJson = probe.toString()
+            // A bare login URL without a form is often an intermediate HIS
+            // frameset load, not evidence that the authenticated session died.
+            // Never claim CONNECTED from a cookie alone; retry before login.
+            val definite = probe.optBoolean("sessionExpired", false) ||
+                probe.optBoolean("authenticated", false) ||
+                probe.optBoolean("loginForm", false)
+            val hasCookie = CookieManager.getInstance().getCookie(NimsUrls.WWW_ORIGIN)
+                .isNullOrBlank().not() ||
+                CookieManager.getInstance().getCookie(NimsUrls.APEX_ORIGIN)
+                    .isNullOrBlank().not()
             val state = when {
                 probe.optBoolean("sessionExpired", false) -> SessionState.EXPIRED
                 probe.optBoolean("authenticated", false) -> SessionState.CONNECTED
                 probe.optBoolean("loginForm", false) -> SessionState.LOGIN_REQUIRED
+                hasCookie && ambiguousProbeCount < 3 -> SessionState.CHECKING
                 else -> SessionState.LOGIN_REQUIRED
             }
+            if (state == SessionState.CHECKING && !definite) {
+                ambiguousProbeCount++
+                sessionState = state
+                listener.onSession(state)
+                webView.postDelayed({ if (pageReady) probeInternal() }, 1100L)
+                return@evaluateJavascript
+            }
+            ambiguousProbeCount = 0
             sessionState = state
             if (state == SessionState.CONNECTED) vault.captureFromWebView()
             listener.onSession(state)
