@@ -258,6 +258,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         reports = inventory.reports,
                         source = "nims_rest_report_list"
                     )
+                    selectedTab = ResultsTab.REPORTS
                     statusText = "REST verified · " + inventory.reports.size +
                         " source reports · loading structured labs…"
                 } else if (restAttempt.exceptionOrNull() is IdentityMismatchException) {
@@ -569,6 +570,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
+                        if (current.source == "nims_rest_report_list" && current.results.isEmpty()) {
+                            Surface(color = Color(0xFFEAF3FF)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "REST report index verified · full labs need structured NIMS session",
+                                        modifier = Modifier.weight(1f),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF24496A)
+                                    )
+                                    if (loadStage == LoadStage.READY) {
+                                        TextButton(onClick = { openLogin() }) {
+                                            Text("Load labs", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
                                 ResultsTab.OVERVIEW -> OverviewScreen(current)
@@ -637,7 +658,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(statusText, fontSize = 13.sp, color = Color(0xFF33475B))
                 }
                 if (sessionState != SessionState.CONNECTED) {
-                    Button(onClick = { openLogin() }) { Text("Login") }
+                    Button(onClick = { openLogin() }) { Text("NIMS login") }
                 } else {
                     TextButton(onClick = { engine.checkSession() }) { Text("Check") }
                     TextButton(onClick = { openLogin(manageSession = true) }) {
