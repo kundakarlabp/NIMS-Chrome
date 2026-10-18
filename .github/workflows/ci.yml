@@ -5,6 +5,7 @@ on:
     branches:
       - release/android-native-rebuild-v1
       - fix/android-v102-clinical-usability
+      - fix/android-v103-crash-api-labs
   pull_request:
     branches:
       - release/android-native-rebuild-base
