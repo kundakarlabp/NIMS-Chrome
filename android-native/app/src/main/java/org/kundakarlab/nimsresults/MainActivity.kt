@@ -1058,13 +1058,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun MicroScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
-        val grouped = remember(current.results, query) {
-            current.results.filter { row ->
-                isMicro(row) && (query.isBlank() ||
-                    (row.test + " " + row.parameter + " " + row.valueText + " " + row.date)
-                        .contains(query, ignoreCase = true))
-            }.groupBy { row -> row.test to row.date }
-                .toList().sortedByDescending { BulkParser.dateKey(it.first.second) }
+        val grouped = remember(current.results, query, microFilter) {
+            // Filter complete culture reports rather than individual rows: this
+            // preserves accompanying susceptibility, resistance and notes.
+            current.results.filter { isMicro(it) }
+                .groupBy { row -> row.test to row.date }.toList()
+                .filter { (key, rows) ->
+                    val category = CultureReview.status(rows).name
+                    (microFilter == "All" || category.equals(microFilter, true)) &&
+                        (query.isBlank() || (key.first + " " + key.second + " " +
+                            rows.joinToString(" ") { it.parameter + " " + it.valueText })
+                            .contains(query, ignoreCase = true))
+                }
+                .sortedByDescending { BulkParser.dateKey(it.first.second) }
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -1073,8 +1079,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             item {
                 Text("Microbiology reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("Reports are grouped by test and date; laboratory processing metadata is hidden by default.",
+                Text("Select positive cultures or inspect all microbiology reports.",
                     color = Color(0xFF66788A), fontSize = 11.sp)
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("All", "Positive", "Negative", "Pending", "Other").forEach { type ->
+                        FilterChip(selected = microFilter == type,
+                            onClick = { microFilter = type },
+                            label = { Text(type, fontSize = 11.sp) })
+                    }
+                }
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
@@ -1103,7 +1117,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
                             fontSize = 15.sp)
-                        Text(date, color = Color(0xFF829AB1), fontSize = 11.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(date, color = Color(0xFF829AB1), fontSize = 11.sp)
+                            val classification = CultureReview.status(rows)
+                            val color = when (classification) {
+                                CultureStatus.POSITIVE -> Color(0xFFB3261E)
+                                CultureStatus.NEGATIVE -> Color(0xFF28744A)
+                                CultureStatus.PENDING -> Color(0xFF996100)
+                                CultureStatus.OTHER -> Color(0xFF66788A)
+                            }
+                            Text(classification.name, fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp, color = color)
+                        }
                         val reportRows = clinical.filter { row ->
                             row.parameter.equals("Result", true) ||
                             row.valueText.contains("CULTURE REPORT", true) ||
