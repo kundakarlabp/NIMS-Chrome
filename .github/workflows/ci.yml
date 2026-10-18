@@ -8,6 +8,7 @@ on:
       - fix/android-v103-crash-api-labs
       - fix/android-v104-clinical-trends-cultures
       - fix/android-v105-clinical-workspace
+      - fix/android-v106-dashboard-api-parity
   pull_request:
     branches:
       - release/android-native-rebuild-base

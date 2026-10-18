@@ -99,6 +99,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var activeCr = ""
     private var pendingPatient = PatientInfo()
     private var pendingCrAfterLogin = ""
+    private var verifiedRestReports: List<ReportRef> = emptyList()
+    private var apiStage by mutableStateOf("not_checked")
+    private var apiReportCount by mutableStateOf(0)
+    private var apiAttemptMs by mutableStateOf(0L)
     private var currentTimeout: Runnable? = null
 
     private val deviceUnlockLauncher =
@@ -132,7 +136,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (state == SessionState.CONNECTED) {
                     val cr = pendingCrAfterLogin
                     pendingCrAfterLogin = ""
-                    if (cr.matches(Regex("""\d{15}"""))) startFetch(cr)
+                    if (cr.matches(Regex("""\d{15}"""))) {
+                        crInput = cr
+                        requestFetch()
+                    }
                     else {
                         loadStage = LoadStage.IDLE
                         statusText = "NIMS connected."
@@ -219,51 +226,97 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             statusText = "Enter the 15-digit NIMS CR number."
             return
         }
-        if (sessionState == SessionState.CONNECTED) {
-            startFetch(cr)
-            return
-        }
-
-        pendingCrAfterLogin = cr
-        sessionState = SessionState.CHECKING
+        cancelTimeout()
+        if (bundle?.patient?.crNo != cr) bundle = null
+        activeCr = cr
+        activeRequestId = "native-" + UUID.randomUUID()
+        val requestId = activeRequestId
+        pendingPatient = PatientInfo(crNo = cr)
+        verifiedRestReports = emptyList()
+        apiReportCount = 0
+        apiStage = "rest_checking"
         loadStage = LoadStage.CHECKING_SESSION
-        statusText = "Checking the existing NIMS session…"
-        engine.checkSession { state ->
+        statusText = "API first · checking NIMS REST report index…"
+
+        worker.execute {
+            val started = SystemClock.elapsedRealtime()
+            val restAttempt = runCatching { reportRepository.loadRestIndex(cr) }
+            val durationMs = SystemClock.elapsedRealtime() - started
             runOnUiThread {
-                if (pendingCrAfterLogin != cr) return@runOnUiThread
-                if (state == SessionState.CONNECTED) {
-                    pendingCrAfterLogin = ""
-                    startFetch(cr)
+                if (requestId != activeRequestId) return@runOnUiThread
+                apiAttemptMs = durationMs
+                val inventory = restAttempt.getOrNull()
+                if (inventory != null) {
+                    verifiedRestReports = inventory.reports
+                    apiReportCount = inventory.reports.size
+                    apiStage = "rest_verified"
+                    // Report index alone is not a complete laboratory result.
+                    // Show verified source reports while the structured API loads.
+                    bundle = ClinicalBundle(
+                        patient = PatientInfo(crNo = cr),
+                        results = emptyList(),
+                        reports = inventory.reports,
+                        source = "nims_rest_report_list"
+                    )
+                    selectedTab = ResultsTab.REPORTS
+                    statusText = "REST verified · " + inventory.reports.size +
+                        " source reports · loading structured labs…"
+                } else if (restAttempt.exceptionOrNull() is IdentityMismatchException) {
+                    apiStage = "identity_mismatch"
+                    loadStage = LoadStage.ERROR
+                    statusText = "NIMS REST returned a different CR. No results loaded."
+                    return@runOnUiThread
                 } else {
-                    loadStage = LoadStage.IDLE
-                    statusText = if (state == SessionState.EXPIRED) {
-                        "NIMS session expired. Login once to continue."
-                    } else {
-                        "NIMS login is required."
+                    apiStage = when (restAttempt.exceptionOrNull()) {
+                        is AuthenticationRequiredException -> "rest_auth_required"
+                        else -> "rest_unavailable"
                     }
-                    openLogin()
+                    statusText = "REST unavailable · trying authenticated structured API…"
+                }
+                if (sessionState == SessionState.CONNECTED) {
+                    startStructuredFetch(cr, requestId)
+                } else {
+                    // A login URL or stale shell is not proof that the
+                    // authenticated REST data is unavailable.
+                    engine.checkSession { state ->
+                        runOnUiThread {
+                            if (requestId != activeRequestId) return@runOnUiThread
+                            if (state == SessionState.CONNECTED) {
+                                startStructuredFetch(cr, requestId)
+                            } else if (verifiedRestReports.isNotEmpty()) {
+                                loadStage = LoadStage.READY
+                                pendingCrAfterLogin = cr
+                                statusText = "REST API reports available. NIMS login is required only for full lab values."
+                            } else {
+                                loadStage = LoadStage.IDLE
+                                pendingCrAfterLogin = cr
+                                statusText = "NIMS authentication required for structured lab retrieval."
+                                openLogin()
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    private fun startFetch(cr: String) {
-        cancelTimeout()
-        activeCr = cr
-        activeRequestId = "native-" + UUID.randomUUID().toString()
-        pendingPatient = PatientInfo(crNo = cr)
+    private fun startStructuredFetch(cr: String, requestId: String) {
+        if (requestId != activeRequestId) return
         loadStage = LoadStage.OPENING_TRENDS
-        statusText = "Opening NIMS Investigation Trends…"
-        engine.run(cr, activeRequestId)
-
+        statusText = "Structured API · capturing GETMETABOLICDATA…"
+        engine.run(cr, requestId)
         val timeout = Runnable {
-            if (loadStage != LoadStage.READY && activeRequestId.isNotBlank()) {
-                loadStage = LoadStage.ERROR
-                statusText = "NIMS retrieval timed out. Your existing results remain available; retry when the NIMS session is responsive."
+            if (requestId != activeRequestId ||
+                loadStage in setOf(LoadStage.READY, LoadStage.ERROR, LoadStage.IDLE)) return@Runnable
+            loadStage = if (verifiedRestReports.isNotEmpty()) LoadStage.READY else LoadStage.ERROR
+            statusText = if (verifiedRestReports.isNotEmpty()) {
+                "Structured API timed out. Verified REST reports remain available."
+            } else {
+                "NIMS structured API timed out. Retry when the HIS session is responsive."
             }
         }
         currentTimeout = timeout
-        handler.postDelayed(timeout, 75_000)
+        handler.postDelayed(timeout, 75_000L)
     }
 
     private fun refreshCurrent() {
@@ -284,6 +337,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
         }?.forEach { it.delete() }
         bundle = null
+        verifiedRestReports = emptyList()
+        apiReportCount = 0
+        apiStage = "not_checked"
+        activeRequestId = ""
         sessionState = SessionState.LOGIN_REQUIRED
         loadStage = LoadStage.IDLE
         statusText = "Logged out from NIMS on this app."
@@ -350,10 +407,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // An optional report-index fetch must never block clinical lab review.
         worker.execute {
             try {
-                val initial = BulkParser.parse(rawJson, cr, patient, emptyList())
+                val restSeed = verifiedRestReports
+                val initial = BulkParser.parse(rawJson, cr, patient, restSeed)
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     bundle = initial
+                    apiStage = "structured_verified"
                     crInput = cr
                     selectedTab = ResultsTab.OVERVIEW
                     reportQueryPrefill = ""
@@ -361,7 +420,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     statusText = initial.results.size.toString() + " results · loading report links…"
                 }
                 val inventory = try {
-                    reportRepository.load(cr)
+                    reportRepository.load(cr, restSeed)
                 } catch (mismatch: IdentityMismatchException) {
                     runOnUiThread {
                         if (requestId == activeRequestId) {
@@ -375,9 +434,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     // No patient data is retained from the REST/HTML reply beyond validated links.
-                    bundle = initial.copy(reports = inventory?.reports.orEmpty())
-                    statusText = initial.results.size.toString() + " results · " +
-                        (inventory?.reports?.size ?: 0) + " source reports"
+                    bundle = initial.copy(reports = inventory?.reports ?: restSeed)
+                    apiStage = if (initial.results.isNotEmpty()) "structured_verified" else apiStage
+                    apiReportCount = (inventory?.reports ?: restSeed).size
+                    statusText = initial.results.size.toString() + " structured values · " +
+                        apiReportCount + " source reports"
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
@@ -394,6 +455,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         runOnUiThread {
             val authLike = Regex("(?i)auth|login|session").containsMatchIn(message)
+            if (verifiedRestReports.isNotEmpty()) {
+                loadStage = LoadStage.READY
+                if (authLike) pendingCrAfterLogin = activeCr
+                statusText = if (authLike) {
+                    "REST reports available. Log in for structured laboratory values."
+                } else {
+                    "REST reports available; structured retrieval failed. " +
+                        message.replace(Regex("""\b\d{15}\b"""), "[CR redacted]").take(110)
+                }
+                return@runOnUiThread
+            }
             if (authLike) {
                 sessionState = SessionState.LOGIN_REQUIRED
                 pendingCrAfterLogin = activeCr
@@ -402,7 +474,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 openLogin()
             } else {
                 loadStage = LoadStage.ERROR
-                statusText = message
+                statusText = message.replace(Regex("""\b\d{15}\b"""), "[CR redacted]").take(180)
             }
         }
     }
@@ -421,6 +493,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("app.hasBundle=${current != null}")
             appendLine("app.resultCount=${current?.results?.size ?: 0}")
             appendLine("app.reportCount=${current?.reports?.size ?: 0}")
+            appendLine("api.stage=$apiStage")
+            appendLine("api.verifiedReportCount=$apiReportCount")
+            appendLine("api.restElapsedMs=$apiAttemptMs")
             append(engine.safeDiagnostics())
         }
     }
@@ -495,6 +570,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
+                        if (current.source == "nims_rest_report_list" && current.results.isEmpty()) {
+                            Surface(color = Color(0xFFEAF3FF)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "REST report index verified · full labs need structured NIMS session",
+                                        modifier = Modifier.weight(1f),
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF24496A)
+                                    )
+                                    if (loadStage == LoadStage.READY) {
+                                        TextButton(onClick = { openLogin() }) {
+                                            Text("Load labs", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
                                 ResultsTab.OVERVIEW -> OverviewScreen(current)
@@ -563,7 +658,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(statusText, fontSize = 13.sp, color = Color(0xFF33475B))
                 }
                 if (sessionState != SessionState.CONNECTED) {
-                    Button(onClick = { openLogin() }) { Text("Login") }
+                    Button(onClick = { openLogin() }) { Text("NIMS login") }
                 } else {
                     TextButton(onClick = { engine.checkSession() }) { Text("Check") }
                     TextButton(onClick = { openLogin(manageSession = true) }) {

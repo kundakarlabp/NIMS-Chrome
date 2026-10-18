@@ -56,4 +56,54 @@ class ReportPayloadParserTest {
             ).isBlank()
         )
     }
+
+    @Test
+    fun restIndexSupportsMultipleVerifiedSameDayReports() {
+        val payload = JSONObject(
+            """
+            {"patient":{"crNo":"123456789012345"},"reports":[
+              {"reportName":"Blood culture","reportDate":"15-Oct-2026",
+               "fileName":"blood-a.pdf","crNo":"123456789012345"},
+              {"reportName":"Blood culture","reportDate":"15-Oct-2026",
+               "fileName":"blood-b.pdf","crNo":"123456789012345"}
+            ]}
+            """.trimIndent()
+        )
+        val rows = ReportPayloadParser.parseRest(payload, "123456789012345")
+        assertEquals(2, rows.size)
+        assertTrue(rows[0].url.contains("blood-a.pdf"))
+        assertTrue(rows[1].url.contains("blood-b.pdf"))
+    }
+
+    @Test
+    fun restIndexRejectsMismatchedCrWithoutExposingRows() {
+        val payload = JSONObject(
+            """
+            {"patient":{"crNo":"123456789012346"},"reports":[
+              {"reportName":"CBC","reportDate":"15-Oct-2026",
+               "fileName":"cbc.pdf","crNo":"123456789012346"}
+            ]}
+            """.trimIndent()
+        )
+        var failedClosed = false
+        try {
+            ReportPayloadParser.parseRest(payload, "123456789012345")
+        } catch (_: IdentityMismatchException) {
+            failedClosed = true
+        }
+        assertTrue(failedClosed)
+    }
+
+    @Test
+    fun restIndexRejectsUnverifiedPatientIdentity() {
+        val payload = JSONObject(
+            """
+            {"reports":[
+              {"reportName":"CBC","reportDate":"15-Oct-2026","fileName":"cbc.pdf"}
+            ]}
+            """.trimIndent()
+        )
+        assertTrue(ReportPayloadParser.parseRest(payload, "123456789012345").isEmpty())
+    }
+
 }
