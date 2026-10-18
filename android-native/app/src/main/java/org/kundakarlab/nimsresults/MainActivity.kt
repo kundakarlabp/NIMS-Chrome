@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var microFilter by mutableStateOf("All")
     private var crInput by mutableStateOf("")
     private var appLockEnabled by mutableStateOf(false)
     private var appUnlocked by mutableStateOf(true)
@@ -266,8 +267,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         if (cr.matches(Regex("""\d{15}"""))) requestFetch()
     }
 
-    private fun openLogin() {
-        loginLauncher.launch(Intent(this, LoginActivity::class.java))
+    private fun openLogin(manageSession: Boolean = false) {
+        loginLauncher.launch(Intent(this, LoginActivity::class.java)
+            .putExtra(LoginActivity.EXTRA_MANAGE_SESSION, manageSession))
     }
 
     private fun logout() {
@@ -559,7 +561,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Button(onClick = { openLogin() }) { Text("Login") }
                 } else {
                     TextButton(onClick = { engine.checkSession() }) { Text("Check") }
-                    TextButton(onClick = { logout() }) { Text("Logout") }
+                    TextButton(onClick = { openLogin(manageSession = true) }) {
+                        Text("NIMS session")
+                    }
+                    TextButton(onClick = { logout() }) { Text("Clear local") }
                 }
             }
             Row(
@@ -724,48 +729,149 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+
     @Composable
     private fun OverviewScreen(current: ClinicalBundle) {
-        val latestByParameter = current.results
-            .groupBy { normalizeKey(it.parameter.ifBlank { it.test }) }
-            .mapValues { (_, rows) -> rows.maxByOrNull { BulkParser.dateKey(it.date) }!! }
-
+        val eligible = remember(current.results) {
+            current.results.filter { ClinicalResultRules.isTrendEligible(it) }
+        }
         val wanted = listOf(
-            "WBC / TLC" to listOf("wbc", "tlc", "totalleukocytecount", "whitebloodcell"),
-            "ANC" to listOf("anc", "absoluteneutrophilcount"),
-            "Hemoglobin" to listOf("hemoglobin", "haemoglobin", "hb"),
+            "Hemoglobin" to listOf("hemoglobin", "haemoglobin", "hemoglobinresult", "hb"),
+            "WBC / TLC" to listOf("wbc", "tlc", "totalleukocytecount"),
             "Platelets" to listOf("platelet", "plateletcount"),
-            "Creatinine" to listOf("creatinine"),
+            "Creatinine" to listOf("creatinine", "serumcreatinine"),
             "CRP" to listOf("crp", "creactiveprotein"),
             "Procalcitonin" to listOf("procalcitonin", "pct"),
-            "Sodium" to listOf("sodium", "na")
+            "Sodium" to listOf("sodium", "serumsodium"),
+            "Potassium" to listOf("potassium", "serumpotassium")
         )
-        val cards = wanted.mapNotNull { (label, aliases) ->
-            latestByParameter.entries.firstOrNull { (key, _) -> aliases.any { key.contains(it) } }?.value?.takeIf { it.numericValue != null && it.valueText.length <= 24 }?.let { label to it }
+        val latestCards = remember(eligible) {
+            wanted.mapNotNull { (label, aliases) ->
+                eligible.filter { row ->
+                    val key = normalizeKey(row.parameter)
+                    aliases.any { alias -> key == alias }
+                }.maxByOrNull { BulkParser.dateKey(it.date) }?.let { label to it }
+            }
         }
-
+        val cultures = remember(current.results) {
+            current.results.filter { isMicro(it) }.groupBy { it.test to it.date }
+                .toList().sortedByDescending { BulkParser.dateKey(it.first.second) }
+        }
+        val positives = remember(cultures) {
+            cultures.filter { CultureReview.status(it.second) == CultureStatus.POSITIVE }
+        }
+        val latestDate = remember(current.results) {
+            current.results.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
+        }
+        val recentLab = remember(eligible) {
+            eligible.sortedByDescending { BulkParser.dateKey(it.date) }
+                .distinctBy { normalizeKey(it.parameter) + "|" + it.unit }.take(12)
+        }
+        val flagged = remember(eligible) {
+            eligible.filter { row ->
+                val flag = row.abnormal.lowercase()
+                flag == "h" || flag == "l" || "high" in flag ||
+                    "low" in flag || "critical" in flag
+            }.sortedByDescending { BulkParser.dateKey(it.date) }
+                .distinctBy { normalizeKey(it.parameter) }.take(6)
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
-                Text("Latest clinical snapshot", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color(0xFF102A43))
-            }
-            items(cards.chunked(2)) { pair ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    pair.forEach { (label, row) ->
-                        MetricCard(label, row, Modifier.weight(1f))
+                Text("Clinical review", fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp, color = Color(0xFF102A43))
+                Text("Latest available report: " + latestDate +
+                    " · values may have different collection dates",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(modifier = Modifier.weight(1f),
+                        onClick = { microFilter = "Positive"; selectedTab = ResultsTab.MICROBIOLOGY }) {
+                        Text("Positive cultures (" + positives.size + ")", fontSize = 11.sp)
                     }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    OutlinedButton(modifier = Modifier.weight(1f),
+                        onClick = { selectedTab = ResultsTab.LABS }) {
+                        Text("Lab timeline", fontSize = 11.sp)
+                    }
+                }
+            }
+            if (flagged.isNotEmpty()) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(Modifier.padding(10.dp)) {
+                            Text("Reported abnormal flags · latest per parameter",
+                                fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Flags are shown only when supplied by NIMS; absent flags are not interpreted.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
+                            flagged.forEach { row ->
+                                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                                    Text(row.parameter, modifier = Modifier.weight(1f),
+                                        fontSize = 12.sp, maxLines = 1)
+                                    Text(row.valueText + " " + row.unit + " · " + row.date,
+                                        fontSize = 11.sp, color = abnormalColor(row.abnormal))
+                                }
+                            }
+                        }
+                    }
                 }
             }
             item {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Text("Recent results", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text("Key investigations", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
-            items(current.results.take(15)) { row ->
-                ResultRow(row)
+            if (latestCards.isEmpty()) {
+                item {
+                    Text("No verified quantitative key results. Open Labs for the full laboratory inventory.",
+                        fontSize = 12.sp, color = Color(0xFF66788A))
+                }
+            } else {
+                items(latestCards.chunked(2)) { pair ->
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        pair.forEach { (label, row) ->
+                            MetricCard(label, row, modifier = Modifier.weight(1f))
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            if (positives.isNotEmpty()) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(Modifier.padding(10.dp)) {
+                            Text("Recent positive culture reports",
+                                fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            positives.take(4).forEach { (key, rows) ->
+                                val result = rows.firstOrNull { it.parameter.equals("Result", true) }
+                                    ?: rows.first()
+                                TextButton(onClick = {
+                                    microFilter = "Positive"
+                                    selectedTab = ResultsTab.MICROBIOLOGY
+                                }) {
+                                    Text(key.first + " · " + key.second + ": " +
+                                        result.valueText.take(75),
+                                        maxLines = 2, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Text("Latest clinical measurements", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (recentLab.isEmpty()) {
+                    Text("No numeric clinical measurements identified.",
+                        fontSize = 12.sp, color = Color(0xFF66788A))
+                }
+            }
+            items(recentLab, key = { it.id }) { row -> ResultRow(row) }
+            item {
+                OutlinedButton(onClick = { selectedTab = ResultsTab.ALL },
+                    modifier = Modifier.fillMaxWidth()) {
+                    Text("Explore all results and reports")
+                }
             }
         }
     }
