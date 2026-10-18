@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - release/android-native-rebuild-v1
+      - fix/android-v102-clinical-usability
   pull_request:
     branches:
       - release/android-native-rebuild-base
+      - release/android-native-rebuild-v101
 
 concurrency:
   group: native-android-${{ github.ref }}

@@ -42,6 +42,28 @@ class BulkParserTest {
     }
 
     @Test
+    fun narrativeNumbersNeverBecomeQuantitativeTrends() {
+        val raw = """
+            {"status":1,"crNo":"331012600350500","groups":[
+              {"testName":"Culture","rows":[
+                {"parameterName":"Report","valuesByDate":{
+                  "15-Oct-2026":"No growth after 48 hours. Final after 5 days",
+                  "14-Oct-2026":"Negative (<6 mg/1000mL)"
+                }}
+              ]},
+              {"testName":"CBC","rows":[
+                {"parameterName":"WBC","valuesByDate":{"15-Oct-2026":"12.5"}}
+              ]}
+            ]}
+        """.trimIndent()
+        val bundle = BulkParser.parse(raw, "331012600350500",
+            PatientInfo(crNo = "331012600350500"), emptyList())
+        assertEquals(3, bundle.results.size)
+        assertTrue(bundle.results.filter { it.test == "Culture" }.all { it.numericValue == null })
+        assertEquals(12.5, bundle.results.first { it.test == "CBC" }.numericValue!!, 0.001)
+    }
+
+    @Test
     fun rejectsWrongCr() {
         var failed = false
         try {

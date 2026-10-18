@@ -131,9 +131,12 @@ object BulkParser {
     }
 
     private fun parseNumber(value: String): Double? {
-        val text = value.trim()
-        text.toDoubleOrNull()?.let { return it }
-        return Regex("""[-+]?\d+(?:\.\d+)?""").find(text)?.value?.toDoubleOrNull()
+        // A number inside a culture narrative, detection limit or comment is
+        // not a quantitative measurement. Preserve text but exclude it from trends.
+        val text = value.trim().replace(",", "")
+        return text.takeIf {
+            Regex("""[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?""").matches(it)
+        }?.toDoubleOrNull()
     }
 
     private fun sourceKey(test: String, parameter: String, date: String, unit: String, value: String): String =

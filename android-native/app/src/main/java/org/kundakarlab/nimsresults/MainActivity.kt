@@ -3,10 +3,12 @@ package org.kundakarlab.nimsresults
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -87,11 +89,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var crInput by mutableStateOf("")
+    private var appLockEnabled by mutableStateOf(false)
+    private var appUnlocked by mutableStateOf(true)
+    private var leftAt = 0L
+    private var unlockPromptActive = false
     private var activeRequestId = ""
     private var activeCr = ""
     private var pendingPatient = PatientInfo()
     private var pendingCrAfterLogin = ""
     private var currentTimeout: Runnable? = null
+
+    private val deviceUnlockLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            unlockPromptActive = false
+            if (result.resultCode == RESULT_OK) {
+                appUnlocked = true
+                leftAt = 0L
+            } else {
+                finish()
+            }
+        }
 
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK) {
@@ -124,6 +141,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vault = SessionVault(this)
+        appLockEnabled = getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+            .getBoolean("device_lock_enabled", false)
+        appUnlocked = !appLockEnabled
 
         root = FrameLayout(this)
         setContentView(root)
@@ -131,7 +151,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         engine = NimsEngine(this, root, vault, this)
 
         val composeHost = androidx.compose.ui.platform.ComposeView(this).apply {
-            setContent { NimsApp() }
+            setContent { if (appUnlocked) NimsApp() else LockedScreen() }
         }
         root.addView(
             composeHost,
@@ -140,6 +160,50 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        if (appLockEnabled) handler.post { requestDeviceUnlock() }
+    }
+
+    private fun toggleAppLock() {
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!appLockEnabled && !keyguard.isDeviceSecure) {
+            Toast.makeText(this, "Set a device PIN or password before enabling app lock.", Toast.LENGTH_LONG).show()
+            return
+        }
+        appLockEnabled = !appLockEnabled
+        getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+            .edit().putBoolean("device_lock_enabled", appLockEnabled).apply()
+    }
+
+    private fun requestDeviceUnlock() {
+        if (!appLockEnabled || unlockPromptActive) return
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val intent = keyguard.createConfirmDeviceCredentialIntent(
+            "Unlock NIMS Results", "Confirm your phone's PIN, pattern or password."
+        )
+        if (intent == null) {
+            Toast.makeText(this, "Device credential unavailable.", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        unlockPromptActive = true
+        deviceUnlockLauncher.launch(intent)
+    }
+
+    override fun onStop() {
+        if (appLockEnabled && appUnlocked && !unlockPromptActive) {
+            leftAt = SystemClock.elapsedRealtime()
+        }
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (appLockEnabled && appUnlocked && leftAt > 0 &&
+            SystemClock.elapsedRealtime() - leftAt >= 120_000) {
+            appUnlocked = false
+            leftAt = 0L
+            handler.post { requestDeviceUnlock() }
+        }
     }
 
     private fun requestFetch() {
@@ -352,6 +416,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
+    private fun LockedScreen() {
+        MaterialTheme {
+            Column(
+                modifier = Modifier.fillMaxSize().background(Color(0xFF0C2D4C)).padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("NIMS Results", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Text("Clinical results are locked on this device.", color = Color.White)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = { requestDeviceUnlock() }) { Text("Unlock with device PIN") }
+            }
+        }
+    }
+
+    @Composable
     private fun NimsApp() {
         val colors = lightColorScheme(
             primary = Color(0xFF0B5CAB),
@@ -361,6 +442,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             surfaceVariant = Color(0xFFEAF0F7),
             error = Color(0xFFB3261E)
         )
+        val current = bundle
+        var toolsOpen by remember(current?.patient?.crNo) { mutableStateOf(false) }
         MaterialTheme(colorScheme = colors) {
             Scaffold(
                 topBar = { AppHeader() },
@@ -372,16 +455,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         .padding(padding)
                         .navigationBarsPadding()
                 ) {
-                    ConnectionPanel()
+                    // Keep CR entry and connection tools accessible without permanently
+                    // occupying the clinical results viewport.
+                    if (current == null || toolsOpen) {
+                        ConnectionPanel()
+                        CrPanel()
+                    }
                     if (loadStage !in setOf(LoadStage.IDLE, LoadStage.READY, LoadStage.ERROR)) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(statusText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+                            color = Color(0xFF486581), fontSize = 11.sp, maxLines = 2)
+                    } else if (loadStage == LoadStage.ERROR) {
+                        Text(statusText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
+                            color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
-                    CrPanel()
-                    val current = bundle
                     if (current == null) {
                         EmptyHome()
                     } else {
-                        PatientStrip(current)
+                        PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
@@ -409,12 +500,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 modifier = Modifier
                     .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 21.sp)
-                    Text("Fast longitudinal investigations · cultures · reports", color = Color(0xFFC8D9E8), fontSize = 12.sp)
+                    Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
                 SessionBadge(sessionState)
             }
@@ -462,8 +552,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
+                TextButton(onClick = { toggleAppLock() }) {
+                    Text(if (appLockEnabled) "Device lock: On" else "Enable device lock",
+                        fontSize = 12.sp)
+                }
                 TextButton(onClick = { copyDiagnostics() }) {
-                    Text("Copy diagnostics")
+                    Text("Copy diagnostics", fontSize = 12.sp)
                 }
             }
         }
@@ -564,29 +658,29 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun PatientStrip(current: ClinicalBundle) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF))
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
+        Surface(color = Color(0xFFEFF6FF)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(current.patient.name.ifBlank { "Current patient" }, fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Color(0xFF102A43))
-                    Text(
-                        listOfNotNull(
-                            "CR: ${current.patient.crNo}",
-                            current.patient.age.takeIf { it.isNotBlank() }?.let { "Age: $it" },
-                            current.patient.sex.takeIf { it.isNotBlank() }?.let { "Sex: $it" },
-                            "${current.results.size} results",
-                            "${current.reports.size} reports"
-                        ).joinToString(" · "),
-                        color = Color(0xFF486581),
-                        fontSize = 12.sp
-                    )
+                    Text(current.patient.name.ifBlank { "Current patient" },
+                        fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                        color = Color(0xFF102A43), maxLines = 1)
+                    Text("CR " + current.patient.crNo,
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
+                    val sex = current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim()
+                    val demographics = listOf(current.patient.age, sex)
+                        .filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(listOf(demographics,
+                        current.results.size.toString() + " results",
+                        current.reports.size.toString() + " PDFs")
+                        .filter { it.isNotBlank() }.joinToString(" · "),
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
                 }
-                OutlinedButton(onClick = { refreshCurrent() }) { Text("Refresh") }
+                TextButton(onClick = { refreshCurrent() }) { Text("Refresh", fontSize = 12.sp) }
+                TextButton(onClick = onToggleTools) { Text("CR / Menu", fontSize = 12.sp) }
             }
         }
     }
@@ -627,7 +721,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             "Sodium" to listOf("sodium", "na")
         )
         val cards = wanted.mapNotNull { (label, aliases) ->
-            latestByParameter.entries.firstOrNull { (key, _) -> aliases.any { key.contains(it) } }?.value?.let { label to it }
+            latestByParameter.entries.firstOrNull { (key, _) -> aliases.any { key.contains(it) } }?.value?.takeIf { it.numericValue != null && it.valueText.length <= 24 }?.let { label to it }
         }
 
         LazyColumn(
@@ -665,7 +759,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     row.valueText + if (row.unit.isNotBlank()) " ${row.unit}" else "",
                     fontWeight = FontWeight.Bold,
                     fontSize = 20.sp,
-                    color = abnormalColor(row.abnormal)
+                    color = abnormalColor(row.abnormal),
+                    maxLines = 1
                 )
                 Text(row.date, fontSize = 11.sp, color = Color(0xFF829AB1))
             }
@@ -681,13 +776,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(groups, key = { it.first }) { (test, rows) ->
+                var showAll by remember(current.patient.crNo, test) { mutableStateOf(false) }
+                val sortedRows = remember(rows) { rows.sortedByDescending { BulkParser.dateKey(it.date) } }
+                val visibleRows = if (showAll) sortedRows else sortedRows.take(20)
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        Text(test, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF102A43))
+                        Text(test + " (" + rows.size + ")", fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp, color = Color(0xFF102A43))
                         Spacer(Modifier.height(6.dp))
-                        rows.sortedByDescending { BulkParser.dateKey(it.date) }.take(20).forEachIndexed { index, row ->
+                        visibleRows.forEachIndexed { index, row ->
                             ResultRow(row)
-                            if (index < minOf(rows.size, 20) - 1) HorizontalDivider(color = Color(0xFFE8EEF5))
+                            if (index < visibleRows.lastIndex) {
+                                HorizontalDivider(color = Color(0xFFE8EEF5))
+                            }
+                        }
+                        if (rows.size > 20) {
+                            TextButton(onClick = { showAll = !showAll }) {
+                                Text(if (showAll) "Show recent 20" else "Show all " + rows.size + " results")
+                            }
                         }
                     }
                 }
@@ -710,13 +816,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (rows.isEmpty()) {
                 item { Text("No microbiology rows were identified in the structured result set.", color = Color(0xFF66788A)) }
             } else {
-                items(rows) { row ->
+                items(rows, key = { it.id }) { row ->
+                    var expanded by remember(current.patient.crNo, row.id) { mutableStateOf(false) }
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(row.test, fontWeight = FontWeight.Bold)
-                            Text(row.parameter, color = Color(0xFF486581), fontSize = 12.sp)
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text(row.test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+                            if (row.parameter.isNotBlank()) {
+                                Text(row.parameter, color = Color(0xFF486581), fontSize = 12.sp)
+                            }
                             Spacer(Modifier.height(4.dp))
-                            Text(row.valueText, fontSize = 14.sp)
+                            Text(row.valueText, fontSize = 14.sp, maxLines = if (expanded) Int.MAX_VALUE else 4)
+                            if (row.valueText.length > 180) {
+                                TextButton(onClick = { expanded = !expanded }) {
+                                    Text(if (expanded) "Show less" else "Read full result")
+                                }
+                            }
                             Text(row.date, color = Color(0xFF829AB1), fontSize = 11.sp)
                         }
                     }
