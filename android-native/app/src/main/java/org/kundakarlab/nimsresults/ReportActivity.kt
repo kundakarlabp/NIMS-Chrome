@@ -1,6 +1,7 @@
 package org.kundakarlab.nimsresults
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
@@ -8,9 +9,13 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.HorizontalScrollView
+import android.widget.ScrollView
+import android.widget.Toast
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -28,6 +33,10 @@ class ReportActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var previous: Button
     private lateinit var next: Button
+    private lateinit var saveButton: Button
+    private lateinit var verticalScroll: ScrollView
+    private lateinit var horizontalScroll: HorizontalScrollView
+    private var zoom = 1f
 
     private var renderer: PdfRenderer? = null
     private var descriptor: ParcelFileDescriptor? = null
@@ -54,7 +63,8 @@ class ReportActivity : Activity() {
             setBackgroundColor(Color.rgb(12, 45, 76))
         }
         val back = Button(this).apply {
-            text = "Back"
+            text = "‹"
+            contentDescription = "Back to NIMS results"
             setOnClickListener { finish() }
         }
         status = TextView(this).apply {
@@ -71,11 +81,28 @@ class ReportActivity : Activity() {
         root.addView(progress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)))
 
         image = ImageView(this).apply {
-            setBackgroundColor(Color.rgb(245, 247, 250))
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.WHITE)
+            adjustViewBounds = false
+            scaleType = ImageView.ScaleType.FIT_XY
+            contentDescription = "NIMS PDF page"
         }
-        root.addView(image, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        // PDF pages are rendered at readable, page-width scale and scroll vertically.
+        // The inner horizontal scroll supports zoomed pages wider than the device.
+        horizontalScroll = HorizontalScrollView(this).apply {
+            isFillViewport = false
+            setBackgroundColor(Color.rgb(245, 247, 250))
+            addView(image)
+        }
+        verticalScroll = ScrollView(this).apply {
+            isFillViewport = false
+            setBackgroundColor(Color.rgb(245, 247, 250))
+            addView(horizontalScroll, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        root.addView(verticalScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
 
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -91,8 +118,31 @@ class ReportActivity : Activity() {
             isEnabled = false
             setOnClickListener { render(pageIndex + 1) }
         }
+        val zoomOut = Button(this).apply {
+            text = "−"
+            contentDescription = "Zoom out"
+            setOnClickListener { zoom = (zoom / 1.5f).coerceAtLeast(1f); render(pageIndex) }
+        }
+        val zoomIn = Button(this).apply {
+            text = "+"
+            contentDescription = "Zoom in"
+            setOnClickListener { zoom = (zoom * 1.5f).coerceAtMost(2.5f); render(pageIndex) }
+        }
+        val fit = Button(this).apply {
+            text = "Fit"
+            setOnClickListener { zoom = 1f; render(pageIndex) }
+        }
+        saveButton = Button(this).apply {
+            text = "Save"
+            isEnabled = false
+            setOnClickListener { savePdf() }
+        }
         nav.addView(previous)
         nav.addView(next)
+        nav.addView(zoomOut)
+        nav.addView(zoomIn)
+        nav.addView(fit)
+        nav.addView(saveButton)
         root.addView(nav)
 
         setContentView(root)
@@ -156,29 +206,69 @@ class ReportActivity : Activity() {
             status.text = "NIMS report PDF is empty."
             return
         }
+        saveButton.isEnabled = true
         render(0)
     }
 
     private fun render(index: Int) {
         val current = renderer ?: return
         if (index !in 0 until current.pageCount) return
-        bitmap?.recycle()
-
+        val switchingPage = index != pageIndex
         val page = current.openPage(index)
-        val width = resources.displayMetrics.widthPixels.coerceAtLeast(720)
+        // Capped width prevents very high resolution PDFs from exhausting memory.
+        val width = (resources.displayMetrics.widthPixels * zoom).toInt().coerceIn(320, 2048)
         val scale = width.toFloat() / page.width.toFloat()
-        val height = (page.height * scale).toInt().coerceAtLeast(1)
+        val height = (page.height * scale).toInt().coerceIn(1, 4096)
         val nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         nextBitmap.eraseColor(Color.WHITE)
-        page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-        page.close()
+        try {
+            page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+        } finally {
+            page.close()
+        }
 
+        image.setImageDrawable(null)
+        bitmap?.recycle()
         bitmap = nextBitmap
         pageIndex = index
+        image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
         image.setImageBitmap(nextBitmap)
-        status.text = "NIMS report · page ${index + 1} of ${current.pageCount}"
+        status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
         previous.isEnabled = index > 0
         next.isEnabled = index + 1 < current.pageCount
+        if (switchingPage) {
+            verticalScroll.post { verticalScroll.scrollTo(0, 0) }
+            horizontalScroll.post { horizontalScroll.scrollTo(0, 0) }
+        }
+    }
+
+    private fun savePdf() {
+        if (tempFile?.isFile != true) return
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_TITLE, "NIMS-report.pdf")
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_SAVE_PDF)
+    }
+
+    @Deprecated("Android Activity result callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_SAVE_PDF || resultCode != RESULT_OK) return
+        val target = data?.data ?: return
+        val source = tempFile?.takeIf { it.isFile } ?: return
+        executor.execute {
+            val saved = runCatching {
+                contentResolver.openOutputStream(target)?.use { output ->
+                    source.inputStream().use { input -> input.copyTo(output) }
+                } ?: error("Destination is not writable")
+            }.isSuccess
+            runOnUiThread {
+                Toast.makeText(this, if (saved) "PDF saved" else "Could not save PDF", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun isPdf(bytes: ByteArray): Boolean =
@@ -201,5 +291,6 @@ class ReportActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "report_url"
+        private const val REQUEST_SAVE_PDF = 231
     }
 }
