@@ -268,9 +268,11 @@ class ReportActivity : Activity() {
             page = current.openPage(index)
             // Limit image memory on low-RAM phones; never allocate a full-size
             // high-resolution PDF bitmap on the UI thread.
-            val width = (resources.displayMetrics.widthPixels * zoom).toInt().coerceIn(320, 1200)
-            val height = (page.height.toDouble() * width / page.width)
-                .toInt().coerceIn(1, 2400)
+            val desiredWidth = (resources.displayMetrics.widthPixels * zoom)
+                .coerceIn(320f, 1200f).toDouble()
+            val scale = minOf(desiredWidth / page.width, 2400.0 / page.height)
+            val width = (page.width * scale).toInt().coerceAtLeast(1)
+            val height = (page.height * scale).toInt().coerceAtLeast(1)
             nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             nextBitmap.eraseColor(Color.WHITE)
             page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
