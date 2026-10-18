@@ -28,10 +28,26 @@ class ReportRepository(
         val source: String
     )
 
-    fun load(crNo: String): Inventory {
+    /**
+     * Dashboard parity: try the authenticated REST report-list before loading
+     * the HIS browser. It is report inventory, not a lab-values API.
+     * The 3.5 s limit matches the desktop connector's optional metadata probe.
+     * Never return unverified or wrong-CR report data.
+     */
+    fun loadRestIndex(crNo: String): Inventory {
+        require(Regex("""\d{15}""").matches(crNo))
+        val fastClient = client.newBuilder()
+            .callTimeout(3500, TimeUnit.MILLISECONDS)
+            .build()
+        val reports = loadRest(crNo, fastClient)
+        if (reports.isEmpty()) error("NIMS REST returned no verified report rows.")
+        return Inventory(reports, "nims_rest_report_list")
+    }
+
+    fun load(crNo: String, verifiedRest: List<ReportRef> = emptyList()): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
-        val rest = runCatching { loadRest(crNo) }.getOrElse { error ->
+        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching { loadRest(crNo) }.getOrElse { error ->
             if (error is IdentityMismatchException) throw error
             emptyList()
         }
@@ -56,13 +72,13 @@ class ReportRepository(
         )
     }
 
-    private fun loadRest(crNo: String): List<ReportRef> {
+    private fun loadRest(crNo: String, apiClient: OkHttpClient = client): List<ReportRef> {
         val url = NimsUrls.REPORT_LIST_API.toHttpUrl().newBuilder()
             .addQueryParameter("crNo", crNo)
             .addQueryParameter("hosCode", NimsUrls.HOSPITAL_CODE)
             .build()
 
-        client.newCall(
+        apiClient.newCall(
             request(url.toString())
                 .header("Accept", "application/json,text/plain,*/*")
                 .get()
