@@ -995,23 +995,54 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
                             fontSize = 15.sp)
                         Text(date, color = Color(0xFF829AB1), fontSize = 11.sp)
-                        clinical.forEach { row ->
-                            if (row.parameter.isNotBlank()) {
-                                Text(row.parameter, color = Color(0xFF486581),
-                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                            val value = row.valueText
-                            Text(
-                                value,
-                                fontSize = 13.sp,
-                                maxLines = if (expanded) Int.MAX_VALUE else 4,
-                                color = Color(0xFF243B53)
-                            )
-                            Spacer(Modifier.height(5.dp))
+                        val reportRows = clinical.filter { row ->
+                            row.parameter.equals("Result", true) ||
+                            row.valueText.contains("CULTURE REPORT", true) ||
+                            row.valueText.contains("SENSITIVITY REPORT", true)
                         }
-                        if (clinical.any { it.valueText.length > 120 }) {
+                        val narrative = reportRows.joinToString("\n") { it.valueText }
+                        val parts = CultureNarrative.parse(narrative)
+                        if (parts.culture.isNotBlank()) {
+                            Text("Culture finding", color = Color(0xFF486581),
+                                fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(parts.culture, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 5)
+                            Spacer(Modifier.height(7.dp))
+                        }
+                        if (parts.susceptible.isNotBlank()) {
+                            Text("Reported susceptibility", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Color(0xFF206A46))
+                            Text(parts.susceptible, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 6)
+                            Spacer(Modifier.height(7.dp))
+                        }
+                        if (parts.resistant.isNotBlank()) {
+                            Text("Reported resistance", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Color(0xFF8B3131))
+                            Text(parts.resistant, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 6)
+                            Spacer(Modifier.height(7.dp))
+                        }
+                        if (parts.advice.isNotBlank()) {
+                            Text("Laboratory comments", fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold, color = Color(0xFF486581))
+                            Text(parts.advice, fontSize = 12.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 4)
+                        }
+                        clinical.filterNot { it in reportRows }.forEach { row ->
+                            Text(row.parameter, fontSize = 11.sp,
+                                color = Color(0xFF486581), fontWeight = FontWeight.SemiBold)
+                            Text(row.valueText, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 5)
+                        }
+                        if (narrative.isNotBlank() || clinical.any { it.valueText.length > 120 }) {
                             TextButton(onClick = { expanded = !expanded }) {
-                                Text(if (expanded) "Collapse narrative" else "Read full culture details")
+                                Text(if (expanded) "Hide original narrative" else "Full culture / AST details")
+                            }
+                            if (expanded && narrative.isNotBlank()) {
+                                Text("Original result text", fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp, color = Color(0xFF486581))
+                                Text(narrative, fontSize = 12.sp)
                             }
                         }
                         if (rows.size > clinical.size) {
@@ -1051,7 +1082,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun isMicroTechnicalField(parameter: String): Boolean =
         Regex("(?i)^(test\\s*done\\s*by|sample\\s*processed|processed\\s*by|entered\\s*by|verified\\s*by|machine\\s*(?:id|no)|lab\\s*id|technician)$")
-            .matches(parameter.trim())
+            .matches(parameter.trim().trimEnd(':').trim())
 
     @Composable
     private fun ReportsScreen(current: ClinicalBundle) {
