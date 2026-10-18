@@ -16,6 +16,8 @@ import android.widget.ImageView
 import android.widget.HorizontalScrollView
 import android.widget.ScrollView
 import android.widget.Toast
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -55,6 +57,13 @@ class ReportActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
+        }
+        // Android 15+ draws edge-to-edge. Do not allow Back and Save below
+        // the device status bar or navigation gesture strip.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, bars.top, 0, bars.bottom)
+            insets
         }
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -109,12 +118,14 @@ class ReportActivity : Activity() {
             gravity = Gravity.CENTER
         }
         previous = Button(this).apply {
-            text = "Previous"
+            text = "‹"
+            contentDescription = "Previous PDF page"
             isEnabled = false
             setOnClickListener { render(pageIndex - 1) }
         }
         next = Button(this).apply {
-            text = "Next"
+            text = "›"
+            contentDescription = "Next PDF page"
             isEnabled = false
             setOnClickListener { render(pageIndex + 1) }
         }
@@ -142,7 +153,7 @@ class ReportActivity : Activity() {
         nav.addView(zoomOut)
         nav.addView(zoomIn)
         nav.addView(fit)
-        nav.addView(saveButton)
+        top.addView(saveButton)
         root.addView(nav)
 
         setContentView(root)
