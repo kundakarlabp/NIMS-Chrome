@@ -133,4 +133,44 @@ class BulkParserTest {
         assertEquals("", result.resistant)
     }
 
+
+    @Test
+    fun microbiologyFiltersUseReportFindingsNotProcessingMetadata() {
+        fun row(id: String, test: String, param: String, value: String) =
+            LabResult(id, test, param, "2026-09-01", value)
+        val positive = listOf(
+            row("p1", "AEROBIC CULTURE", "Result",
+                "CULTURE SHOWS GROWTH OF KLEBSIELLA PNEUMONIAE"),
+            row("p2", "AEROBIC CULTURE", "Sample Processed:", "80")
+        )
+        val negative = listOf(
+            row("n1", "BLOOD CULTURE", "Result",
+                "CULTURE REPORT SHOWS NO GROWTH AFTER 5 DAYS")
+        )
+        val pending = listOf(
+            row("q1", "BLOOD CULTURE", "Result", "PRELIMINARY REPORT; FINAL REPORT AWAITED")
+        )
+        val adminOnly = listOf(
+            row("x", "AEROBIC CULTURE", "Sample Processed:", "80")
+        )
+        assertEquals(CultureStatus.POSITIVE, CultureReview.status(positive))
+        assertEquals(CultureStatus.NEGATIVE, CultureReview.status(negative))
+        assertEquals(CultureStatus.PENDING, CultureReview.status(pending))
+        assertEquals(CultureStatus.OTHER, CultureReview.status(adminOnly))
+    }
+
+    @Test
+    fun laboratoryNotesAreKeptSeparateFromSusceptibilityAndResistance() {
+        val source = "CULTURE REPORT GROWTH OF BACTERIA " +
+            "SENSITIVITY REPORT DRUG A " +
+            "RESISTANCE REPORT DRUG B " +
+            "NOTE: Repeat culture if clinically indicated"
+        val parsed = CultureNarrative.parse(source)
+        assertTrue(parsed.culture.contains("BACTERIA"))
+        assertEquals("DRUG A", parsed.susceptible)
+        assertEquals("DRUG B", parsed.resistant)
+        assertTrue(parsed.advice.contains("Repeat culture"))
+        assertTrue(!parsed.resistant.contains("Repeat culture"))
+    }
+
 }
