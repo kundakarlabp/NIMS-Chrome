@@ -161,3 +161,83 @@ object BulkParser {
     }
 
 }
+
+
+// Keep domain classification independent of UI so it can be unit tested.
+object ClinicalResultRules {
+    private fun key(value: String) = value.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), "")
+    private val allowed = setOf(
+        "wbc", "tlc", "totalleucocytecount", "totalleukocytecount",
+        "whitebloodcellcount", "absoluteneutrophilcount", "anc",
+        "hemoglobin", "haemoglobin", "hemoglobinresult", "haemoglobinresult", "hb", "hgb",
+        "platelets", "plateletcount", "plateletcounts",
+        "serumcreatinine", "creatinine", "bloodurea", "serumurea", "urea", "bun",
+        "sodium", "serumsodium", "potassium", "serumpotassium",
+        "serumchloride", "chloride", "bicarbonate", "serumbicarbonate",
+        "crp", "creactiveprotein", "procalcitonin", "pct", "esr",
+        "glucose", "bloodglucose", "randomglucose", "fastingglucose", "hba1c",
+        "glycosylatedhba1c", "glycatedhemoglobin", "glycatedhaemoglobin",
+        "sgot", "ast", "sgpt", "alt", "alp", "alkalinephosphatase",
+        "totalbilirubin", "directbilirubin", "indirectbilirubin", "serumalbumin",
+        "albumin", "totalprotein", "lactate", "serumlactate",
+        "ldh", "ferritin", "inr", "ptinr", "ph", "paco2", "pao2",
+        "neutrophils", "lymphocytes", "monocytes", "eosinophils",
+        "neutrophilpercentage", "lymphocytepercentage", "mcv", "mch", "mchc",
+        "rbc", "redbloodcellcount", "hematocrit", "haematocrit", "pcv"
+    )
+    fun isTrendEligible(row: LabResult): Boolean {
+        val param = key(row.parameter)
+        return param in allowed && row.numericValue?.isFinite() == true &&
+            BulkParser.dateKey(row.date) > 0L
+    }
+    fun parameterKey(row: LabResult): String =
+        key(row.parameter) + "|" + key(row.unit)
+    fun inWindow(date: String, latest: String, days: Long?): Boolean {
+        if (days == null) return true
+        return runCatching {
+            val delta = java.time.temporal.ChronoUnit.DAYS.between(
+                java.time.LocalDate.parse(date), java.time.LocalDate.parse(latest))
+            delta in 0..days
+        }.getOrDefault(false)
+    }
+}
+
+data class CultureSections(
+    val culture: String,
+    val susceptible: String,
+    val resistant: String,
+    val advice: String
+)
+
+object CultureNarrative {
+    // Only section words in an actual laboratory report act as delimiters.
+    // Values are copied verbatim; no organism, MIC, or S/I/R is inferred.
+    private val headings = Regex(
+        """(?i)\b(CULTURE\s+REPORT|SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|RESISTANCE\s+REPORT|ADVICE\s*(?::|TO\b)|COMMENTS\s*:)"""
+    )
+    fun parse(text: String): CultureSections {
+        val matches = headings.findAll(text).toList()
+        if (matches.isEmpty()) return CultureSections(text.trim(), "", "", "")
+        var culture = text.substring(0, matches.first().range.first).trim()
+        var sensitivity = ""
+        var resistance = ""
+        var advice = ""
+        matches.forEachIndexed { i, match ->
+            val end = matches.getOrNull(i + 1)?.range?.first ?: text.length
+            val value = text.substring(match.range.last + 1, end).trim(' ', ':', '-', '\n')
+            when {
+                match.value.contains("SENSITIVITY", true) ||
+                    match.value.contains("SUSCEPTIBILITY", true) -> sensitivity =
+                    listOf(sensitivity, value).filter { it.isNotBlank() }.joinToString("\n")
+                match.value.contains("RESISTANCE", true) -> resistance =
+                    listOf(resistance, value).filter { it.isNotBlank() }.joinToString("\n")
+                match.value.startsWith("ADVICE", true) ||
+                    match.value.startsWith("COMMENTS", true) -> advice =
+                    listOf(advice, value).filter { it.isNotBlank() }.joinToString("\n")
+                else -> culture = listOf(culture, value).filter { it.isNotBlank() }.joinToString("\n")
+            }
+        }
+        return CultureSections(culture, sensitivity, resistance, advice)
+    }
+}
+
