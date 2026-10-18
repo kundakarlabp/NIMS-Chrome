@@ -36,10 +36,17 @@ class ReportRepository(
             emptyList()
         }
 
-        val html = runCatching { loadHtml(crNo) }.getOrElse { error ->
-            if (error is IdentityMismatchException || error is AuthenticationRequiredException) throw error
-            emptyList()
-        }
+        // REST is the preferred report inventory. Only open the slower NIMS
+        // HTML report page if REST has no rows or lacks usable PDF links.
+        // A failed optional enrichment must not hide already validated REST rows.
+        val shouldFallback = rest.isEmpty() || rest.any { it.url.isBlank() }
+        val html = if (shouldFallback) {
+            runCatching { loadHtml(crNo) }.getOrElse { error ->
+                if (error is IdentityMismatchException) throw error
+                if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
+                emptyList()
+            }
+        } else emptyList()
 
         val merged = merge(rest, html)
         return Inventory(
