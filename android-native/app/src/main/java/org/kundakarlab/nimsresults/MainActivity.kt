@@ -668,11 +668,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(current.patient.name.ifBlank { "Current patient" },
                         fontWeight = FontWeight.Bold, fontSize = 16.sp,
                         color = Color(0xFF102A43), maxLines = 1)
-                    Text(
-                        "CR " + current.patient.crNo + " · " + current.results.size +
-                            " results · " + current.reports.size + " PDFs",
-                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1
-                    )
+                    Text("CR " + current.patient.crNo,
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
+                    val sex = current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim()
+                    val demographics = listOf(current.patient.age, sex)
+                        .filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(listOf(demographics,
+                        current.results.size.toString() + " results",
+                        current.reports.size.toString() + " PDFs")
+                        .filter { it.isNotBlank() }.joinToString(" · "),
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1)
                 }
                 TextButton(onClick = { refreshCurrent() }) { Text("Refresh", fontSize = 12.sp) }
                 TextButton(onClick = onToggleTools) { Text("CR / Menu", fontSize = 12.sp) }
@@ -771,13 +776,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(groups, key = { it.first }) { (test, rows) ->
+                var showAll by remember(current.patient.crNo, test) { mutableStateOf(false) }
+                val sortedRows = remember(rows) { rows.sortedByDescending { BulkParser.dateKey(it.date) } }
+                val visibleRows = if (showAll) sortedRows else sortedRows.take(20)
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        Text(test, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF102A43))
+                        Text(test + " (" + rows.size + ")", fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp, color = Color(0xFF102A43))
                         Spacer(Modifier.height(6.dp))
-                        rows.sortedByDescending { BulkParser.dateKey(it.date) }.take(20).forEachIndexed { index, row ->
+                        visibleRows.forEachIndexed { index, row ->
                             ResultRow(row)
-                            if (index < minOf(rows.size, 20) - 1) HorizontalDivider(color = Color(0xFFE8EEF5))
+                            if (index < visibleRows.lastIndex) {
+                                HorizontalDivider(color = Color(0xFFE8EEF5))
+                            }
+                        }
+                        if (rows.size > 20) {
+                            TextButton(onClick = { showAll = !showAll }) {
+                                Text(if (showAll) "Show recent 20" else "Show all " + rows.size + " results")
+                            }
                         }
                     }
                 }
