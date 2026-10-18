@@ -778,34 +778,118 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun LabsScreen(current: ClinicalBundle) {
-        val groups = current.results.groupBy { it.test.ifBlank { "Other investigations" } }.toList()
+        // Date-by-parameter matrix similar to the existing desktop dashboard.
+        // Preserve every original result for full-detail inspection and trends.
+        var query by remember(current.patient.crNo) { mutableStateOf("") }
+        val filtered = remember(current.results, query) {
+            current.results.filter { row ->
+                !isMicro(row) &&
+                    (query.isBlank() || listOf(row.test, row.parameter, row.valueText, row.date)
+                        .any { it.contains(query, true) })
+            }
+        }
+        val groups = remember(filtered) {
+            filtered.groupBy { it.test.ifBlank { "Other investigations" } }.toList()
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            item {
+                Text("Laboratory matrix", fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                    color = Color(0xFF102A43))
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("Find Hb, CBC, creatinine, date…") }
+                )
+                Text("Columns show the latest four dates. Tap a value for complete details.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+            }
             items(groups, key = { it.first }) { (test, rows) ->
-                var showAll by remember(current.patient.crNo, test) { mutableStateOf(false) }
-                val sortedRows = remember(rows) { rows.sortedByDescending { BulkParser.dateKey(it.date) } }
-                val visibleRows = if (showAll) sortedRows else sortedRows.take(20)
+                val dates = remember(rows) {
+                    rows.map { it.date }.distinct().sortedByDescending { BulkParser.dateKey(it) }.take(4)
+                }
+                val parameters = remember(rows) {
+                    rows.groupBy { it.parameter.ifBlank { it.test } }.toList()
+                }
+                var selectedValue by remember(current.patient.crNo, test) {
+                    mutableStateOf<LabResult?>(null)
+                }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(test + " (" + rows.size + ")", fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp, color = Color(0xFF102A43))
-                        Spacer(Modifier.height(6.dp))
-                        visibleRows.forEachIndexed { index, row ->
-                            ResultRow(row)
-                            if (index < visibleRows.lastIndex) {
-                                HorizontalDivider(color = Color(0xFFE8EEF5))
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(test + " · " + rows.size + " values", fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp, color = Color(0xFF102A43))
+                        Spacer(Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.width(135.dp)) {
+                                Text("Parameter", fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.height(32.dp))
+                                parameters.forEach { (parameter, values) ->
+                                    val unit = values.firstOrNull()?.unit.orEmpty()
+                                    Column(modifier = Modifier.height(52.dp).padding(end = 4.dp)) {
+                                        Text(parameter, fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium, maxLines = 2)
+                                        if (unit.isNotBlank()) {
+                                            Text(unit, fontSize = 10.sp,
+                                                color = Color(0xFF829AB1), maxLines = 1)
+                                        }
+                                    }
+                                }
+                            }
+                            Row(modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                                dates.forEach { date ->
+                                    Column(modifier = Modifier.width(100.dp)) {
+                                        Text(date, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.height(32.dp), maxLines = 1)
+                                        parameters.forEach { (_, values) ->
+                                            val value = values.firstOrNull { it.date == date }
+                                            Box(
+                                                modifier = Modifier
+                                                    .height(52.dp)
+                                                    .fillMaxWidth()
+                                                    .clickable(enabled = value != null) {
+                                                        selectedValue = value
+                                                    }
+                                                    .padding(end = 7.dp)
+                                            ) {
+                                                Text(value?.let {
+                                                    it.valueText + if (it.unit.isNotBlank()) "" else ""
+                                                } ?: "—",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = if (value != null)
+                                                        abnormalColor(value.abnormal) else Color(0xFF829AB1),
+                                                    maxLines = 2)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                        if (rows.size > 20) {
-                            TextButton(onClick = { showAll = !showAll }) {
-                                Text(if (showAll) "Show recent 20" else "Show all " + rows.size + " results")
+                        val detail = selectedValue
+                        if (detail != null) {
+                            HorizontalDivider()
+                            Spacer(Modifier.height(5.dp))
+                            Text(detail.parameter.ifBlank { detail.test } + " · " + detail.date,
+                                fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(detail.valueText + (if (detail.unit.isBlank()) "" else " " + detail.unit),
+                                fontSize = 13.sp)
+                            if (detail.refRange.isNotBlank()) {
+                                Text("Reference: " + detail.refRange,
+                                    fontSize = 11.sp, color = Color(0xFF66788A))
                             }
+                            TextButton(onClick = { selectedValue = null }) { Text("Close detail") }
                         }
                     }
                 }
+            }
+            if (groups.isEmpty()) {
+                item { Text("No matching laboratory values.", color = Color(0xFF66788A)) }
             }
         }
     }
