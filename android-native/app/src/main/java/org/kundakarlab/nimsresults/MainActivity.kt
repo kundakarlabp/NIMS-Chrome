@@ -404,7 +404,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
-            appendLine("app.status=$statusText")
+            appendLine("app.status=" + statusText.replace(Regex("""\b\d{15}\b"""), "[CR redacted]"))
             appendLine("app.crInputLength=${crInput.length}")
             appendLine("app.activeCrPresent=${activeCr.isNotBlank()}")
             appendLine("app.pendingCrAfterLogin=${pendingCrAfterLogin.isNotBlank()}")
