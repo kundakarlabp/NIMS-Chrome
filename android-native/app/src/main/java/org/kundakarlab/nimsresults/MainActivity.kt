@@ -3,10 +3,12 @@ package org.kundakarlab.nimsresults
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -87,11 +89,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var crInput by mutableStateOf("")
+    private var appLockEnabled by mutableStateOf(false)
+    private var appUnlocked by mutableStateOf(true)
+    private var leftAt = 0L
+    private var unlockPromptActive = false
     private var activeRequestId = ""
     private var activeCr = ""
     private var pendingPatient = PatientInfo()
     private var pendingCrAfterLogin = ""
     private var currentTimeout: Runnable? = null
+
+    private val deviceUnlockLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            unlockPromptActive = false
+            if (result.resultCode == RESULT_OK) {
+                appUnlocked = true
+                leftAt = 0L
+            } else {
+                finish()
+            }
+        }
 
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK) {
@@ -124,6 +141,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vault = SessionVault(this)
+        appLockEnabled = getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+            .getBoolean("device_lock_enabled", false)
+        appUnlocked = !appLockEnabled
 
         root = FrameLayout(this)
         setContentView(root)
@@ -131,7 +151,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         engine = NimsEngine(this, root, vault, this)
 
         val composeHost = androidx.compose.ui.platform.ComposeView(this).apply {
-            setContent { NimsApp() }
+            setContent { if (appUnlocked) NimsApp() else LockedScreen() }
         }
         root.addView(
             composeHost,
@@ -140,6 +160,50 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        if (appLockEnabled) handler.post { requestDeviceUnlock() }
+    }
+
+    private fun toggleAppLock() {
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!appLockEnabled && !keyguard.isDeviceSecure) {
+            Toast.makeText(this, "Set a device PIN or password before enabling app lock.", Toast.LENGTH_LONG).show()
+            return
+        }
+        appLockEnabled = !appLockEnabled
+        getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+            .edit().putBoolean("device_lock_enabled", appLockEnabled).apply()
+    }
+
+    private fun requestDeviceUnlock() {
+        if (!appLockEnabled || unlockPromptActive) return
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val intent = keyguard.createConfirmDeviceCredentialIntent(
+            "Unlock NIMS Results", "Confirm your phone's PIN, pattern or password."
+        )
+        if (intent == null) {
+            Toast.makeText(this, "Device credential unavailable.", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        unlockPromptActive = true
+        deviceUnlockLauncher.launch(intent)
+    }
+
+    override fun onStop() {
+        if (appLockEnabled && appUnlocked && !unlockPromptActive) {
+            leftAt = SystemClock.elapsedRealtime()
+        }
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (appLockEnabled && appUnlocked && leftAt > 0 &&
+            SystemClock.elapsedRealtime() - leftAt >= 120_000) {
+            appUnlocked = false
+            leftAt = 0L
+            handler.post { requestDeviceUnlock() }
+        }
     }
 
     private fun requestFetch() {
@@ -352,6 +416,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
+    private fun LockedScreen() {
+        MaterialTheme {
+            Column(
+                modifier = Modifier.fillMaxSize().background(Color(0xFF0C2D4C)).padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("NIMS Results", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Text("Clinical results are locked on this device.", color = Color.White)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = { requestDeviceUnlock() }) { Text("Unlock with device PIN") }
+            }
+        }
+    }
+
+    @Composable
     private fun NimsApp() {
         val colors = lightColorScheme(
             primary = Color(0xFF0B5CAB),
@@ -471,8 +552,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
+                TextButton(onClick = { toggleAppLock() }) {
+                    Text(if (appLockEnabled) "Device lock: On" else "Enable device lock",
+                        fontSize = 12.sp)
+                }
                 TextButton(onClick = { copyDiagnostics() }) {
-                    Text("Copy diagnostics")
+                    Text("Copy diagnostics", fontSize = 12.sp)
                 }
             }
         }
