@@ -2,6 +2,7 @@ package org.kundakarlab.nimsresults
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.parser.Parser
 import java.util.Locale
 
 object BulkParser {
@@ -49,7 +50,7 @@ object BulkParser {
                 val keys = values.keys()
                 while (keys.hasNext()) {
                     val rawDate = keys.next()
-                    val valueText = clean(values.opt(rawDate)?.toString())
+                    val valueText = cleanValue(values.opt(rawDate)?.toString())
                     if (valueText.isBlank()) continue
                     val date = isoDate(rawDate)
                     val abnormal = clean(flags?.opt(rawDate)?.toString())
@@ -144,4 +145,19 @@ object BulkParser {
 
     private fun canonical(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
     private fun clean(value: String?): String = value.orEmpty().replace(Regex("\\s+"), " ").trim()
+
+    // Preserve susceptibility table layout instead of merging all its rows.
+    private fun cleanValue(value: String?): String {
+        val withBreaks = value.orEmpty()
+            .replace(Regex("(?i)<br\\s*/?>"), "\n")
+            .replace(Regex("(?i)</(?:p|div|tr|li)>"), "\n")
+            .replace(Regex("(?i)<td[^>]*>"), " | ")
+            .replace(Regex("(?i)</?[a-z][^>]*>"), " ")
+        return Parser.unescapeEntities(withBreaks, false)
+            .replace("\r\n", "\n")
+            .split("\n")
+            .joinToString("\n") { line -> line.replace(Regex("[ \\t]+"), " ").trim() }
+            .trim()
+    }
+
 }

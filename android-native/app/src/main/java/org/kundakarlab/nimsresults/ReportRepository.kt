@@ -36,8 +36,12 @@ class ReportRepository(
             emptyList()
         }
 
+        // REST is first, but a response containing only linked rows does not
+        // prove report-history completeness. Supplement it with NIMS HTML
+        // inventory in the background without holding up structured labs.
         val html = runCatching { loadHtml(crNo) }.getOrElse { error ->
-            if (error is IdentityMismatchException || error is AuthenticationRequiredException) throw error
+            if (error is IdentityMismatchException) throw error
+            if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
             emptyList()
         }
 
@@ -141,7 +145,14 @@ class ReportRepository(
     private fun merge(a: List<ReportRef>, b: List<ReportRef>): List<ReportRef> {
         val map = linkedMapOf<String, ReportRef>()
         (a + b).forEach { report ->
-            val key = canonical(report.title) + "|" + report.date.trim().lowercase()
+            // Distinct same-day CBC/culture PDFs must not collapse into one
+            // merely because they share a test title and date.
+            val key = if (report.url.isNotBlank()) {
+                "pdf|" + report.url
+            } else {
+                "meta|" + canonical(report.title) + "|" +
+                    report.date.trim().lowercase() + "|" + report.id
+            }
             val previous = map[key]
             if (previous == null) map[key] = report
             else map[key] = previous.copy(

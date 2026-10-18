@@ -15,39 +15,43 @@ class SessionVault(private val context: Context) {
     private val prefs = context.getSharedPreferences("nims_session_vault", Context.MODE_PRIVATE)
 
     fun captureFromWebView() {
+        // Keep each NIMS host's session cookies separate. The older implementation
+        // merged cookies from both hosts, potentially overwriting a valid session.
         val cm = CookieManager.getInstance()
-        val headers = listOf(
-            cm.getCookie(NimsUrls.WWW_ORIGIN).orEmpty(),
-            cm.getCookie(NimsUrls.APEX_ORIGIN).orEmpty()
-        ).filter { it.isNotBlank() }
-        if (headers.isEmpty()) return
-        val cookies = linkedMapOf<String, String>()
-        headers.flatMap { it.split(";") }.forEach { part ->
-            val trimmed = part.trim()
-            val eq = trimmed.indexOf('=')
-            if (eq > 0) cookies[trimmed.substring(0, eq).trim()] = trimmed.substring(eq + 1).trim()
-        }
-        if (cookies.isEmpty()) return
-        val header = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        prefs.edit().putString("cookies", encrypt(header)).apply()
+        listOf(NimsUrls.WWW_ORIGIN to "www", NimsUrls.APEX_ORIGIN to "apex")
+            .forEach { (origin, key) ->
+                val header = cm.getCookie(origin).orEmpty().trim()
+                if (header.isNotBlank()) {
+                    prefs.edit().putString("cookies_" + key, encrypt(header)).apply()
+                }
+            }
         cm.flush()
     }
 
     fun restoreToWebView() {
-        val stored = prefs.getString("cookies", null) ?: return
-        val header = runCatching { decrypt(stored) }.getOrNull()?.takeIf { it.isNotBlank() } ?: return
         val cm = CookieManager.getInstance()
-        header.split(";").map { it.trim() }.filter { it.contains("=") }.forEach { cookie ->
-            cm.setCookie(NimsUrls.WWW_ORIGIN, "$cookie; Path=/; Secure")
-            cm.setCookie(NimsUrls.APEX_ORIGIN, "$cookie; Path=/; Secure")
-        }
+        listOf(NimsUrls.WWW_ORIGIN to "www", NimsUrls.APEX_ORIGIN to "apex")
+            .forEach { (origin, key) ->
+                // WebView already persists its native cookie store across restarts.
+                // Never overwrite fresh cookies with a stale saved snapshot.
+                if (cm.getCookie(origin).isNullOrBlank()) {
+                    val stored = prefs.getString("cookies_" + key, null)
+                        ?: if (key == "www") prefs.getString("cookies", null) else null
+                    val header = stored?.let { runCatching { decrypt(it) }.getOrNull() }
+                    header?.split(";")?.map { it.trim() }?.filter { it.contains("=") }
+                        ?.forEach { cookie ->
+                            cm.setCookie(origin, cookie + "; Path=/; Secure")
+                        }
+                }
+            }
         cm.flush()
     }
 
     fun clear() {
         prefs.edit().clear().apply()
-        CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().flush()
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush()
+        }
     }
 
     private fun encrypt(plain: String): String {

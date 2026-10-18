@@ -25,6 +25,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -183,22 +184,52 @@ class ReportActivity : Activity() {
                     }
                     CookieManager.getInstance().flush()
 
-                    val bytes = response.body?.bytes() ?: ByteArray(0)
-                    if (!response.isSuccessful || bytes.isEmpty()) {
-                        error("NIMS report could not be downloaded.")
+                    if (!response.isSuccessful) error("NIMS report returned HTTP " + response.code)
+                    val finalUrl = response.request.url
+                    if (finalUrl.scheme != "https" || finalUrl.host !in NimsUrls.HOSTS) {
+                        error("NIMS redirected this report outside its verified host.")
                     }
-                    if (!isPdf(bytes)) {
-                        val sample = bytes.toString(Charsets.UTF_8).take(12000)
-                        if (Regex("(?i)login|captcha|session expired|please login again").containsMatchIn(sample)) {
-                            error("NIMS session expired. Return to the app and log in again.")
-                        }
-                        error("NIMS did not return a PDF for this report.")
+                    val body = response.body ?: error("NIMS report response is empty.")
+                    if (body.contentLength() > MAX_PDF_BYTES) {
+                        error("Report exceeds mobile PDF viewer size limit.")
                     }
-
                     val file = File.createTempFile("nims-report-", ".pdf", cacheDir)
-                    FileOutputStream(file).use { it.write(bytes) }
-                    tempFile = file
-                    runOnUiThread { open(file) }
+                    try {
+                        var total = 0L
+                        body.byteStream().use { input ->
+                            FileOutputStream(file).use { output ->
+                                val block = ByteArray(16 * 1024)
+                                while (true) {
+                                    val count = input.read(block)
+                                    if (count < 0) break
+                                    total += count
+                                    if (total > MAX_PDF_BYTES) {
+                                        throw IOException("Report exceeds mobile PDF viewer size limit.")
+                                    }
+                                    output.write(block, 0, count)
+                                }
+                            }
+                        }
+                        val signature = ByteArray(4)
+                        val firstBytes = ByteArray(2048)
+                        val previewSize = file.inputStream().use { input ->
+                            val read = input.read(firstBytes)
+                            if (read >= 4) System.arraycopy(firstBytes, 0, signature, 0, 4)
+                            read
+                        }
+                        if (!isPdf(signature)) {
+                            val preview = if (previewSize > 0) String(firstBytes, 0, previewSize) else ""
+                            if (Regex("(?i)login|captcha|session expired|please login again").containsMatchIn(preview)) {
+                                error("NIMS session expired. Log in to open this report.")
+                            }
+                            error("NIMS did not return PDF data.")
+                        }
+                        tempFile = file
+                        runOnUiThread { if (!isFinishing && !isDestroyed) open(file) }
+                    } catch (error: Throwable) {
+                        file.delete()
+                        throw error
+                    }
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
@@ -211,45 +242,63 @@ class ReportActivity : Activity() {
 
     private fun open(file: File) {
         progress.visibility = View.GONE
-        descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-        renderer = PdfRenderer(descriptor!!)
-        if ((renderer?.pageCount ?: 0) == 0) {
-            status.text = "NIMS report PDF is empty."
-            return
+        try {
+            descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            renderer = PdfRenderer(descriptor!!)
+            if ((renderer?.pageCount ?: 0) == 0) {
+                status.text = "NIMS report PDF is empty."
+                return
+            }
+            saveButton.isEnabled = true
+            render(0)
+        } catch (_: Exception) {
+            status.text = "PDF cannot be displayed. Try another source report."
+        } catch (_: OutOfMemoryError) {
+            status.text = "Not enough memory to display this PDF."
         }
-        saveButton.isEnabled = true
-        render(0)
     }
 
     private fun render(index: Int) {
         val current = renderer ?: return
         if (index !in 0 until current.pageCount) return
-        val switchingPage = index != pageIndex
-        val page = current.openPage(index)
-        // Capped width prevents very high resolution PDFs from exhausting memory.
-        val width = (resources.displayMetrics.widthPixels * zoom).toInt().coerceIn(320, 2048)
-        val scale = width.toFloat() / page.width.toFloat()
-        val height = (page.height * scale).toInt().coerceIn(1, 4096)
-        val nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        nextBitmap.eraseColor(Color.WHITE)
+        var page: PdfRenderer.Page? = null
+        var nextBitmap: Bitmap? = null
         try {
+            val switchingPage = index != pageIndex
+            page = current.openPage(index)
+            // Limit image memory on low-RAM phones; never allocate a full-size
+            // high-resolution PDF bitmap on the UI thread.
+            val desiredWidth = (resources.displayMetrics.widthPixels * zoom)
+                .coerceIn(320f, 1200f).toDouble()
+            val scale = minOf(desiredWidth / page.width, 2400.0 / page.height)
+            val width = (page.width * scale).toInt().coerceAtLeast(1)
+            val height = (page.height * scale).toInt().coerceAtLeast(1)
+            nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            nextBitmap.eraseColor(Color.WHITE)
             page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-        } finally {
             page.close()
-        }
-
-        image.setImageDrawable(null)
-        bitmap?.recycle()
-        bitmap = nextBitmap
-        pageIndex = index
-        image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
-        image.setImageBitmap(nextBitmap)
-        status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
-        previous.isEnabled = index > 0
-        next.isEnabled = index + 1 < current.pageCount
-        if (switchingPage) {
-            verticalScroll.post { verticalScroll.scrollTo(0, 0) }
-            horizontalScroll.post { horizontalScroll.scrollTo(0, 0) }
+            page = null
+            image.setImageDrawable(null)
+            bitmap?.recycle()
+            bitmap = nextBitmap
+            nextBitmap = null
+            pageIndex = index
+            image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
+            image.setImageBitmap(bitmap)
+            status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
+            previous.isEnabled = index > 0
+            next.isEnabled = index + 1 < current.pageCount
+            if (switchingPage) {
+                verticalScroll.post { verticalScroll.scrollTo(0, 0) }
+                horizontalScroll.post { horizontalScroll.scrollTo(0, 0) }
+            }
+        } catch (_: OutOfMemoryError) {
+            status.text = "PDF is too large for available memory."
+        } catch (_: Exception) {
+            status.text = "Unable to render this PDF page."
+        } finally {
+            runCatching { page?.close() }
+            nextBitmap?.recycle()
         }
     }
 
@@ -303,5 +352,6 @@ class ReportActivity : Activity() {
     companion object {
         const val EXTRA_URL = "report_url"
         private const val REQUEST_SAVE_PDF = 231
+        private const val MAX_PDF_BYTES = 20L * 1024 * 1024
     }
 }
