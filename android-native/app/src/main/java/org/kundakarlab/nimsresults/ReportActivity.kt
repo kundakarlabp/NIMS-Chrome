@@ -271,7 +271,7 @@ class ReportActivity : Activity() {
             val width = (resources.displayMetrics.widthPixels * zoom).toInt().coerceIn(320, 1200)
             val height = (page.height.toDouble() * width / page.width)
                 .toInt().coerceIn(1, 2400)
-            nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+            nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             nextBitmap.eraseColor(Color.WHITE)
             page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             page.close()
