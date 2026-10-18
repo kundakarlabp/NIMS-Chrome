@@ -1386,29 +1386,125 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
-        val filtered = current.results.filter {
-            query.isBlank() || (it.test + " " + it.parameter + " " + it.valueText + " " + it.date).contains(query, true)
+        var category by remember(current.patient.crNo) { mutableStateOf("All") }
+        var range by remember(current.patient.crNo) { mutableStateOf("All") }
+        val latest = remember(current.results) {
+            current.results.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
         }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
+        val days: Long? = when (range) {
+            "7D" -> 7L
+            "30D" -> 30L
+            "90D" -> 90L
+            else -> null
+        }
+        val filtered = remember(current.results, query, category, range) {
+            current.results.filter { row ->
+                val isCulture = isMicro(row)
+                val flag = row.abnormal.lowercase()
+                val flagged = flag == "h" || flag == "l" || "high" in flag ||
+                    "low" in flag || "critical" in flag
+                (category == "All" ||
+                    category == "Labs" && !isCulture ||
+                    category == "Culture" && isCulture ||
+                    category == "Flagged" && flagged) &&
+                    ClinicalResultRules.inWindow(row.date, latest, days) &&
+                    (query.isBlank() || (row.test + " " + row.parameter + " " +
+                        row.valueText + " " + row.date).contains(query, true))
+            }
+        }
+        val byDate = remember(filtered) {
+            filtered.groupBy { it.date }.toList()
+                .sortedByDescending { BulkParser.dateKey(it.first) }
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
-                Text("All results", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Spacer(Modifier.height(6.dp))
+                Text("Results explorer", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Text(filtered.size.toString() + " matching values · " +
+                    byDate.size + " collection dates · " + current.reports.size +
+                    " source PDFs", fontSize = 11.sp, color = Color(0xFF66788A))
+                Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
+                    value = query, onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search test, parameter, value or date") },
+                    placeholder = { Text("Find organism, test, value or date") },
                     singleLine = true
                 )
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("All", "Labs", "Culture", "Flagged").forEach { name ->
+                        FilterChip(selected = category == name,
+                            onClick = { category = name },
+                            label = { Text(name, fontSize = 11.sp) })
+                    }
+                }
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("7D", "30D", "90D", "All").forEach { value ->
+                        FilterChip(selected = range == value,
+                            onClick = { range = value },
+                            label = { Text(value, fontSize = 11.sp) })
+                    }
+                }
+                OutlinedButton(onClick = { selectedTab = ResultsTab.REPORTS },
+                    modifier = Modifier.fillMaxWidth()) {
+                    Text("Browse original PDF reports (" + current.reports.size + ")",
+                        fontSize = 12.sp)
+                }
             }
-            items(filtered, key = { it.id }) { row -> ResultRow(row) }
+            if (byDate.isEmpty()) {
+                item { Text("No results match these filters.",
+                    color = Color(0xFF66788A)) }
+            }
+            items(byDate, key = { it.first }) { (date, values) ->
+                var expanded by remember(current.patient.crNo, date) { mutableStateOf(false) }
+                val shown = if (expanded) values else values.take(8)
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                        Text(date + " · " + values.size + " values",
+                            fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                            color = Color(0xFF102A43))
+                        shown.forEach { value ->
+                            Row(modifier = Modifier.fillMaxWidth()
+                                .clickable {
+                                    if (isMicro(value)) {
+                                        microFilter = "All"
+                                        selectedTab = ResultsTab.MICROBIOLOGY
+                                    } else {
+                                        selectedTab = ResultsTab.LABS
+                                    }
+                                }.padding(vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(value.parameter.ifBlank { value.test },
+                                        fontSize = 12.sp, maxLines = 1,
+                                        fontWeight = FontWeight.SemiBold)
+                                    Text(value.test, fontSize = 10.sp,
+                                        color = Color(0xFF66788A), maxLines = 1)
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text(value.valueText.take(40) +
+                                    if (value.valueText.length > 40) "…" else "",
+                                    fontSize = 12.sp,
+                                    maxLines = 2,
+                                    color = abnormalColor(value.abnormal),
+                                    modifier = Modifier.weight(0.8f))
+                            }
+                        }
+                        if (values.size > 8) {
+                            TextButton(onClick = { expanded = !expanded }) {
+                                Text(if (expanded) "Collapse date" else "View all " +
+                                    values.size + " values for " + date)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
