@@ -213,7 +213,7 @@ object CultureNarrative {
     // Only section words in an actual laboratory report act as delimiters.
     // Values are copied verbatim; no organism, MIC, or S/I/R is inferred.
     private val headings = Regex(
-        """(?i)\b(CULTURE\s+REPORT|SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|RESISTANCE\s+REPORT|ADVICE\s*(?::|TO\b)|COMMENTS\s*:)"""
+        """(?i)\b(CULTURE\s+REPORT|SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|RESISTANCE\s+REPORT|ADVICE\s*(?::|TO\b)|COMMENTS\s*:|REMARKS\s*:|NOTE\s*:|NOTES\s*:|INTERPRETATION\s*:)"""
     )
     fun parse(text: String): CultureSections {
         val matches = headings.findAll(text).toList()
@@ -232,7 +232,10 @@ object CultureNarrative {
                 match.value.contains("RESISTANCE", true) -> resistance =
                     listOf(resistance, value).filter { it.isNotBlank() }.joinToString("\n")
                 match.value.startsWith("ADVICE", true) ||
-                    match.value.startsWith("COMMENTS", true) -> advice =
+                    match.value.startsWith("COMMENTS", true) ||
+                    match.value.startsWith("REMARKS", true) ||
+                    match.value.startsWith("NOTE", true) ||
+                    match.value.startsWith("INTERPRETATION", true) -> advice =
                     listOf(advice, value).filter { it.isNotBlank() }.joinToString("\n")
                 else -> culture = listOf(culture, value).filter { it.isNotBlank() }.joinToString("\n")
             }
@@ -241,3 +244,32 @@ object CultureNarrative {
     }
 }
 
+
+
+// Report classification is conservative. A positive organism name in an
+// administrative note is not sufficient proof of culture growth.
+enum class CultureStatus { POSITIVE, NEGATIVE, PENDING, OTHER }
+
+object CultureReview {
+    fun status(rows: List<LabResult>): CultureStatus {
+        val narratives = rows.filter {
+            val p = it.parameter.trim().trimEnd(':')
+            p.equals("Result", true) ||
+                p.equals("Aerobic Culture", true) ||
+                p.equals("Fungal Culture", true) ||
+                p.contains("organism", true)
+        }.map { it.valueText }.filter { it.isNotBlank() }
+        if (narratives.isEmpty()) return CultureStatus.OTHER
+        val text = narratives.joinToString(" ").lowercase(Locale.US)
+        if (Regex("""\b(no\s+growth|culture\s+sterile|no\s+organism\s+isolated)\b""").containsMatchIn(text)) {
+            return CultureStatus.NEGATIVE
+        }
+        if (Regex("""\b(culture\s+shows?\s+growth|growth\s+of|organism\s+isolated|isolate\s+identified|culture\s+positive)\b""").containsMatchIn(text)) {
+            return CultureStatus.POSITIVE
+        }
+        if (Regex("""\b(pending|preliminary|interim|under\s+incubation|final\s+report\s+awaited)\b""").containsMatchIn(text)) {
+            return CultureStatus.PENDING
+        }
+        return CultureStatus.OTHER
+    }
+}
