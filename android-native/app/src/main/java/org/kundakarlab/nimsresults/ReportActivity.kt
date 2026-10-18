@@ -26,6 +26,7 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -149,11 +150,14 @@ class ReportActivity : Activity() {
             isEnabled = false
             setOnClickListener { savePdf() }
         }
-        nav.addView(previous)
-        nav.addView(next)
-        nav.addView(zoomOut)
-        nav.addView(zoomIn)
-        nav.addView(fit)
+        listOf(previous, next, zoomOut, zoomIn, fit).forEach { control ->
+            control.minimumWidth = 0
+            control.minWidth = 0
+            control.isAllCaps = false
+            control.textSize = 14f
+            control.setPadding(0, 0, 0, 0)
+            nav.addView(control, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }
         top.addView(saveButton)
         root.addView(nav)
 
@@ -165,6 +169,21 @@ class ReportActivity : Activity() {
         executor.execute {
             try {
                 val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
+                val cached = pdfCacheFile(url)
+                // Cache is app-private, short-lived and usable only while a
+                // NIMS cookie is present; never reuse after explicit logout.
+                if (cookie.isNotBlank() && cached.isFile &&
+                    cached.length() in 4..MAX_PDF_BYTES &&
+                    System.currentTimeMillis() - cached.lastModified() in 0..CACHE_TTL_MS &&
+                    cached.inputStream().use { stream ->
+                        val header = ByteArray(4)
+                        stream.read(header) == 4 && isPdf(header)
+                    }
+                ) {
+                    tempFile = cached
+                    runOnUiThread { if (!isFinishing && !isDestroyed) open(cached) }
+                    return@execute
+                }
                 val client = OkHttpClient.Builder()
                     .connectTimeout(12, TimeUnit.SECONDS)
                     .readTimeout(45, TimeUnit.SECONDS)
@@ -224,8 +243,14 @@ class ReportActivity : Activity() {
                             }
                             error("NIMS did not return PDF data.")
                         }
-                        tempFile = file
-                        runOnUiThread { if (!isFinishing && !isDestroyed) open(file) }
+                        // Store a bounded number of verified PDFs for rapid repeat
+                        // viewing without keeping raw report URLs in filenames.
+                        val destination = pdfCacheFile(url)
+                        if (destination.exists()) destination.delete()
+                        val saved = if (file.renameTo(destination)) destination else file
+                        tempFile = saved
+                        prunePdfCache()
+                        runOnUiThread { if (!isFinishing && !isDestroyed) open(saved) }
                     } catch (error: Throwable) {
                         file.delete()
                         throw error
@@ -236,6 +261,24 @@ class ReportActivity : Activity() {
                     progress.visibility = View.GONE
                     status.text = error.message ?: "Could not open NIMS report."
                 }
+            }
+        }
+    }
+
+    private fun pdfCacheFile(url: String): File {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(url.toByteArray(Charsets.UTF_8))
+        val hash = bytes.joinToString("") { "%02x".format(it) }
+        return File(cacheDir, "nims-verified-" + hash + ".pdf")
+    }
+
+    private fun prunePdfCache() {
+        val files = cacheDir.listFiles { file ->
+            file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
+        }?.sortedByDescending { it.lastModified() }.orEmpty()
+        val now = System.currentTimeMillis()
+        files.forEachIndexed { index, file ->
+            if (index >= MAX_CACHE_FILES || now - file.lastModified() > CACHE_TTL_MS) {
+                if (file != tempFile) file.delete()
             }
         }
     }
@@ -345,7 +388,7 @@ class ReportActivity : Activity() {
         bitmap?.recycle()
         renderer?.close()
         descriptor?.close()
-        tempFile?.delete()
+        if (tempFile?.name?.startsWith("nims-work-") == true) tempFile?.delete()
         super.onDestroy()
     }
 
@@ -353,5 +396,7 @@ class ReportActivity : Activity() {
         const val EXTRA_URL = "report_url"
         private const val REQUEST_SAVE_PDF = 231
         private const val MAX_PDF_BYTES = 20L * 1024 * 1024
+        private const val MAX_CACHE_FILES = 8
+        private const val CACHE_TTL_MS = 10L * 60L * 1000L
     }
 }
