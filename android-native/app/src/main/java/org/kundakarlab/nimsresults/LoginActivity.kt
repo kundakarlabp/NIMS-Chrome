@@ -110,7 +110,6 @@ class LoginActivity : Activity() {
         actions.addView(back)
         actions.addView(reload)
         actions.addView(continueButton)
-        if (manageSession) actions.addView(signOutButton)
 
         val diagnosticActions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -120,6 +119,7 @@ class LoginActivity : Activity() {
             text = "Copy diagnostics"
             setOnClickListener { copyDiagnostics() }
         }
+        if (manageSession) diagnosticActions.addView(signOutButton)
         diagnosticActions.addView(copyDiagnostics)
 
         top.addView(title)
