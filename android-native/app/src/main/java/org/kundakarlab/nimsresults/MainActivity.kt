@@ -700,7 +700,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             current.patient.age,
                             sex,
                             current.results.size.toString() + " results",
-                            current.reports.size.toString() + " PDFs"
+                            current.reports.size.toString() + " source reports"
                         ).filter { it.isNotBlank() }.joinToString(" · "),
                         color = Color(0xFF486581), fontSize = 10.sp, maxLines = 2
                     )
@@ -1019,7 +1019,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 .horizontalScroll(rememberScrollState())) {
                                 dates.forEach { date ->
                                     Column(modifier = Modifier.width(92.dp)) {
-                                        Text(date.takeLast(5), fontSize = 11.sp,
+                                        Text(date.drop(2), fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.height(27.dp))
                                         parameters.forEach { (_, values) ->
@@ -1030,12 +1030,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                         selectedValue = value
                                                     }.padding(end = 6.dp)
                                             ) {
-                                                Text(value?.valueText ?: "—",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = value?.let {
-                                                        abnormalColor(it.abnormal)
-                                                    } ?: Color(0xFF829AB1), maxLines = 2)
+                                                val flag = value?.abnormal?.lowercase().orEmpty()
+                                                val flagged = flag == "h" || flag == "l" ||
+                                                    "high" in flag || "low" in flag ||
+                                                    "critical" in flag
+                                                Surface(
+                                                    color = if (flagged) Color(0xFFFFF0E9) else Color.Transparent,
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(value?.valueText ?: "—",
+                                                        modifier = Modifier.padding(horizontal = 2.dp),
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = value?.let {
+                                                            abnormalColor(it.abnormal)
+                                                        } ?: Color(0xFF829AB1), maxLines = 2)
+                                                }
                                             }
                                         }
                                     }
@@ -1458,7 +1468,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 OutlinedButton(onClick = { selectedTab = ResultsTab.REPORTS },
                     modifier = Modifier.fillMaxWidth()) {
-                    Text("Browse original PDF reports (" + current.reports.size + ")",
+                    Text("Browse source reports (" + current.reports.size + ")",
                         fontSize = 12.sp)
                 }
             }
