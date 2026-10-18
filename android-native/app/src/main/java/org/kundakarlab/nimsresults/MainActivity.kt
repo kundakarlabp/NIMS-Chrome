@@ -406,7 +406,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("app.loadStage=$loadStage")
             appendLine("app.status=$statusText")
             appendLine("app.crInputLength=${crInput.length}")
-            appendLine("app.activeCr=${activeCr.ifBlank { "none" }}")
+            appendLine("app.activeCrPresent=${activeCr.isNotBlank()}")
             appendLine("app.pendingCrAfterLogin=${pendingCrAfterLogin.isNotBlank()}")
             appendLine("app.hasBundle=${current != null}")
             appendLine("app.resultCount=${current?.results?.size ?: 0}")
@@ -860,7 +860,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     .padding(end = 7.dp)
                                             ) {
                                                 Text(value?.let {
-                                                    it.valueText + if (it.unit.isNotBlank()) "" else ""
+                                                    it.valueText
                                                 } ?: "—",
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.SemiBold,
