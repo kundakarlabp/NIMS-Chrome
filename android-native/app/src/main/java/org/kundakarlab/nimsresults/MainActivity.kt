@@ -113,6 +113,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
 
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
+            logout()
+            statusText = "NIMS sign-out confirmed. The hospital server may still limit concurrent sessions."
+            return@registerForActivityResult
+        }
         if (result.resultCode != RESULT_OK) {
             if (loadStage == LoadStage.CHECKING_SESSION) loadStage = LoadStage.IDLE
             statusText = "Login was not completed."
