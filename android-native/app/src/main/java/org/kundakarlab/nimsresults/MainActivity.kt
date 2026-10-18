@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var statusText by mutableStateOf("Checking saved NIMS session…")
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
+    private var reportQueryPrefill by mutableStateOf("")
     private var crInput by mutableStateOf("")
     private var appLockEnabled by mutableStateOf(false)
     private var appUnlocked by mutableStateOf(true)
@@ -345,6 +346,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     bundle = initial
                     crInput = cr
                     selectedTab = ResultsTab.OVERVIEW
+                    reportQueryPrefill = ""
                     loadStage = LoadStage.READY
                     statusText = initial.results.size.toString() + " results · loading report links…"
                 }
@@ -896,35 +898,100 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun MicroScreen(current: ClinicalBundle) {
-        val rows = current.results.filter { isMicro(it) }
+        var query by remember(current.patient.crNo) { mutableStateOf("") }
+        val grouped = remember(current.results, query) {
+            current.results.filter { row ->
+                isMicro(row) && (query.isBlank() ||
+                    (row.test + " " + row.parameter + " " + row.valueText + " " + row.date)
+                        .contains(query, ignoreCase = true))
+            }.groupBy { row -> row.test to row.date }
+                .toList().sortedByDescending { BulkParser.dateKey(it.first.second) }
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item {
-                Text("Microbiology timeline", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("${rows.size} source-derived microbiology rows", color = Color(0xFF66788A), fontSize = 12.sp)
+                Text("Microbiology reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Reports are grouped by test and date; laboratory processing metadata is hidden by default.",
+                    color = Color(0xFF66788A), fontSize = 11.sp)
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Search organism, specimen or date") }
+                )
             }
-            if (rows.isEmpty()) {
-                item { Text("No microbiology rows were identified in the structured result set.", color = Color(0xFF66788A)) }
-            } else {
-                items(rows, key = { it.id }) { row ->
-                    var expanded by remember(current.patient.crNo, row.id) { mutableStateOf(false) }
-                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                            Text(row.test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+            if (grouped.isEmpty()) {
+                item { Text("No matching microbiology reports.", color = Color(0xFF66788A)) }
+            }
+            items(grouped, key = { it.first.first + "|" + it.first.second }) { (key, rows) ->
+                val (test, date) = key
+                val clinical = rows.filterNot { isMicroTechnicalField(it.parameter) }
+                    .sortedWith(compareBy<LabResult> {
+                        if (it.parameter.equals("Result", ignoreCase = true)) 0
+                        else if (Regex("(?i)organism|sensitivity|susceptib|antibiotic|mic")
+                                .containsMatchIn(it.parameter)) 1 else 2
+                    })
+                var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
+                var showMetadata by remember(current.patient.crNo, key) { mutableStateOf(false) }
+                val exact = current.reports.firstOrNull { report ->
+                    BulkParser.isoDate(report.date) == date &&
+                        normalizeKey(report.title) == normalizeKey(test) &&
+                        report.url.isNotBlank()
+                }
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
+                            fontSize = 15.sp)
+                        Text(date, color = Color(0xFF829AB1), fontSize = 11.sp)
+                        clinical.forEach { row ->
                             if (row.parameter.isNotBlank()) {
-                                Text(row.parameter, color = Color(0xFF486581), fontSize = 12.sp)
+                                Text(row.parameter, color = Color(0xFF486581),
+                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
-                            Spacer(Modifier.height(4.dp))
-                            Text(row.valueText, fontSize = 14.sp, maxLines = if (expanded) Int.MAX_VALUE else 4)
-                            if (row.valueText.length > 180) {
-                                TextButton(onClick = { expanded = !expanded }) {
-                                    Text(if (expanded) "Show less" else "Read full result")
+                            val value = row.valueText
+                            Text(
+                                value,
+                                fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 4,
+                                color = Color(0xFF243B53)
+                            )
+                            Spacer(Modifier.height(5.dp))
+                        }
+                        if (clinical.any { it.valueText.length > 120 }) {
+                            TextButton(onClick = { expanded = !expanded }) {
+                                Text(if (expanded) "Collapse narrative" else "Read full culture details")
+                            }
+                        }
+                        if (rows.size > clinical.size) {
+                            TextButton(onClick = { showMetadata = !showMetadata }) {
+                                Text(if (showMetadata) "Hide laboratory metadata"
+                                     else "Lab metadata (" + (rows.size - clinical.size) + ")")
+                            }
+                            if (showMetadata) {
+                                rows.filter { isMicroTechnicalField(it.parameter) }.forEach { row ->
+                                    Text(row.parameter + ": " + row.valueText,
+                                        fontSize = 11.sp, color = Color(0xFF66788A))
                                 }
                             }
-                            Text(row.date, color = Color(0xFF829AB1), fontSize = 11.sp)
+                        }
+                        if (exact != null) {
+                            OutlinedButton(onClick = { openReport(exact.url) }) {
+                                Text("Source PDF / susceptibility")
+                            }
+                        } else if (current.reports.isNotEmpty()) {
+                            TextButton(onClick = {
+                                reportQueryPrefill = date
+                                selectedTab = ResultsTab.REPORTS
+                            }) { Text("Browse source PDFs for this date") }
+                        }
+                        if (clinical.none { row ->
+                                Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
+                                    .containsMatchIn(row.parameter + " " + row.valueText)
+                            }) {
+                            Text("Susceptibility not separately identified in structured rows; check the original report.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
                         }
                     }
                 }
@@ -932,11 +999,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    private fun isMicroTechnicalField(parameter: String): Boolean =
+        Regex("(?i)^(test\\s*done\\s*by|sample\\s*processed|processed\\s*by|entered\\s*by|verified\\s*by|machine\\s*(?:id|no)|lab\\s*id|technician)$")
+            .matches(parameter.trim())
+
     @Composable
     private fun ReportsScreen(current: ClinicalBundle) {
-        var query by remember(current.patient.crNo) { mutableStateOf("") }
+        var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
         val filtered = current.reports.filter {
-            query.isBlank() || (it.title + " " + it.date + " " + it.department).contains(query, true)
+            query.isBlank() || (it.title + " " + it.date + " " +
+                BulkParser.isoDate(it.date) + " " + it.department).contains(query, true)
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
