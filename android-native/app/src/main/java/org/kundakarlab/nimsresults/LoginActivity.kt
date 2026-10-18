@@ -30,6 +30,9 @@ class LoginActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
     private lateinit var continueButton: Button
+    private lateinit var signOutButton: Button
+    private var manageSession = false
+    private var signOutPending = false
     private lateinit var vault: SessionVault
     private lateinit var engineScript: String
     private val handler = Handler(Looper.getMainLooper())
@@ -42,6 +45,7 @@ class LoginActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vault = SessionVault(this)
+        manageSession = intent.getBooleanExtra(EXTRA_MANAGE_SESSION, false)
         vault.restoreToWebView()
         engineScript = assets.open("nims_engine.js").bufferedReader().use { it.readText() }
 
@@ -61,9 +65,9 @@ class LoginActivity : Activity() {
             setBackgroundColor(Color.rgb(12, 45, 76))
         }
         val title = TextView(this).apply {
-            text = "NIMS login"
+            text = if (manageSession) "NIMS session" else "NIMS login"
             setTextColor(Color.WHITE)
-            textSize = 20f
+            textSize = 18f
         }
         status = TextView(this).apply {
             text = "Use the NIMS page below. This screen will stay exactly where it is if you switch apps."
@@ -98,6 +102,11 @@ class LoginActivity : Activity() {
                 finish()
             }
         }
+        signOutButton = Button(this).apply {
+            text = "Sign out NIMS"
+            isEnabled = false
+            setOnClickListener { requestPortalSignOut() }
+        }
         actions.addView(back)
         actions.addView(reload)
         actions.addView(continueButton)
@@ -110,6 +119,7 @@ class LoginActivity : Activity() {
             text = "Copy diagnostics"
             setOnClickListener { copyDiagnostics() }
         }
+        if (manageSession) diagnosticActions.addView(signOutButton)
         diagnosticActions.addView(copyDiagnostics)
 
         top.addView(title)
@@ -193,28 +203,89 @@ class LoginActivity : Activity() {
             val json = decodeJsString(raw)
             val obj = runCatching { JSONObject(json) }.getOrDefault(JSONObject())
             val authenticated = obj.optBoolean("authenticated", false)
+            signOutButton.isEnabled = authenticated && !signOutPending
             val expired = obj.optBoolean("sessionExpired", false)
             val loginForm = obj.optBoolean("loginForm", false)
             continueButton.isEnabled = authenticated
             lastProbeSummary = safeProbeSummary(obj)
+            if (signOutPending && (loginForm || expired)) {
+                signOutPending = false
+                vault.clear()
+                setResult(RESULT_FIRST_USER)
+                finish()
+                return@evaluateJavascript
+            }
             status.text = when {
+                signOutPending -> "NIMS sign-out requested. Waiting for the portal to confirm logout…"
                 authenticated -> {
                     vault.captureFromWebView()
-                    if (!authCompletionScheduled) {
+                    if (!manageSession && !authCompletionScheduled) {
                         authCompletionScheduled = true
                         handler.postDelayed({
-                            if (!isFinishing) {
+                            if (!isFinishing && !signOutPending) {
                                 vault.captureFromWebView()
                                 setResult(RESULT_OK)
                                 finish()
                             }
                         }, 900)
                     }
-                    "NIMS login verified. Returning to results automatically…"
+                    if (manageSession) "NIMS is connected. Use Sign out NIMS to release this portal session."
+                    else "NIMS login verified. Returning to results automatically…"
                 }
                 expired -> "The previous NIMS session has expired. Log in again and complete CAPTCHA."
                 loginForm -> "Enter NIMS credentials and CAPTCHA below. Switching to another app will not reset this page."
                 else -> "Waiting for NIMS authentication. If the NIMS home page is visible, use Copy diagnostics and send the text."
+            }
+        }
+    }
+
+    private fun requestPortalSignOut() {
+        if (signOutPending) return
+        // Click only a visible NIMS portal Logout control, never guessed endpoints.
+        // The request is confirmed only after the page becomes a login form or
+        // the portal reports session expiry. Clearing cookies alone does not
+        // release a NIMS server-side session slot.
+        val js = """
+          (() => {
+            const documents = [document], seen = new Set();
+            for (let i = 0; i < documents.length && i < 12; i++) {
+              const doc = documents[i];
+              if (seen.has(doc)) continue;
+              seen.add(doc);
+              try {
+                for (const frame of doc.querySelectorAll('iframe,frame')) {
+                  try { if (frame.contentDocument) documents.push(frame.contentDocument); } catch (_) {}
+                }
+              } catch (_) {}
+            }
+            for (const doc of documents) {
+              try {
+                for (const el of doc.querySelectorAll('a,button,input[type="button"],input[type="submit"]')) {
+                  const label = (el.innerText || el.textContent || el.value || '').trim();
+                  if (/^(log\s*out|logout|sign\s*out)$/i.test(label)) {
+                    el.click();
+                    return 'clicked';
+                  }
+                }
+              } catch (_) {}
+            }
+            return 'unavailable';
+          })()
+        """.trimIndent()
+        webView.evaluateJavascript(js) { raw ->
+            if (decodeJsString(raw) == "clicked") {
+                signOutPending = true
+                signOutButton.isEnabled = false
+                status.text = "Requested portal logout; waiting for NIMS confirmation…"
+                handler.postDelayed({
+                    if (signOutPending && !isFinishing) {
+                        signOutPending = false
+                        status.text = "NIMS did not confirm sign-out. Use the portal menu's Logout control."
+                        probe()
+                    }
+                }, 12_000L)
+            } else {
+                status.text = "No NIMS portal Logout control found. Open its menu and sign out manually; local cookie clearing will not release the server slot."
             }
         }
     }
@@ -291,4 +362,8 @@ class LoginActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        const val EXTRA_MANAGE_SESSION = "manage_session"
+    }
 }
