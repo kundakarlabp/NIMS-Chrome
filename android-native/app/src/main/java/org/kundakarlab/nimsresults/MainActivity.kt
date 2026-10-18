@@ -333,30 +333,39 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onBulk(requestId: String, rawJson: String) {
         if (requestId != activeRequestId) return
         cancelTimeout()
-        runOnUiThread {
-            loadStage = LoadStage.ENRICHING_REPORTS
-            statusText = "Mapping source reports and PDF links…"
-        }
-
         val cr = activeCr
         val patient = pendingPatient
+        // Normalize and display authenticated Custom Sheet values immediately.
+        // An optional report-index fetch must never block clinical lab review.
         worker.execute {
             try {
-                val reports = try {
-                    reportRepository.load(cr).reports
-                } catch (mismatch: IdentityMismatchException) {
-                    throw mismatch
-                } catch (_: Throwable) {
-                    emptyList()
-                }
-                val next = BulkParser.parse(rawJson, cr, patient, reports)
+                val initial = BulkParser.parse(rawJson, cr, patient, emptyList())
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    bundle = next
+                    bundle = initial
                     crInput = cr
                     selectedTab = ResultsTab.OVERVIEW
                     loadStage = LoadStage.READY
-                    statusText = "${next.results.size} results · ${next.reports.size} source reports"
+                    statusText = initial.results.size.toString() + " results · loading report links…"
+                }
+                val inventory = try {
+                    reportRepository.load(cr)
+                } catch (mismatch: IdentityMismatchException) {
+                    runOnUiThread {
+                        if (requestId == activeRequestId) {
+                            statusText = "Report identity mismatch. PDF links withheld."
+                        }
+                    }
+                    return@execute
+                } catch (_: Throwable) {
+                    null
+                }
+                runOnUiThread {
+                    if (requestId != activeRequestId) return@runOnUiThread
+                    // No patient data is retained from the REST/HTML reply beyond validated links.
+                    bundle = initial.copy(reports = inventory?.reports.orEmpty())
+                    statusText = initial.results.size.toString() + " results · " +
+                        (inventory?.reports?.size ?: 0) + " source reports"
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
