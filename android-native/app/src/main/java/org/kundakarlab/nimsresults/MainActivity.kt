@@ -784,43 +784,94 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+
     @Composable
     private fun LabsScreen(current: ClinicalBundle) {
-        // Date-by-parameter matrix similar to the existing desktop dashboard.
-        // Preserve every original result for full-detail inspection and trends.
         var query by remember(current.patient.crNo) { mutableStateOf("") }
-        val filtered = remember(current.results, query) {
-            current.results.filter { row ->
-                !isMicro(row) &&
-                    (query.isBlank() || listOf(row.test, row.parameter, row.valueText, row.date)
-                        .any { it.contains(query, true) })
+        var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
+        var period by remember(current.patient.crNo) { mutableStateOf("90D") }
+        var columns by remember(current.patient.crNo) { mutableStateOf("4") }
+        val nonMicro = remember(current.results) { current.results.filterNot { isMicro(it) } }
+        val latest = remember(nonMicro) {
+            nonMicro.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
+        }
+        val periodDays: Long? = when (period) {
+            "14D" -> 14L
+            "30D" -> 30L
+            "90D" -> 90L
+            "1Y" -> 365L
+            else -> null
+        }
+        val options = remember(nonMicro) {
+            nonMicro.filter { it.parameter.isNotBlank() }
+                .groupingBy { it.parameter }.eachCount()
+                .entries.sortedByDescending { it.value }
+                .take(20).map { it.key }
+        }
+        val filtered = remember(nonMicro, query, parameter, period, latest) {
+            nonMicro.filter { row ->
+                (parameter == "All" || row.parameter == parameter) &&
+                    ClinicalResultRules.inWindow(row.date, latest, periodDays) &&
+                    (query.isBlank() || (row.test + " " + row.parameter + " " + row.date)
+                        .contains(query, true))
             }
         }
         val groups = remember(filtered) {
-            filtered.groupBy { it.test.ifBlank { "Other investigations" } }.toList()
+            filtered.groupBy { it.test.ifBlank { "Other investigations" } }
+                .toList().sortedBy { it.first }
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
-                Text("Laboratory matrix", fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                    color = Color(0xFF102A43))
-                Spacer(Modifier.height(6.dp))
+                Text("Laboratory comparison", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text("Find Hb, CBC, creatinine, date…") }
+                    value = query, onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Search investigation or parameter") }
                 )
-                Text("Columns show the latest four dates. Tap a value for complete details.",
-                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Text("Parameter", fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    (listOf("All") + options).forEach { name ->
+                        FilterChip(selected = parameter == name,
+                            onClick = { parameter = name },
+                            label = { Text(name, fontSize = 11.sp, maxLines = 1) })
+                    }
+                }
+                Text("Date range · relative to latest result", fontSize = 11.sp,
+                    color = Color(0xFF66788A))
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("14D", "30D", "90D", "1Y", "All").forEach { span ->
+                        FilterChip(selected = period == span, onClick = { period = span },
+                            label = { Text(span, fontSize = 11.sp) })
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Dates shown:", fontSize = 11.sp, color = Color(0xFF66788A))
+                    listOf("4", "8", "All").forEach { count ->
+                        FilterChip(selected = columns == count,
+                            onClick = { columns = count },
+                            label = { Text(count, fontSize = 11.sp) })
+                    }
+                }
+            }
+            if (groups.isEmpty()) {
+                item { Text("No matching values in this date range.", color = Color(0xFF66788A)) }
             }
             items(groups, key = { it.first }) { (test, rows) ->
-                val dates = remember(rows) {
-                    rows.map { it.date }.distinct().sortedByDescending { BulkParser.dateKey(it) }.take(4)
+                val dates = remember(rows, columns) {
+                    val allDates = rows.map { it.date }.distinct()
+                        .sortedByDescending { BulkParser.dateKey(it) }
+                    when (columns) {
+                        "4" -> allDates.take(4)
+                        "8" -> allDates.take(8)
+                        else -> allDates
+                    }
                 }
                 val parameters = remember(rows) {
                     rows.groupBy { it.parameter.ifBlank { it.test } }.toList()
@@ -829,75 +880,68 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     mutableStateOf<LabResult?>(null)
                 }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(modifier = Modifier.padding(10.dp)) {
+                    Column(Modifier.padding(10.dp)) {
                         Text(test + " · " + rows.size + " values", fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp, color = Color(0xFF102A43))
-                        Spacer(Modifier.height(8.dp))
+                            fontSize = 14.sp, color = Color(0xFF102A43))
+                        Text(dates.size.toString() + " dates · scroll horizontally for older values",
+                            fontSize = 10.sp, color = Color(0xFF829AB1))
+                        Spacer(Modifier.height(6.dp))
                         Row(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.width(135.dp)) {
-                                Text("Parameter", fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.height(32.dp))
-                                parameters.forEach { (parameter, values) ->
-                                    val unit = values.firstOrNull()?.unit.orEmpty()
-                                    Column(modifier = Modifier.height(52.dp).padding(end = 4.dp)) {
-                                        Text(parameter, fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium, maxLines = 2)
-                                        if (unit.isNotBlank()) {
-                                            Text(unit, fontSize = 10.sp,
+                            Column(modifier = Modifier.width(117.dp)) {
+                                Text("Parameter", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.height(27.dp))
+                                parameters.forEach { (name, values) ->
+                                    Column(modifier = Modifier.height(44.dp).padding(end = 5.dp)) {
+                                        Text(name, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                                            maxLines = 2)
+                                        values.firstOrNull()?.unit?.takeIf { it.isNotBlank() }?.let { unit ->
+                                            Text(unit, fontSize = 9.sp,
                                                 color = Color(0xFF829AB1), maxLines = 1)
                                         }
                                     }
                                 }
                             }
-                            Row(modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState())) {
+                            Row(modifier = Modifier.weight(1f)
+                                .horizontalScroll(rememberScrollState())) {
                                 dates.forEach { date ->
-                                    Column(modifier = Modifier.width(100.dp)) {
-                                        Text(date, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.height(32.dp), maxLines = 1)
+                                    Column(modifier = Modifier.width(92.dp)) {
+                                        Text(date.takeLast(5), fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.height(27.dp))
                                         parameters.forEach { (_, values) ->
                                             val value = values.firstOrNull { it.date == date }
                                             Box(
-                                                modifier = Modifier
-                                                    .height(52.dp)
-                                                    .fillMaxWidth()
+                                                modifier = Modifier.height(44.dp).fillMaxWidth()
                                                     .clickable(enabled = value != null) {
                                                         selectedValue = value
-                                                    }
-                                                    .padding(end = 7.dp)
+                                                    }.padding(end = 6.dp)
                                             ) {
-                                                Text(value?.let {
-                                                    it.valueText
-                                                } ?: "—",
+                                                Text(value?.valueText ?: "—",
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.SemiBold,
-                                                    color = if (value != null)
-                                                        abnormalColor(value.abnormal) else Color(0xFF829AB1),
-                                                    maxLines = 2)
+                                                    color = value?.let {
+                                                        abnormalColor(it.abnormal)
+                                                    } ?: Color(0xFF829AB1), maxLines = 2)
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        val detail = selectedValue
-                        if (detail != null) {
+                        selectedValue?.let { detail ->
                             HorizontalDivider()
-                            Spacer(Modifier.height(5.dp))
-                            Text(detail.parameter.ifBlank { detail.test } + " · " + detail.date,
+                            Text(detail.parameter + " · " + detail.date,
                                 fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(detail.valueText + (if (detail.unit.isBlank()) "" else " " + detail.unit),
-                                fontSize = 13.sp)
+                            Text(detail.valueText + (if (detail.unit.isBlank()) ""
+                                else " " + detail.unit), fontSize = 13.sp)
                             if (detail.refRange.isNotBlank()) {
-                                Text("Reference: " + detail.refRange,
-                                    fontSize = 11.sp, color = Color(0xFF66788A))
+                                Text("Reference: " + detail.refRange, fontSize = 11.sp,
+                                    color = Color(0xFF66788A))
                             }
                             TextButton(onClick = { selectedValue = null }) { Text("Close detail") }
                         }
                     }
                 }
-            }
-            if (groups.isEmpty()) {
-                item { Text("No matching laboratory values.", color = Color(0xFF66788A)) }
             }
         }
     }
