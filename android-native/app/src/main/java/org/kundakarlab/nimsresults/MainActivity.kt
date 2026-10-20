@@ -99,6 +99,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var reportCategoryPrefill by mutableStateOf("All")
     private var reportTitleEpoch by mutableStateOf(0)
     private var microFilter by mutableStateOf("All")
     private var crInput by mutableStateOf("")
@@ -582,6 +583,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("NIMS diagnostics", diagnosticsText()))
         Toast.makeText(this, "Safe diagnostics copied", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun browseSourceReports(test: String) {
+        // NIMS often uses accession or generic department titles in its index.
+        // Do not apply an exact-name search that hides the actual source PDF.
+        reportQueryPrefill = ""
+        reportCategoryPrefill = when {
+            Regex("""(?i)blood\s*group|antibody\s*screen|transfusion|cross\s*match""")
+                .containsMatchIn(test) -> "Blood bank"
+            ClinicalReportRenderer.isMicrobiologyInvestigation(test) -> "Microbiology"
+            else -> "All"
+        }
+        selectedTab = ResultsTab.REPORTS
     }
 
     private fun copyReportDiagnostics(test: String, rows: List<LabResult>,
@@ -1400,8 +1414,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                     } else if (inventory.isNotEmpty()) {
                         TextButton(onClick = {
-                            reportQueryPrefill = test
-                            selectedTab = ResultsTab.REPORTS
+                            browseSourceReports(test)
                         }) { Text("Browse source reports · no verified PDF match") }
                     }
                     if (showSources) {
@@ -1703,8 +1716,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text("Panel codes are uninterpreted without a validated target dictionary. Verify the original PDF.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = {
-                                reportQueryPrefill = test
-                                selectedTab = ResultsTab.REPORTS
+                                browseSourceReports(test)
                             }) { Text("Find source panel PDF") }
                         }
                         if (Regex("(?i)blood grouping|antibody screening").containsMatchIn(test)) {
@@ -2019,8 +2031,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                         } else if (current.reports.isNotEmpty()) {
                             TextButton(onClick = {
-                                reportQueryPrefill = test
-                                selectedTab = ResultsTab.REPORTS
+                                browseSourceReports(test)
                             }) { Text("Browse source reports · no verified PDF match") }
                         }
                         if (chooseSource) {
@@ -2124,21 +2135,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun ReportsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
-        var category by remember(current.patient.crNo) { mutableStateOf("All") }
+        var category by remember(current.patient.crNo, reportCategoryPrefill) { mutableStateOf(reportCategoryPrefill) }
         val revision = reportTitleEpoch
         val filtered = remember(current.reports, query, category, revision) {
             current.reports.filter { report ->
                 val searchable = (report.title + " " + ReportTitleCache.get(report.url).orEmpty() +
                     " " + report.date + " " + report.sentDate + " " +
                     report.reportedDate + " " + report.department + " " + report.labNumber)
+                val label = report.title + " " + report.department + " " +
+                    ReportTitleCache.get(report.url).orEmpty()
                 val radiology = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
-                    .containsMatchIn(report.title + " " + report.department)
-                val micro = Regex("""(?i)microbiology|culture|bacteriology|serology|genexpert|biofire""")
-                    .containsMatchIn(report.title + " " + report.department)
+                    .containsMatchIn(label)
+                val micro = Regex("""(?i)microbiology|culture|bacteriology|serology|genexpert|biofire|gram\s*stain|afb|tb\s*fluorescen""")
+                    .containsMatchIn(label)
+                val bloodBank = Regex("""(?i)blood\s*group|antibody\s*screen|transfusion|immunohaematology|immunohematology|cross\s*match|blood\s*bank|\bbgt\b""")
+                    .containsMatchIn(label)
                 (category == "All" ||
                     category == "Radiology" && radiology ||
                     category == "Microbiology" && micro ||
-                    category == "Other" && !radiology && !micro) &&
+                    category == "Blood bank" && bloodBank ||
+                    category == "Other" && !radiology && !micro && !bloodBank) &&
                     (query.isBlank() || searchable.contains(query, true))
             }
         }
@@ -2149,14 +2165,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             item {
                 Text("Source reports", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text(filtered.size.toString() + " reports · each source is linked to its original NIMS report",
+                Text(filtered.size.toString() + " report-index entries · some require source verification",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 OutlinedTextField(value = query, onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
                     placeholder = { Text("Find investigation, accession or date") })
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("All", "Radiology", "Microbiology", "Other").forEach { item ->
+                    listOf("All", "Microbiology", "Blood bank", "Radiology", "Other").forEach { item ->
                         FilterChip(selected = category == item,
                             onClick = { category = item },
                             label = { Text(item, fontSize = 11.sp) })
@@ -2591,8 +2607,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }) { Text("Open matched PDF", fontSize = 11.sp) }
                                     } else {
                                         TextButton(onClick = {
-                                            reportQueryPrefill = ""
-                                            selectedTab = ResultsTab.REPORTS
+                                            browseSourceReports(test)
                                         }) { Text("Browse source PDFs", fontSize = 11.sp) }
                                     }
                                     TextButton(onClick = {
