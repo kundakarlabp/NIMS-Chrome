@@ -1021,11 +1021,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val clinicalRows = remember(nonMicro, kind) {
             nonMicro.filter { row ->
                 when (kind) {
-                    "Serology" -> ClinicalResultRules.isSerology(row)
+                    "Serology" -> ClinicalResultRules.isSerology(row) &&
+                        !ClinicalPresentation.isTechnical(row) &&
+                        !ClinicalPresentation.isOpaquePanelCode(row)
                     "Narrative" -> ClinicalResultRules.isNarrativeOrQualitative(row) &&
-                        !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                        !ClinicalPresentation.isTechnical(row) &&
+                        !ClinicalPresentation.isOpaquePanelCode(row)
                     "Raw" -> true
-                    else -> !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                    else -> !ClinicalPresentation.isTechnical(row) &&
+                        !ClinicalPresentation.isOpaquePanelCode(row)
                 }
             }
         }
@@ -1128,6 +1132,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Column(Modifier.padding(10.dp)) {
                         Text(test + " · " + rows.size + " values", fontWeight = FontWeight.Bold,
                             fontSize = 14.sp, color = Color(0xFF102A43))
+                        if (Regex("(?i)biofire|filmarray|ana\\s*(?:profile|blot|panel)")
+                                .containsMatchIn(test)) {
+                            Text("Panel codes are uninterpreted without a validated target dictionary. Verify the original PDF.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                            TextButton(onClick = {
+                                reportQueryPrefill = test
+                                selectedTab = ResultsTab.REPORTS
+                            }) { Text("Find source panel PDF") }
+                        }
                         if (Regex("(?i)blood grouping|antibody screening").containsMatchIn(test)) {
                             Text("Source-coded result fields may not represent clinical values. Verify ABO/Rh and interpretation in the original PDF.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
@@ -1173,7 +1186,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     color = if (flagged) Color(0xFFFFF0E9) else Color.Transparent,
                                                     shape = RoundedCornerShape(4.dp)
                                                 ) {
-                                                    Text(value?.valueText ?: "—",
+                                                    Text(value?.let(ClinicalPresentation::displayValue) ?: "—",
                                                         modifier = Modifier.padding(horizontal = 2.dp),
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.SemiBold,
@@ -1191,7 +1204,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             HorizontalDivider()
                             Text(detail.parameter + " · " + detail.date,
                                 fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(detail.valueText + (if (detail.unit.isBlank()) ""
+                            Text(ClinicalPresentation.displayValue(detail) + (if (detail.unit.isBlank()) ""
                                 else " " + detail.unit), fontSize = 13.sp)
                             if (detail.refRange.isNotBlank()) {
                                 Text("Reference: " + detail.refRange, fontSize = 11.sp,
