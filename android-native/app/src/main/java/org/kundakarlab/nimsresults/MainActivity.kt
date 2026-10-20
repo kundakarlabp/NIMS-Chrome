@@ -1318,10 +1318,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         TextButton(onClick = {
                             openReport(sourceLinks.verified.url)
                         }) { Text("Open uniquely matched source PDF") }
-                    } else if (inventory.isNotEmpty()) {
+                    } else if (sourceLinks.candidates.isNotEmpty()) {
                         TextButton(onClick = { showSources = true }) {
-                            Text("Choose source PDF (" + sourceLinks.candidates.size + " candidates)")
+                            Text("Review " + sourceLinks.candidates.size + " related PDFs (unverified)")
                         }
+                    } else if (inventory.isNotEmpty()) {
+                        TextButton(onClick = {
+                            reportQueryPrefill = test
+                            selectedTab = ResultsTab.REPORTS
+                        }) { Text("Browse source reports · no verified PDF match") }
                     }
                     if (showSources) {
                         AlertDialog(
@@ -1616,6 +1621,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun MicroScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
+        var showSourceInventory by remember(current.patient.crNo) { mutableStateOf(false) }
+        // Source inventory is intentionally independent of structured rows:
+        // many NIMS microscopy/molecular reports have no parseable values.
+        val sourceMicro = remember(current.reports, reportTitleEpoch) {
+            current.reports.filter { report ->
+                ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    report.department.contains("microbiology", ignoreCase = true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(
+                        ReportTitleCache.get(report.url).orEmpty())
+            }.distinctBy { it.url.ifBlank { "id|" + it.id } }
+        }
         val grouped = remember(current.results, query, microFilter) {
             // Filter complete culture reports rather than individual rows: this
             // preserves accompanying susceptibility, resistance and notes.
@@ -1642,7 +1658,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             item {
                 Text("Microbiology reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("Select positive cultures or inspect all microbiology reports.",
+                Text("Structured groups: " + grouped.size + " · source microbiology PDFs: " +
+                    sourceMicro.size + ". Reports without structured values remain accessible.",
                     color = Color(0xFF66788A), fontSize = 11.sp)
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1659,7 +1676,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 )
             }
             if (grouped.isEmpty()) {
-                item { Text("No matching microbiology reports.", color = Color(0xFF66788A)) }
+                item { Text("No matching structured microbiology rows. Check the source PDF inventory below.",
+                    color = Color(0xFF66788A)) }
             }
             items(grouped, key = { it.first.first + "|" + it.first.second + "|" + it.first.third }) { (key, rows) ->
                 val (test, date) = key
@@ -1797,13 +1815,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             OutlinedButton(onClick = { openReport(exact.url) }) {
                                 Text("Verified accession-linked PDF")
                             }
-                        } else if (current.reports.isNotEmpty()) {
-                            Text("Source PDF identity is not unique; choose using the original lab/study number.",
+                        } else if (mapping.candidates.isNotEmpty()) {
+                            Text("These PDFs are related by test and date, not verified to this specimen.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = { chooseSource = true }) {
-                                Text("Choose related source PDFs (" +
-                                    mapping.candidates.size + ")")
+                                Text("Review " + mapping.candidates.size + " related source PDFs")
                             }
+                        } else if (current.reports.isNotEmpty()) {
+                            TextButton(onClick = {
+                                reportQueryPrefill = test
+                                selectedTab = ResultsTab.REPORTS
+                            }) { Text("Browse source reports · no verified PDF match") }
                         }
                         if (chooseSource) {
                             AlertDialog(
@@ -1853,6 +1875,41 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }) {
                             Text("Susceptibility not separately identified in structured rows; check the original report.",
                                 fontSize = 10.sp, color = Color(0xFF66788A))
+                        }
+                    }
+                }
+            }
+            if (sourceMicro.isNotEmpty()) {
+                item {
+                    TextButton(onClick = { showSourceInventory = !showSourceInventory }) {
+                        Text(if (showSourceInventory) "Hide source microbiology PDFs (" +
+                            sourceMicro.size + ")" else "Show all source microbiology PDFs (" +
+                            sourceMicro.size + ")")
+                    }
+                    Text("Includes original source reports regardless of whether NIMS supplied structured rows. " +
+                        "This is an inventory, not an assertion that every PDF has been parsed.",
+                        fontSize = 10.sp, color = Color(0xFF66788A))
+                }
+                if (showSourceInventory) {
+                    items(sourceMicro, key = { "micro-source-" + it.id + "|" + it.url }) { report ->
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                            Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                                Text(ReportTitleCache.get(report.url) ?: report.title,
+                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                if (report.date.isNotBlank()) Text("Index date: " + report.date,
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                if (report.labNumber.isNotBlank()) Text(
+                                    "Lab/study: " + report.labNumber,
+                                    fontSize = 10.sp, color = Color(0xFF486581))
+                                if (report.url.isNotBlank()) {
+                                    TextButton(onClick = { openReport(report.url) }) {
+                                        Text("Open original PDF")
+                                    }
+                                } else {
+                                    Text("PDF link not supplied", fontSize = 10.sp,
+                                        color = Color(0xFF875B22))
+                                }
+                            }
                         }
                     }
                 }
