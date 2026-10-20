@@ -9,6 +9,7 @@ on:
       - fix/android-v104-clinical-trends-cultures
       - fix/android-v105-clinical-workspace
       - fix/android-v106-dashboard-api-parity
+      - fix/android-v107-report-reading-persistence
   pull_request:
     branches:
       - release/android-native-rebuild-base
