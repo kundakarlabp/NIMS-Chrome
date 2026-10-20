@@ -1308,10 +1308,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text("Collection/reporting timestamps not separately available",
                                 fontSize = 10.sp, color = Color(0xFF829AB1))
                         }
-                        Text("Lab accession: " + (accession.ifBlank {
-                            exact?.labNumber?.takeIf(String::isNotBlank)
-                        } ?: "not provided in structured feed"),
-                            fontSize = 11.sp, color = Color(0xFF486581))
+                        val sourceAccession = accession.ifBlank {
+                            exact?.labNumber.orEmpty()
+                        }
+                        Text("Lab accession: " + sourceAccession.ifBlank {
+                            "Not supplied by NIMS structured feed"
+                        }, fontSize = 11.sp, color = Color(0xFF486581))
                         val reportRows = clinical.filter { row ->
                             row.parameter.equals("Result", true) ||
                             row.valueText.contains("CULTURE REPORT", true) ||
