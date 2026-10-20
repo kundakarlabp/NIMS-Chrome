@@ -21,7 +21,7 @@ object ClinicalReportRenderer {
         """(?i)smear|gram(?:s)?\s*stain|calcofluor|fungal\s*koh|koh\s*preparation|hiv|hbs\s*ag|hcv|elisa|elfa|ns1|dengue|widal|serolog|agglutination|malaria|urine\s+examination|urine\s+routine|biofire|filmarray|ana\s*(?:profile|blot|panel)|blood\s+group|antibody\s+screen"""
     )
     private val coded = Regex(
-        """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|[12]\.?\s*antibody\s*screening|\/[hl]pf\s*\(investigation\)|negative\s*\(investigation\)|result\s*code)$"""
+        """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|[12]\.?\s*antibody\s*screening|\/[hl]pf\s*\((?:investigation|result)\)|negative\s*\(investigation\)|result\s*code)$"""
     )
     private val unknownValues = setOf("", "--", "—", "null", "n/a")
 
@@ -37,6 +37,9 @@ object ClinicalReportRenderer {
         val name = row.parameter.trim()
         val code = row.valueText.trim()
         if (ClinicalPresentation.isTechnical(row) || ClinicalPresentation.isOpaquePanelCode(row)) return true
+        // Generic /HPF or /LPF fields lack the named urinary sediment
+        // analyte; an apparently numeric value must not be labeled as RBC/WBC.
+        if (Regex("""(?i)^/[hl]pf\s*\(result\)$""").matches(name)) return true
         if (coded.matches(name) && !isClinicalNarrative(code)) return true
         // -1 is commonly an administrative/empty marker, not a true negative.
         if (code == "-1" && row.refRange.isBlank() &&
