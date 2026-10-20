@@ -629,8 +629,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Surface(color = Color.White, shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.size(34.dp)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("N", fontSize = 20.sp, fontWeight = FontWeight.Black,
+                            color = Color(0xFF0C2D4C))
+                    }
+                }
+                Spacer(Modifier.width(7.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("NIMS Results", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("NIMS Results", color = Color.White,
+                        fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Nizam's Institute of Medical Sciences · Punjagutta",
+                        color = Color(0xFFBDCAD6), fontSize = 9.sp, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
                 SessionBadge(sessionState)
             }
@@ -654,39 +666,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun ConnectionPanel() {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(statusText, fontSize = 13.sp, color = Color(0xFF33475B))
-                }
+        Column(modifier = Modifier.fillMaxWidth()
+            .background(Color.White).padding(horizontal = 12.dp, vertical = 5.dp)) {
+            Text(statusText, fontSize = 11.sp, color = Color(0xFF486581),
+                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Row(modifier = Modifier.fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 if (sessionState != SessionState.CONNECTED) {
-                    Button(onClick = { openLogin() }) { Text("NIMS login") }
+                    TextButton(onClick = { openLogin() }) { Text("NIMS login", fontSize = 12.sp) }
                 } else {
-                    TextButton(onClick = { engine.checkSession() }) { Text("Check") }
+                    TextButton(onClick = { engine.checkSession() }) { Text("Check", fontSize = 12.sp) }
                     TextButton(onClick = { openLogin(manageSession = true) }) {
-                        Text("NIMS session")
+                        Text("Session / Logout", fontSize = 12.sp)
                     }
-                    TextButton(onClick = { logout() }) { Text("Clear local") }
+                    TextButton(onClick = { logout() }) { Text("Clear local", fontSize = 12.sp) }
                 }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
                 TextButton(onClick = { toggleAppLock() }) {
-                    Text(if (appLockEnabled) "Device lock: On" else "Enable device lock",
-                        fontSize = 12.sp)
+                    Text(if (appLockEnabled) "Lock On" else "Device lock", fontSize = 12.sp)
                 }
                 TextButton(onClick = { copyDiagnostics() }) {
-                    Text("Copy diagnostics", fontSize = 12.sp)
+                    Text("Diagnostics", fontSize = 12.sp)
                 }
             }
         }
