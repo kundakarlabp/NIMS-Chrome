@@ -53,4 +53,11 @@ class ResultsReviewV113Test {
         assertFalse(info.contains("Example PERSON"))
         assertFalse(info.contains("Acinetobacter baumannii"))
     }
+    @Test fun malformedGreaterThanSymbolIsRestoredWithoutChangingOtherText() {
+        val cr = "123456789012345"
+        val raw = """{"status":1,"crNo":"123456789012345","groups":[{"testName":"C REACTIVE PROTEIN","rows":[{"parameterName":"Result","valuesByDate":{"27-Jun-2025":"( gt;=6 mg/1000ml )"}}]}]}"""
+        val bundle = BulkParser.parse(raw, cr, PatientInfo(), emptyList())
+        assertEquals("( >=6 mg/1000ml )", bundle.results.single().valueText)
+    }
+
 }
