@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,6 +70,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -670,6 +672,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
                                 ResultsTab.OVERVIEW -> OverviewScreen(current)
+                                ResultsTab.ID -> IdFocusScreen(current)
                                 ResultsTab.LABS -> LabsScreen(current)
                                 ResultsTab.MICROBIOLOGY -> MicroScreen(current)
                                 ResultsTab.REPORTS -> ReportsScreen(current)
@@ -697,11 +700,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(color = Color.White, shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.size(34.dp)) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text("N", fontSize = 20.sp, fontWeight = FontWeight.Black,
-                            color = Color(0xFF0C2D4C))
-                    }
+                    modifier = Modifier.size(40.dp)) {
+                    Image(
+                        painter = painterResource(id = R.drawable.nims_logo),
+                        contentDescription = "NIMS official logo",
+                        modifier = Modifier.size(40.dp)
+                    )
                 }
                 Spacer(Modifier.width(7.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -998,10 +1002,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val demographics = listOf(current.patient.age,
                         current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
                         .filter { it.isNotBlank() }.joinToString(" · ")
-                    Text(listOf(demographics,
-                        current.results.size.toString() + " source values",
-                        current.reports.size.toString() + " reports")
-                        .filter { it.isNotBlank() }.joinToString(" · "),
+                    Text(demographics,
                         color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f))
@@ -1102,9 +1103,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Clinical review", fontWeight = FontWeight.Bold,
                     fontSize = 17.sp, color = Color(0xFF102A43))
-                Text("Latest available report: " + latestDate +
-                    " · values may have different collection dates",
+                Text("Latest structured result: " + latestDate +
+                    " · " + current.results.size + " source fields · " +
+                    current.reports.size + " report-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
+                Text("Source fields are not the same as verified clinical parameters; " +
+                    "use original PDFs for categorical and narrative reports.",
+                    fontSize = 10.sp, color = Color(0xFF829AB1))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(modifier = Modifier.weight(1f),
@@ -1246,8 +1251,42 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         fontSize = 10.sp, color = Color(0xFF875B22))
                 }
                 if (layout == ClinicalLayout.SOURCE_CODED) {
-                    Text("Targets or blood-group values cannot be decoded from NIMS control codes. Use the signed source report.",
+                    Text("Opaque HIS control codes are not diagnostic results. " +
+                        "The signed source report is authoritative.",
                         fontSize = 11.sp, color = Color(0xFF875B22))
+                    if (Regex("""(?i)blood\s*group|antibody\s*screen""").containsMatchIn(test)) {
+                        // Only display a conclusion extracted from the actual
+                        // CR-matched PDF. It is a source-document summary,
+                        // NOT a value assigned to an unlinked bulk result date.
+                        val verifiedGroups = inventory.mapNotNull { report ->
+                            val header = ReportTitleCache.header(report.url)
+                            if (header?.crNo != patientCr) null
+                            else PdfClinicalSummaries.bloodGrouping(
+                                ReportTitleCache.extracted(report.url).orEmpty()
+                            )?.let { report to it }
+                        }.distinctBy { it.first.url }
+                        if (verifiedGroups.isNotEmpty()) {
+                            Text("Blood group conclusions from opened, CR-checked source PDFs",
+                                fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF102A43))
+                            verifiedGroups.take(5).forEach { (report, group) ->
+                                Text("ABO/Rh: " + group.group +
+                                    if (group.antibodyScreen.isNotBlank())
+                                        " · Antibody screen: " + group.antibodyScreen else "",
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text("Verify source PDF · " +
+                                        report.date.ifBlank { "date not supplied" })
+                                }
+                            }
+                            Text("Verify against the original signed report before transfusion.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                        } else {
+                            Text("Open the blood-bank source PDF to read the signed ABO/Rh " +
+                                "conclusion; only CR-matched extracted text is displayed here.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
+                        }
+                    }
                 }
                 datesToShow.forEach { (date, dateRows) ->
                     var showFullText by remember(patientCr, test, date) {
@@ -1318,10 +1357,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         TextButton(onClick = {
                             openReport(sourceLinks.verified.url)
                         }) { Text("Open uniquely matched source PDF") }
-                    } else if (inventory.isNotEmpty()) {
+                    } else if (sourceLinks.candidates.isNotEmpty()) {
                         TextButton(onClick = { showSources = true }) {
-                            Text("Choose source PDF (" + sourceLinks.candidates.size + " candidates)")
+                            Text("Review " + sourceLinks.candidates.size + " related PDFs (unverified)")
                         }
+                    } else if (inventory.isNotEmpty()) {
+                        TextButton(onClick = {
+                            reportQueryPrefill = test
+                            selectedTab = ResultsTab.REPORTS
+                        }) { Text("Browse source reports · no verified PDF match") }
                     }
                     if (showSources) {
                         AlertDialog(
@@ -1368,6 +1412,116 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 Text("Original report identity must match the source accession.",
                     color = Color(0xFF66788A), fontSize = 10.sp)
+            }
+        }
+    }
+
+    @Composable
+    private fun IdFocusScreen(current: ClinicalBundle) {
+        // The ID view is a filtered longitudinal index, not an AI diagnosis.
+        val markers = listOf(
+            "CRP / hsCRP" to setOf("crp", "creactiveprotein", "hscrp",
+                "highsensitivitycrp", "highsensitivitycreactiveprotein"),
+            "ESR" to setOf("esr", "erythrocytesedimentationrate"),
+            "Procalcitonin" to setOf("procalcitonin", "pct"),
+            "WBC / TLC" to setOf("wbc", "tlc", "totalleukocytecount",
+                "totalleucocytecount", "whitebloodcellcount"),
+            "ANC" to setOf("anc", "absoluteneutrophilcount")
+        )
+        val markerRows = remember(current.results) {
+            markers.map { (name, aliases) ->
+                name to current.results.filter { row ->
+                    !isMicro(row) && normalizeKey(row.parameter) in aliases &&
+                        row.numericValue?.isFinite() == true &&
+                        !ClinicalReportRenderer.isUninterpretedCode(row)
+                }.sortedByDescending { BulkParser.dateKey(it.date) }
+            }
+        }
+        val cultures = remember(current.results) {
+            current.results.filter { ClinicalPresentation.isCulture(it.test) }
+                .groupBy { Triple(it.test, it.date, it.labNumber) }.toList()
+                .sortedByDescending { BulkParser.dateKey(it.first.second) }
+        }
+        val positives = cultures.count { CultureReview.status(it.second) == CultureStatus.POSITIVE }
+        val microbiologySourceCount = remember(current.reports, reportTitleEpoch) {
+            current.reports.count { report ->
+                ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    report.department.contains("microbiology", true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(
+                        ReportTitleCache.get(report.url).orEmpty())
+            }
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text("Infectious diseases review", fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+                Text("Inflammatory markers, leukocyte trends and microbiology. " +
+                    "Results are source-derived; clinical interpretation requires context.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = {
+                        microFilter = "Positive"
+                        selectedTab = ResultsTab.MICROBIOLOGY
+                    }) { Text("Positive cultures: " + positives, fontSize = 11.sp) }
+                    OutlinedButton(onClick = {
+                        microFilter = "All"
+                        selectedTab = ResultsTab.MICROBIOLOGY
+                    }) { Text("Micro PDFs: " + microbiologySourceCount, fontSize = 11.sp) }
+                }
+            }
+            items(markerRows, key = { it.first }) { (name, rows) ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(11.dp)) {
+                        Text(name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (rows.isEmpty()) {
+                            Text("No verified quantitative value in the structured feed.",
+                                fontSize = 11.sp, color = Color(0xFF66788A))
+                        } else {
+                            rows.take(4).forEach { value ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(value.date, fontSize = 11.sp,
+                                        color = Color(0xFF486581))
+                                    Text(value.valueText +
+                                        if (value.unit.isNotBlank()) " " + value.unit else "",
+                                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                        color = abnormalColor(value.abnormal))
+                                }
+                            }
+                            if (rows.size > 4) TextButton(onClick = {
+                                selectedTab = ResultsTab.TRENDS
+                            }) { Text("View longitudinal trends (" + rows.size + ")") }
+                        }
+                    }
+                }
+            }
+            item {
+                Text("Culture chronology", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (cultures.isEmpty()) Text("No structured culture findings. " +
+                    "Inspect Microbiology for unstructured source PDFs.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+            }
+            items(cultures.take(10), key = { it.first.toString() }) { (identity, rows) ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                        Text(identity.first + " · " + identity.second,
+                            fontWeight = FontWeight.Medium, fontSize = 12.sp)
+                        Text(CultureReview.status(rows).name,
+                            fontSize = 10.sp, color = Color(0xFF486581))
+                        TextButton(onClick = {
+                            microFilter = "All"
+                            selectedTab = ResultsTab.MICROBIOLOGY
+                        }) { Text("Review source findings") }
+                    }
+                }
+            }
+            if (cultures.size > 10) item {
+                TextButton(onClick = {
+                    microFilter = "All"
+                    selectedTab = ResultsTab.MICROBIOLOGY
+                }) { Text("Open all " + cultures.size + " culture episodes") }
             }
         }
     }
@@ -1616,6 +1770,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun MicroScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
+        var showSourceInventory by remember(current.patient.crNo) { mutableStateOf(false) }
+        // Source inventory is intentionally independent of structured rows:
+        // many NIMS microscopy/molecular reports have no parseable values.
+        val sourceMicro = remember(current.reports, reportTitleEpoch) {
+            current.reports.filter { report ->
+                ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    report.department.contains("microbiology", ignoreCase = true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(
+                        ReportTitleCache.get(report.url).orEmpty())
+            }.distinctBy { it.url.ifBlank { "id|" + it.id } }
+        }
         val grouped = remember(current.results, query, microFilter) {
             // Filter complete culture reports rather than individual rows: this
             // preserves accompanying susceptibility, resistance and notes.
@@ -1642,7 +1807,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             item {
                 Text("Microbiology reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("Select positive cultures or inspect all microbiology reports.",
+                Text("Structured groups: " + grouped.size + " · source microbiology PDFs: " +
+                    sourceMicro.size + ". Reports without structured values remain accessible.",
                     color = Color(0xFF66788A), fontSize = 11.sp)
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1659,7 +1825,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 )
             }
             if (grouped.isEmpty()) {
-                item { Text("No matching microbiology reports.", color = Color(0xFF66788A)) }
+                item { Text("No matching structured microbiology rows. Check the source PDF inventory below.",
+                    color = Color(0xFF66788A)) }
             }
             items(grouped, key = { it.first.first + "|" + it.first.second + "|" + it.first.third }) { (key, rows) ->
                 val (test, date) = key
@@ -1797,13 +1964,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             OutlinedButton(onClick = { openReport(exact.url) }) {
                                 Text("Verified accession-linked PDF")
                             }
-                        } else if (current.reports.isNotEmpty()) {
-                            Text("Source PDF identity is not unique; choose using the original lab/study number.",
+                        } else if (mapping.candidates.isNotEmpty()) {
+                            Text("These PDFs are related by test and date, not verified to this specimen.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = { chooseSource = true }) {
-                                Text("Choose related source PDFs (" +
-                                    mapping.candidates.size + ")")
+                                Text("Review " + mapping.candidates.size + " related source PDFs")
                             }
+                        } else if (current.reports.isNotEmpty()) {
+                            TextButton(onClick = {
+                                reportQueryPrefill = test
+                                selectedTab = ResultsTab.REPORTS
+                            }) { Text("Browse source reports · no verified PDF match") }
                         }
                         if (chooseSource) {
                             AlertDialog(
@@ -1853,6 +2024,41 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }) {
                             Text("Susceptibility not separately identified in structured rows; check the original report.",
                                 fontSize = 10.sp, color = Color(0xFF66788A))
+                        }
+                    }
+                }
+            }
+            if (sourceMicro.isNotEmpty()) {
+                item {
+                    TextButton(onClick = { showSourceInventory = !showSourceInventory }) {
+                        Text(if (showSourceInventory) "Hide source microbiology PDFs (" +
+                            sourceMicro.size + ")" else "Show all source microbiology PDFs (" +
+                            sourceMicro.size + ")")
+                    }
+                    Text("Includes original source reports regardless of whether NIMS supplied structured rows. " +
+                        "This is an inventory, not an assertion that every PDF has been parsed.",
+                        fontSize = 10.sp, color = Color(0xFF66788A))
+                }
+                if (showSourceInventory) {
+                    items(sourceMicro, key = { "micro-source-" + it.id + "|" + it.url }) { report ->
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                            Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                                Text(ReportTitleCache.get(report.url) ?: report.title,
+                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                if (report.date.isNotBlank()) Text("Index date: " + report.date,
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                if (report.labNumber.isNotBlank()) Text(
+                                    "Lab/study: " + report.labNumber,
+                                    fontSize = 10.sp, color = Color(0xFF486581))
+                                if (report.url.isNotBlank()) {
+                                    TextButton(onClick = { openReport(report.url) }) {
+                                        Text("Open original PDF")
+                                    }
+                                } else {
+                                    Text("PDF link not supplied", fontSize = 10.sp,
+                                        color = Color(0xFF875B22))
+                                }
+                            }
                         }
                     }
                 }
@@ -2293,6 +2499,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun tabLabel(tab: ResultsTab): String = when (tab) {
         ResultsTab.OVERVIEW -> "Overview"
+        ResultsTab.ID -> "ID focus"
         ResultsTab.LABS -> "Labs"
         ResultsTab.MICROBIOLOGY -> "Microbiology"
         ResultsTab.REPORTS -> "Reports"

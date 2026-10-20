@@ -25,10 +25,15 @@ object ClinicalReportRenderer {
     )
     private val unknownValues = setOf("", "--", "—", "null", "n/a")
 
-    fun isMicrobiologyInvestigation(test: String): Boolean =
-        Regex(
-            """(?i)\b(?:culture|sensitivity|susceptibility|genexpert|gene\s*xpert|cbnaat|afb\s*smear|mycobacterial\s*pcr|blood\s*culture)\b"""
+    fun isMicrobiologyInvestigation(test: String): Boolean {
+        // Report titles may include historical organism/culture mentions in
+        // imaging and pathology reports. Do not classify those by body text.
+        if (Regex("""(?i)^\s*(?:ct\b|hrct\b|mri\b|pet[\s-]*ct\b|usg\b|ultrasound\b|radiology\b|x[\s-]*ray\b|histopathology\b|cytology\b)""")
+                .containsMatchIn(test)) return false
+        return Regex(
+            """(?i)\b(?:culture|sensitivity|susceptibility|antibiogram|gram(?:s)?[\s-]*stain(?:ing)?|gram[\s-]*smear|genexpert|gene\s*xpert|cbnaat|afb[\s-]*(?:smear|stain)|acid[\s-]*fast[\s-]*(?:bacilli|stain)|mycobacterial[\s-]*pcr|calcofluor|koh[\s-]*(?:mount|preparation|prep)|fungal[\s-]*(?:smear|stain)|biofire|filmarray|bacteriology|meningitis[\s/-]*encephalitis[\s-]*panel|respiratory[\s-]*pathogen[\s-]*panel)\b"""
         ).containsMatchIn(test)
+    }
 
     fun isPlaceholder(row: LabResult): Boolean =
         row.valueText.trim().lowercase(Locale.US) in unknownValues
