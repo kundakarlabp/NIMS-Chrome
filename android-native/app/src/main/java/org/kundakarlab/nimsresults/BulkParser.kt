@@ -192,7 +192,7 @@ object ClinicalResultRules {
     // Technical source codes can look numerical; never treat them as labs.
     fun isAdministrativeParameter(parameter: String): Boolean =
         Regex(
-            """(?i)^(sample\s*processed\s*:|test\s*done\s*by\s*:|machine\s*(?:id|no)\s*:|processed\s*by\s*:|technician\s*:)$"""
+            """(?i)^(?:sample\s*processed|test\s*done\s*by|machine\s*(?:id|no)|processed\s*by|technician)\s*:?$"""
         ).matches(parameter.trim())
 
     fun isNarrativeOrQualitative(row: LabResult): Boolean =
