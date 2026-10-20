@@ -194,6 +194,7 @@ object BulkParser {
             // '&amp;lt;1.0' instead of a proper less-than character.
             .replace(Regex("(?i)&lt;(?=[=\\d])"), "<")
             .replace(Regex("(?i)(?<![a-z0-9&])lt;\\s*(?=[=\\d])"), "<")
+            .replace(Regex("(?i)(?<![a-z0-9&])gt;\\s*(?=[=\\d])"), ">")
             .replace('\u00a0', ' ')
             .replace("\r\n", "\n")
             .split("\n")
