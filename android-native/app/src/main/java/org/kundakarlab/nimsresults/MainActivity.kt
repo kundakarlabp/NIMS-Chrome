@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,6 +70,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -697,11 +699,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(color = Color.White, shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.size(34.dp)) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text("N", fontSize = 20.sp, fontWeight = FontWeight.Black,
-                            color = Color(0xFF0C2D4C))
-                    }
+                    modifier = Modifier.size(40.dp)) {
+                    Image(
+                        painter = painterResource(id = R.drawable.nims_logo),
+                        contentDescription = "NIMS official logo",
+                        modifier = Modifier.size(40.dp)
+                    )
                 }
                 Spacer(Modifier.width(7.dp))
                 Column(modifier = Modifier.weight(1f)) {
