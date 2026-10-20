@@ -1397,7 +1397,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (filtered.isEmpty()) {
                 item { Text("No source reports were mapped for this retrieval.", color = Color(0xFF66788A)) }
             } else {
-                items(filtered, key = { it.id + it.date }) { report ->
+                items(filtered.indices.toList(), key = { "report-" + it }) { index ->
+                    val report = filtered[index]
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
