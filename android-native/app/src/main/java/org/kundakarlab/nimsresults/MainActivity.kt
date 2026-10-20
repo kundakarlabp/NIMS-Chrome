@@ -1979,7 +1979,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
-        var category by remember(current.patient.crNo) { mutableStateOf("All") }
+        var category by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
         val latest = remember(current.results) {
             current.results.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
@@ -1996,10 +1996,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 val flag = row.abnormal.lowercase()
                 val flagged = flag == "h" || flag == "l" || "high" in flag ||
                     "low" in flag || "critical" in flag
-                (category == "All" ||
-                    category == "Labs" && !isCulture ||
-                    category == "Culture" && isCulture ||
-                    category == "Flagged" && flagged) &&
+                val meaningful = !ClinicalReportRenderer.isPlaceholder(row) &&
+                    !ClinicalReportRenderer.isUninterpretedCode(row)
+                (category == "Raw" ||
+                    category == "Clinical" && meaningful ||
+                    category == "Labs" && !isCulture && meaningful ||
+                    category == "Culture" && isCulture && meaningful ||
+                    category == "Flagged" && flagged && meaningful) &&
                     ClinicalResultRules.inWindow(row.date, latest, days) &&
                     (query.isBlank() || (row.test + " " + row.parameter + " " +
                         row.valueText + " " + row.date).contains(query, true))
@@ -2015,7 +2018,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Results explorer", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 Text(filtered.size.toString() + " matching values · " +
-                    byDate.size + " collection dates · " + current.reports.size +
+                    byDate.size + " result dates · " + current.reports.size +
                     " source PDFs", fontSize = 11.sp, color = Color(0xFF66788A))
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
@@ -2026,7 +2029,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 )
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("All", "Labs", "Culture", "Flagged").forEach { name ->
+                    listOf("Clinical", "Labs", "Culture", "Flagged", "Raw").forEach { name ->
                         FilterChip(selected = category == name,
                             onClick = { category = name },
                             label = { Text(name, fontSize = 11.sp) })
