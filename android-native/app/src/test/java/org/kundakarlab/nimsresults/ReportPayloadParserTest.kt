@@ -143,4 +143,30 @@ class ReportPayloadParserTest {
         assertEquals(null, ReportTitleCache.get(a))
     }
 
+
+    @Test fun sourcePdfHeaderFieldsAreOnlyTakenFromExplicitLabels() {
+        val text = "Department of Microbiology\nCR No : 123456789012345   Lab/Study No. : E7443\n" +
+            "Coll/Study Date : 05-May-2026 14:54 Reporting Date : 08-May-2026 19:02"
+        val header = PdfDocumentHeaders.parse(text)
+        assertEquals("123456789012345", header.crNo)
+        assertEquals("E7443", header.labNumber)
+        assertEquals("05-May-2026 14:54", header.collectionDate)
+        assertEquals("08-May-2026 19:02", header.reportedDate)
+        assertEquals("", PdfDocumentHeaders.parse("Unlabelled 05-May-2026 value 123").reportedDate)
+    }
+
+    @Test fun wrongPatientPdfCannotEnrichReportIdentityCache() {
+        ReportTitleCache.clear()
+        val url = "https://www.nimsts.edu.in/synthetic-test"
+        val sameSource = "CR No : 123456789012346\nPERIPHERAL SMEAR EXAMINATION"
+        assertTrue(!ReportTitleCache.learn(url, sameSource, "123456789012345"))
+        assertEquals(null, ReportTitleCache.get(url))
+        assertEquals(null, ReportTitleCache.header(url))
+        assertTrue(ReportTitleCache.learn(url,
+            "CR No : 123456789012345\nLab/Study No. : E7443\nPERIPHERAL SMEAR EXAMINATION",
+            "123456789012345"))
+        assertEquals("E7443", ReportTitleCache.header(url)?.labNumber)
+        ReportTitleCache.clear()
+    }
+
 }
