@@ -60,4 +60,17 @@ class ResultsReviewV113Test {
         assertEquals("( >=6 mg/1000ml )", bundle.results.single().valueText)
     }
 
+    @Test fun bloodBankExplicitPlusSignSummaryWithoutInferringFromControls() {
+        val source = """
+            Blood Grouping And Antibody Screening
+            Anti-A: 4+
+            Anti-B: 0
+            RESULT: A+
+            Antibody screening: Negative
+        """.trimIndent()
+        val parsed = PdfClinicalSummaries.bloodGrouping(source)
+        assertEquals("A Positive", parsed?.group)
+        assertEquals("Negative", parsed?.antibodyScreen)
+    }
+
 }
