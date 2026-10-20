@@ -48,6 +48,10 @@ class ReportActivity : Activity() {
     private var sourceUrl = ""
     private var expectedCr = ""
     private lateinit var readTextButton: Button
+    private lateinit var tableButton: Button
+    private var cachedExtractedText = ""
+    private var renderingGeneration = 0
+    @Volatile private var closing = false
 
     private var renderer: PdfRenderer? = null
     private var descriptor: ParcelFileDescriptor? = null
@@ -158,14 +162,20 @@ class ReportActivity : Activity() {
             text = "Text"
             isEnabled = false
             contentDescription = "Read selectable text extracted from source PDF"
-            setOnClickListener { extractText() }
+            setOnClickListener { extractText(false) }
+        }
+        tableButton = Button(this).apply {
+            text = "Table"
+            isEnabled = false
+            contentDescription = "Review table-like entries from original PDF"
+            setOnClickListener { extractText(true) }
         }
         saveButton = Button(this).apply {
             text = "Save"
             isEnabled = false
             setOnClickListener { savePdf() }
         }
-        listOf(previous, next, zoomOut, zoomIn, fit, readTextButton).forEach { control ->
+        listOf(previous, next, zoomOut, zoomIn, fit, readTextButton, tableButton).forEach { control ->
             control.minimumWidth = 0
             control.minWidth = 0
             control.isAllCaps = false
@@ -196,7 +206,8 @@ class ReportActivity : Activity() {
                     }
                 ) {
                     tempFile = cached
-                    runOnUiThread { if (!isFinishing && !isDestroyed) open(cached) }
+                    cached.setLastModified(System.currentTimeMillis())
+                    if (!closing) openOnWorker(cached)
                     return@execute
                 }
                 val request = Request.Builder()
@@ -258,7 +269,7 @@ class ReportActivity : Activity() {
                         val saved = if (file.renameTo(destination)) destination else file
                         tempFile = saved
                         prunePdfCache()
-                        runOnUiThread { if (!isFinishing && !isDestroyed) open(saved) }
+                        if (!closing) openOnWorker(saved)
                     } catch (error: Throwable) {
                         file.delete()
                         throw error
@@ -274,7 +285,9 @@ class ReportActivity : Activity() {
     }
 
     private fun pdfCacheFile(url: String): File {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(url.toByteArray(Charsets.UTF_8))
+        // Partition private PDF cache by requested patient, never by URL alone.
+        val bytes = MessageDigest.getInstance("SHA-256")
+            .digest((expectedCr + "|" + url).toByteArray(Charsets.UTF_8))
         val hash = bytes.joinToString("") { "%02x".format(it) }
         return File(cacheDir, "nims-verified-" + hash + ".pdf")
     }
@@ -291,116 +304,172 @@ class ReportActivity : Activity() {
         }
     }
 
-    private fun open(file: File) {
-        progress.visibility = View.GONE
+    // PdfRenderer is confined to the one worker. UI thread only receives the
+    // already-rendered Bitmap; zoom/navigation no longer blocks gestures.
+    private fun openOnWorker(file: File) {
         try {
             descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             renderer = PdfRenderer(descriptor!!)
             if ((renderer?.pageCount ?: 0) == 0) {
-                status.text = "NIMS report PDF is empty."
+                runOnUiThread { if (!closing) status.text = "NIMS report PDF is empty." }
                 return
             }
-            saveButton.isEnabled = true
-            readTextButton.isEnabled = true
-            render(0)
+            runOnUiThread {
+                if (closing) return@runOnUiThread
+                saveButton.isEnabled = true
+                readTextButton.isEnabled = true
+                tableButton.isEnabled = true
+                render(0)
+            }
         } catch (_: Exception) {
-            status.text = "PDF cannot be displayed. Try another source report."
+            runOnUiThread { if (!closing) {
+                progress.visibility = View.GONE
+                status.text = "PDF cannot be displayed. Try another source report."
+            } }
         } catch (_: OutOfMemoryError) {
-            status.text = "Not enough memory to display this PDF."
+            runOnUiThread { if (!closing) {
+                progress.visibility = View.GONE
+                status.text = "Not enough memory to display this PDF."
+            } }
         }
     }
 
     private fun render(index: Int) {
-        val current = renderer ?: return
-        if (index !in 0 until current.pageCount) return
-        var page: PdfRenderer.Page? = null
-        var nextBitmap: Bitmap? = null
-        try {
-            val switchingPage = index != pageIndex
-            page = current.openPage(index)
-            // Limit image memory on low-RAM phones; never allocate a full-size
-            // high-resolution PDF bitmap on the UI thread.
-            val desiredWidth = (resources.displayMetrics.widthPixels * zoom)
-                .coerceIn(320f, 1200f).toDouble()
-            val scale = minOf(desiredWidth / page.width, 2400.0 / page.height)
-            val width = (page.width * scale).toInt().coerceAtLeast(1)
-            val height = (page.height * scale).toInt().coerceAtLeast(1)
-            nextBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            nextBitmap.eraseColor(Color.WHITE)
-            page.render(nextBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            page.close()
-            page = null
-            image.setImageDrawable(null)
-            bitmap?.recycle()
-            bitmap = nextBitmap
-            nextBitmap = null
-            pageIndex = index
-            image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
-            image.setImageBitmap(bitmap)
-            status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
-            previous.isEnabled = index > 0
-            next.isEnabled = index + 1 < current.pageCount
-            if (switchingPage) {
-                verticalScroll.post { verticalScroll.scrollTo(0, 0) }
-                horizontalScroll.post { horizontalScroll.scrollTo(0, 0) }
+        val currentZoom = zoom
+        val generation = ++renderingGeneration
+        previous.isEnabled = false
+        next.isEnabled = false
+        progress.visibility = View.VISIBLE
+        executor.execute {
+            val current = renderer ?: return@execute
+            if (closing || generation != renderingGeneration ||
+                index !in 0 until current.pageCount) return@execute
+            var page: PdfRenderer.Page? = null
+            var result: Bitmap? = null
+            try {
+                page = current.openPage(index)
+                val desiredWidth = (resources.displayMetrics.widthPixels * currentZoom)
+                    .coerceIn(320f, 1200f).toDouble()
+                val scale = minOf(desiredWidth / page.width, 2400.0 / page.height)
+                val width = (page.width * scale).toInt().coerceAtLeast(1)
+                val height = (page.height * scale).toInt().coerceAtLeast(1)
+                result = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
+                result.eraseColor(Color.WHITE)
+                page.render(result, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.close()
+                page = null
+                if (closing || generation != renderingGeneration) {
+                    result.recycle()
+                    result = null
+                    return@execute
+                }
+                val newBitmap = result
+                result = null
+                runOnUiThread {
+                    if (closing || generation != renderingGeneration) {
+                        newBitmap.recycle()
+                        return@runOnUiThread
+                    }
+                    val switchingPage = index != pageIndex
+                    image.setImageDrawable(null)
+                    val old = bitmap
+                    bitmap = newBitmap
+                    pageIndex = index
+                    image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
+                    image.setImageBitmap(newBitmap)
+                    old?.recycle()
+                    progress.visibility = View.GONE
+                    status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
+                    previous.isEnabled = index > 0
+                    next.isEnabled = index + 1 < current.pageCount
+                    if (switchingPage) {
+                        verticalScroll.post { verticalScroll.scrollTo(0, 0) }
+                        horizontalScroll.post { horizontalScroll.scrollTo(0, 0) }
+                    }
+                }
+            } catch (_: OutOfMemoryError) {
+                runOnUiThread { if (!closing) {
+                    progress.visibility = View.GONE
+                    status.text = "PDF is too large for available memory."
+                } }
+            } catch (_: Exception) {
+                runOnUiThread { if (!closing) {
+                    progress.visibility = View.GONE
+                    status.text = "Unable to render this PDF page."
+                } }
+            } finally {
+                runCatching { page?.close() }
+                result?.recycle()
             }
-        } catch (_: OutOfMemoryError) {
-            status.text = "PDF is too large for available memory."
-        } catch (_: Exception) {
-            status.text = "Unable to render this PDF page."
-        } finally {
-            runCatching { page?.close() }
-            nextBitmap?.recycle()
         }
     }
 
-    private fun extractText() {
+    private fun extractText(tableView: Boolean) {
         val file = tempFile?.takeIf { it.isFile } ?: return
         if (file.length() > 6L * 1024 * 1024) {
-            status.text = "PDF too large for on-device text extraction. Use zoom."
+            status.text = "PDF too large for on-device extraction. Use zoom."
+            return
+        }
+        if (cachedExtractedText.isNotBlank()) {
+            showSourceText(cachedExtractedText, tableView)
             return
         }
         readTextButton.isEnabled = false
+        tableButton.isEnabled = false
         executor.execute {
             val extraction = runCatching {
                 PDFBoxResourceLoader.init(applicationContext)
                 PDDocument.load(file).use { doc ->
                     val pages = minOf(doc.numberOfPages, 8)
-                    val stripper = PDFTextStripper().apply {
+                    PDFTextStripper().apply {
                         startPage = 1
                         endPage = pages
                         sortByPosition = true
-                    }
-                    stripper.getText(doc).take(16000).trim()
+                    }.getText(doc).take(16000).trim()
                 }
             }
             runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (closing) return@runOnUiThread
                 readTextButton.isEnabled = true
+                tableButton.isEnabled = true
                 val text = extraction.getOrNull().orEmpty()
                 if (text.isBlank()) {
-                    status.text = "No selectable PDF text. Use the original report image."
-                } else {
-                    val header = PdfDocumentHeaders.parse(text)
-                    if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
-                        header.crNo != expectedCr) {
-                        status.text = "WARNING: PDF patient CR does not match selected patient"
-                        AlertDialog.Builder(this)
-                            .setTitle("Wrong patient report — do not use")
-                            .setMessage("The PDF text contains a different CR number. This report was not linked to the selected patient.")
-                            .setPositiveButton("Close", null)
-                            .show()
-                        return@runOnUiThread
-                    }
-                    ReportTitleCache.learn(sourceUrl, text, expectedCr)
-                    AlertDialog.Builder(this)
-                        .setTitle("NIMS source report · extracted text")
-                        .setMessage("Extraction may reorder PDF tables or omit symbols. Verify against the original page.\n\n" + text)
-                        .setPositiveButton("Close", null)
-                        .show()
+                    status.text = "No selectable PDF text. Inspect original report image."
+                    return@runOnUiThread
                 }
+                val header = PdfDocumentHeaders.parse(text)
+                if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
+                    header.crNo != expectedCr) {
+                    status.text = "WARNING: PDF CR does not match the requested patient"
+                    AlertDialog.Builder(this)
+                        .setTitle("Wrong patient report — do not use")
+                        .setMessage("The source PDF identifies another CR. No text was linked to this patient.")
+                        .setPositiveButton("Close", null).show()
+                    return@runOnUiThread
+                }
+                cachedExtractedText = text
+                ReportTitleCache.learn(sourceUrl, text, expectedCr)
+                showSourceText(text, tableView)
             }
         }
+    }
+
+    private fun showSourceText(text: String, tableView: Boolean) {
+        val content = if (tableView) ReportTableReader.present(text) else text
+        val editable = TextView(this).apply {
+            setTextIsSelectable(true)
+            setTextColor(Color.rgb(20, 40, 58))
+            textSize = 12f
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            if (tableView) typeface = android.graphics.Typeface.MONOSPACE
+            setText(content)
+        }
+        val scroll = ScrollView(this).apply { addView(editable) }
+        AlertDialog.Builder(this)
+            .setTitle(if (tableView) "Table review · unverified layout" else "Source PDF · selectable text")
+            .setMessage("Extracted reading order may differ from the report. Confirm values and units in the original PDF.")
+            .setView(scroll)
+            .setPositiveButton("Close", null).show()
     }
 
     private fun savePdf() {
@@ -442,12 +511,23 @@ class ReportActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onDestroy() {
-        executor.shutdownNow()
+        closing = true
+        renderingGeneration++
+        // PdfRenderer must close after its queued worker tasks, never while
+        // a page is rendering. Bitmap ownership remains on the UI thread.
+        runCatching {
+            executor.execute {
+                runCatching { renderer?.close() }
+                runCatching { descriptor?.close() }
+                tempFile?.takeIf {
+                    it.name.startsWith("nims-report-") || it.name.startsWith("nims-work-")
+                }?.delete()
+            }
+        }
+        executor.shutdown()
+        image.setImageDrawable(null)
         bitmap?.recycle()
-        renderer?.close()
-        descriptor?.close()
-        if (tempFile?.name?.startsWith("nims-report-") == true ||
-            tempFile?.name?.startsWith("nims-work-") == true) tempFile?.delete()
+        bitmap = null
         super.onDestroy()
     }
 
