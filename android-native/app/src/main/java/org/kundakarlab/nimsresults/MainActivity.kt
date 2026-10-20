@@ -1248,6 +1248,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         fontSize = 11.sp, color = Color(0xFF875B22))
                 }
                 datesToShow.forEach { (date, dateRows) ->
+                    var showFullText by remember(patientCr, test, date) {
+                        mutableStateOf(false)
+                    }
                     HorizontalDivider()
                     Text("Result date: " + date, fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold, color = Color(0xFF486581))
@@ -1268,6 +1271,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("No interpretable clinical fields in the structured feed.",
                             fontSize = 11.sp, color = Color(0xFF66788A))
                     }
+                    val hasLongText = shown.any { it.valueText.length > 280 }
+                    if (hasLongText) {
+                        TextButton(onClick = { showFullText = !showFullText }) {
+                            Text(if (showFullText) "Collapse report" else "Read full report")
+                        }
+                    }
                     shown.forEach { result ->
                         if (result.parameter.isNotBlank() &&
                             !result.parameter.equals("Result", true) &&
@@ -1284,11 +1293,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text(section.heading, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                                     color = Color(0xFF102A43))
                             }
-                            Text(section.content, fontSize = 12.sp, color = Color(0xFF243B53))
+                            Text(section.content, fontSize = 12.sp,
+                                color = Color(0xFF243B53),
+                                maxLines = if (showFullText || !hasLongText) Int.MAX_VALUE else 5,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
                         result.unit.takeIf(String::isNotBlank)?.let {
                             Text("Units: " + it, fontSize = 10.sp,
                                 color = Color(0xFF66788A))
+                        }
+                    }
+                    if (hasLongText && showFullText) {
+                        TextButton(onClick = { showFullText = false }) {
+                            Text("Collapse report")
                         }
                     }
                 }
