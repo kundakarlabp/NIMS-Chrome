@@ -392,18 +392,50 @@ object OpaqueReportTitles {
 }
 
 /** In-memory only, intentionally not persisted as PHI-bearing metadata. */
+data class PdfDocumentHeader(
+    val crNo: String = "",
+    val labNumber: String = "",
+    val collectionDate: String = "",
+    val reportedDate: String = ""
+)
+
+object PdfDocumentHeaders {
+    fun parse(text: String): PdfDocumentHeader {
+        // Header extraction is best-effort: do not infer dates from free text.
+        fun field(pattern: String) = Regex(pattern).find(text)?.groupValues?.getOrNull(1).orEmpty()
+        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{4}(?:\s+\d{1,2}:\d{2})?)"""
+        return PdfDocumentHeader(
+            crNo = field("""(?i)\bCR\s*No\.?\s*:\s*(\d{15})\b"""),
+            labNumber = field("""(?i)\bLab/Study\s*No\.?\s*:\s*([A-Za-z0-9/_-]+)"""),
+            collectionDate = field("(?i)\\bColl/Study\\s*Date\\s*:\\s*" + date),
+            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date)
+        )
+    }
+}
+
 object ReportTitleCache {
     private val recognized = ConcurrentHashMap<String, String>()
     private val extractedByUrl = ConcurrentHashMap<String, String>()
-    fun learn(url: String, extracted: String) {
+    private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
+    fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean {
+        val header = PdfDocumentHeaders.parse(extracted)
+        // Wrong-patient source PDFs must never enrich the clinical dashboard.
+        if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
+            header.crNo != expectedCr) return false
         OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
         // Volatile, on-device only; no persistent source text or external upload.
         extractedByUrl[url] = extracted.take(12000)
+        if (header.crNo.isNotBlank() && expectedCr.isNotBlank() && header.crNo == expectedCr) {
+            headers[url] = header
+        }
+        return true
     }
     fun get(url: String): String? = recognized[url]
     fun extracted(url: String): String? = extractedByUrl[url]
+    fun header(url: String): PdfDocumentHeader? = headers[url]
     fun clear() {
         recognized.clear()
         extractedByUrl.clear()
+        headers.clear()
     }
 }
