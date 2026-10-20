@@ -12,6 +12,7 @@ on:
       - fix/android-v107-report-reading-persistence
       - fix/android-v108-provenance-report-fidelity
       - fix/android-v109-patient-shelf-pdf-tables
+      - fix/android-v110-clinical-report-renderers
   pull_request:
     branches:
       - release/android-native-rebuild-base
