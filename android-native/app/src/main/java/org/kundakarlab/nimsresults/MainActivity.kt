@@ -1225,7 +1225,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // Filter complete culture reports rather than individual rows: this
             // preserves accompanying susceptibility, resistance and notes.
             current.results.filter { isMicro(it) }
-                .groupBy { row -> row.test to row.date }.toList()
+                // Keep same-day cultures from different proven lab accessions
+                // separate; unknown accessions remain a flagged ambiguous group.
+                .groupBy { row -> Triple(row.test, row.date, row.labNumber.trim()) }.toList()
                 .filter { (key, rows) ->
                     val category = CultureReview.status(rows).name
                     (microFilter == "All" || category.equals(microFilter, true)) &&
