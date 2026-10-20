@@ -45,6 +45,20 @@ object BulkParser {
                 val parameter = clean(row.optString("parameterName"))
                 val unit = clean(row.optString("unit"))
                 val refRange = clean(row.optString("refRange"))
+                // Only metadata explicitly supplied by NIMS may be labelled
+                // specimen collection or reporting time. The chart/date key
+                // itself is not necessarily the actual collection date.
+                val sent = metadata(row, group,
+                    "collectionDate", "collection_date", "sampleCollectionDate",
+                    "sampleDate", "sample_date", "dateSent", "date_sent",
+                    "requisitionDate", "requisition_date")
+                val reported = metadata(row, group,
+                    "reportingDate", "reporting_date", "reportedDate", "reported_date",
+                    "validationDate", "validation_date")
+                val lab = metadata(row, group,
+                    "labNo", "lab_no", "labNumber", "lab_number",
+                    "labStudyNo", "labStudyNumber", "accessionNo", "accession_no",
+                    "sampleNo", "sample_no")
                 val values = row.optJSONObject("valuesByDate") ?: JSONObject()
                 val flags = firstObject(row, "flagsByDate", "abnormalByDate", "flagByDate")
                 val keys = values.keys()
@@ -66,7 +80,10 @@ object BulkParser {
                         unit = unit,
                         refRange = refRange,
                         abnormal = abnormal,
-                        sourceKey = sourceKey(test, parameter, date, unit, valueText)
+                        sourceKey = sourceKey(test, parameter, date, unit, valueText),
+                        sentDate = sent,
+                        reportedDate = reported,
+                        labNumber = lab
                     )
                 }
             }
@@ -107,6 +124,19 @@ object BulkParser {
             }
             else -> null
         }
+    }
+
+    private fun metadata(row: JSONObject, group: JSONObject, vararg keys: String): String {
+        for (objectSource in listOf(row, group)) {
+            for (name in keys) {
+                val candidate = objectSource.opt(name)?.toString()?.trim().orEmpty()
+                if (candidate.isNotBlank() && candidate != "null" &&
+                    candidate != "-1" && candidate != "--") {
+                    return candidate
+                }
+            }
+        }
+        return ""
     }
 
     private fun firstObject(row: JSONObject, vararg names: String): JSONObject? {

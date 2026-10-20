@@ -65,15 +65,21 @@ class LoginActivity : Activity() {
             setBackgroundColor(Color.rgb(12, 45, 76))
         }
         val title = TextView(this).apply {
-            text = if (manageSession) "NIMS session" else "NIMS login"
+            text = if (manageSession) "NIMS · Punjagutta | Session"
+                else "NIMS · Punjagutta | Sign in"
             setTextColor(Color.WHITE)
-            textSize = 18f
+            textSize = 17f
+        }
+        val institute = TextView(this).apply {
+            text = "Nizam's Institute of Medical Sciences, Hyderabad"
+            setTextColor(Color.rgb(196, 216, 234))
+            textSize = 11f
         }
         status = TextView(this).apply {
-            text = "Use the NIMS page below. This screen will stay exactly where it is if you switch apps."
+            text = "Official NIMS portal · your login remains server-controlled"
             setTextColor(Color.rgb(220, 232, 242))
-            textSize = 13f
-            setPadding(0, dp(5), 0, dp(8))
+            textSize = 11f
+            setPadding(0, dp(3), 0, dp(3))
         }
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -123,6 +129,7 @@ class LoginActivity : Activity() {
         diagnosticActions.addView(copyDiagnostics)
 
         top.addView(title)
+        top.addView(institute)
         top.addView(status)
         top.addView(actions)
         top.addView(diagnosticActions)
