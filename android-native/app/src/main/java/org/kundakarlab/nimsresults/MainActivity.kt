@@ -1644,10 +1644,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 fontSize = 10.sp, color = color)
                         }
                         if (reportedDate.isNotBlank()) {
-                            Text("Reported: " + reportedDate, color = Color(0xFF66788A), fontSize = 11.sp)
-                        } else {
-                            Text("Collection/reporting timestamps not separately available",
-                                fontSize = 10.sp, color = Color(0xFF829AB1))
+                            Text("Reported: " + reportedDate, color = Color(0xFF66788A),
+                                fontSize = 11.sp)
+                        }
+                        val orderedDate = rows.firstOrNull { it.orderDate.isNotBlank() }
+                            ?.orderDate.orEmpty().ifBlank { verifiedPdf?.orderDate.orEmpty() }
+                        if (orderedDate.isNotBlank()) {
+                            Text("Ordered: " + orderedDate, color = Color(0xFF66788A),
+                                fontSize = 11.sp)
                         }
                         val sourceAccession = accession.ifBlank {
                             exact?.labNumber.orEmpty()
@@ -1855,6 +1859,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     Text(learned ?: if (opaque) "Investigation not identified" else report.title,
                                         fontWeight = FontWeight.Bold, fontSize = 13.sp,
                                         color = Color(0xFF102A43), maxLines = 2)
+                                    if (learned != null && !learned.equals(report.title, true)) {
+                                        Text("Index label: " + report.title,
+                                            fontSize = 10.sp, color = Color(0xFF66788A))
+                                    }
                                     if (opaque) {
                                         Text("Source accession: " + report.title,
                                             color = Color(0xFF486581), fontSize = 10.sp)
@@ -1873,21 +1881,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            val sampleDate = verifiedHeader?.collectionDate.orEmpty()
-                                .ifBlank { report.sentDate }
-                            val finalizedDate = verifiedHeader?.reportedDate.orEmpty()
+                            val ordered = verifiedHeader?.orderDate.orEmpty()
+                                .ifBlank { report.orderDate }
+                            val reported = verifiedHeader?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
-                            if (sampleDate.isNotBlank()) {
-                                Text("Sample collected / sent: " + sampleDate, fontSize = 11.sp,
+                            val culturePdf = Regex("""(?i)\bculture\b""")
+                                .containsMatchIn(report.title + " " +
+                                    ReportTitleCache.get(report.url).orEmpty())
+                            val collected = verifiedHeader?.collectionDate.orEmpty()
+                                .ifBlank { report.sentDate }
+                            if (ordered.isNotBlank()) {
+                                Text("Ordered: " + ordered, fontSize = 11.sp,
                                     color = Color(0xFF486581))
-                            } else {
-                                Text("Listed result date: " + report.date +
-                                    " · specimen collection date unconfirmed",
-                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             }
-                            if (finalizedDate.isNotBlank()) {
-                                Text("Reported: " + finalizedDate, fontSize = 11.sp,
+                            if (reported.isNotBlank()) {
+                                Text("Reported: " + reported, fontSize = 11.sp,
                                     color = Color(0xFF486581))
+                            }
+                            if (culturePdf && collected.isNotBlank()) {
+                                Text("Specimen collected: " + collected,
+                                    fontSize = 11.sp, color = Color(0xFF486581))
+                            }
+                            if (ordered.isBlank() && reported.isBlank() &&
+                                report.date.isNotBlank()) {
+                                Text("Listed date: " + report.date, fontSize = 10.sp,
+                                    color = Color(0xFF66788A))
                             }
                             if (report.department.isNotBlank()) {
                                 Text(report.department, fontSize = 10.sp,
