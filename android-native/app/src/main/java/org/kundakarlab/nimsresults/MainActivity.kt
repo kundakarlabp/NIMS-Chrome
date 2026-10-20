@@ -672,6 +672,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
                                 ResultsTab.OVERVIEW -> OverviewScreen(current)
+                                ResultsTab.ID -> IdFocusScreen(current)
                                 ResultsTab.LABS -> LabsScreen(current)
                                 ResultsTab.MICROBIOLOGY -> MicroScreen(current)
                                 ResultsTab.REPORTS -> ReportsScreen(current)
@@ -1411,6 +1412,116 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 Text("Original report identity must match the source accession.",
                     color = Color(0xFF66788A), fontSize = 10.sp)
+            }
+        }
+    }
+
+    @Composable
+    private fun IdFocusScreen(current: ClinicalBundle) {
+        // The ID view is a filtered longitudinal index, not an AI diagnosis.
+        val markers = listOf(
+            "CRP / hsCRP" to setOf("crp", "creactiveprotein", "hscrp",
+                "highsensitivitycrp", "highsensitivitycreactiveprotein"),
+            "ESR" to setOf("esr", "erythrocytesedimentationrate"),
+            "Procalcitonin" to setOf("procalcitonin", "pct"),
+            "WBC / TLC" to setOf("wbc", "tlc", "totalleukocytecount",
+                "totalleucocytecount", "whitebloodcellcount"),
+            "ANC" to setOf("anc", "absoluteneutrophilcount")
+        )
+        val markerRows = remember(current.results) {
+            markers.map { (name, aliases) ->
+                name to current.results.filter { row ->
+                    !isMicro(row) && normalizeKey(row.parameter) in aliases &&
+                        row.numericValue?.isFinite() == true &&
+                        !ClinicalReportRenderer.isUninterpretedCode(row)
+                }.sortedByDescending { BulkParser.dateKey(it.date) }
+            }
+        }
+        val cultures = remember(current.results) {
+            current.results.filter { ClinicalPresentation.isCulture(it.test) }
+                .groupBy { Triple(it.test, it.date, it.labNumber) }.toList()
+                .sortedByDescending { BulkParser.dateKey(it.first.second) }
+        }
+        val positives = cultures.count { CultureReview.status(it.second) == CultureStatus.POSITIVE }
+        val microbiologySourceCount = remember(current.reports, reportTitleEpoch) {
+            current.reports.count { report ->
+                ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    report.department.contains("microbiology", true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(
+                        ReportTitleCache.get(report.url).orEmpty())
+            }
+        }
+        LazyColumn(modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text("Infectious diseases review", fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+                Text("Inflammatory markers, leukocyte trends and microbiology. " +
+                    "Results are source-derived; clinical interpretation requires context.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = {
+                        microFilter = "Positive"
+                        selectedTab = ResultsTab.MICROBIOLOGY
+                    }) { Text("Positive cultures: " + positives, fontSize = 11.sp) }
+                    OutlinedButton(onClick = {
+                        microFilter = "All"
+                        selectedTab = ResultsTab.MICROBIOLOGY
+                    }) { Text("Micro PDFs: " + microbiologySourceCount, fontSize = 11.sp) }
+                }
+            }
+            items(markerRows, key = { it.first }) { (name, rows) ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(11.dp)) {
+                        Text(name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (rows.isEmpty()) {
+                            Text("No verified quantitative value in the structured feed.",
+                                fontSize = 11.sp, color = Color(0xFF66788A))
+                        } else {
+                            rows.take(4).forEach { value ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(value.date, fontSize = 11.sp,
+                                        color = Color(0xFF486581))
+                                    Text(value.valueText +
+                                        if (value.unit.isNotBlank()) " " + value.unit else "",
+                                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                        color = abnormalColor(value.abnormal))
+                                }
+                            }
+                            if (rows.size > 4) TextButton(onClick = {
+                                selectedTab = ResultsTab.TRENDS
+                            }) { Text("View longitudinal trends (" + rows.size + ")") }
+                        }
+                    }
+                }
+            }
+            item {
+                Text("Culture chronology", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (cultures.isEmpty()) Text("No structured culture findings. " +
+                    "Inspect Microbiology for unstructured source PDFs.",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+            }
+            items(cultures.take(10), key = { it.first.toString() }) { (identity, rows) ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                        Text(identity.first + " · " + identity.second,
+                            fontWeight = FontWeight.Medium, fontSize = 12.sp)
+                        Text(CultureReview.status(rows).name,
+                            fontSize = 10.sp, color = Color(0xFF486581))
+                        TextButton(onClick = {
+                            microFilter = "All"
+                            selectedTab = ResultsTab.MICROBIOLOGY
+                        }) { Text("Review source findings") }
+                    }
+                }
+            }
+            if (cultures.size > 10) item {
+                TextButton(onClick = {
+                    microFilter = "All"
+                    selectedTab = ResultsTab.MICROBIOLOGY
+                }) { Text("Open all " + cultures.size + " culture episodes") }
             }
         }
     }
@@ -2388,6 +2499,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun tabLabel(tab: ResultsTab): String = when (tab) {
         ResultsTab.OVERVIEW -> "Overview"
+        ResultsTab.ID -> "ID focus"
         ResultsTab.LABS -> "Labs"
         ResultsTab.MICROBIOLOGY -> "Microbiology"
         ResultsTab.REPORTS -> "Reports"
