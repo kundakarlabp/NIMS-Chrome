@@ -422,7 +422,9 @@ class ReportActivity : Activity() {
         readTextButton.isEnabled = false
         tableButton.isEnabled = false
         executor.execute {
-            val extraction = runCatching {
+            val extraction = if (cachedExtractedText.isNotBlank())
+                Result.success(cachedExtractedText)
+            else runCatching {
                 PDFBoxResourceLoader.init(applicationContext)
                 PDDocument.load(file).use { doc ->
                     val pages = minOf(doc.numberOfPages, 8)
@@ -433,6 +435,10 @@ class ReportActivity : Activity() {
                     }.getText(doc).take(16000).trim()
                 }
             }
+            val geometry = if (tableView) runCatching {
+                PDFBoxResourceLoader.init(applicationContext)
+                PdfGeometryTable.read(file)
+            }.getOrNull().orEmpty() else ""
             runOnUiThread {
                 if (closing) return@runOnUiThread
                 readTextButton.isEnabled = true
