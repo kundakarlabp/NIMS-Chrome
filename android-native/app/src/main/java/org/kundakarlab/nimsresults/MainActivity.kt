@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var reportTitleEpoch by mutableStateOf(0)
     private var microFilter by mutableStateOf("All")
     private var crInput by mutableStateOf("")
     private var appLockEnabled by mutableStateOf(false)
@@ -203,6 +204,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         deviceUnlockLauncher.launch(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Refresh source-confirmed titles after a PDF is read locally.
+        reportTitleEpoch++
+    }
+
     override fun onStop() {
         if (appLockEnabled && appUnlocked && !unlockPromptActive) {
             leftAt = SystemClock.elapsedRealtime()
@@ -284,9 +291,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if (state == SessionState.CONNECTED) {
                                 startStructuredFetch(cr, requestId)
                             } else if (verifiedRestReports.isNotEmpty()) {
-                                loadStage = LoadStage.READY
-                                pendingCrAfterLogin = cr
-                                statusText = "REST API reports available. NIMS login is required only for full lab values."
+                                // A successfully authenticated REST response can precede
+                                // WebView frameset detection. Attempt Custom Sheet once,
+                                // without opening another hospital login window.
+                                statusText = "REST authorized; attempting structured NIMS API…"
+                                startStructuredFetch(cr, requestId)
                             } else {
                                 loadStage = LoadStage.IDLE
                                 pendingCrAfterLogin = cr
@@ -338,6 +347,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }?.forEach { it.delete() }
         bundle = null
         verifiedRestReports = emptyList()
+        ReportTitleCache.clear()
         apiReportCount = 0
         apiStage = "not_checked"
         activeRequestId = ""
@@ -1362,8 +1372,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun ReportsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
+        val revision = reportTitleEpoch
         val filtered = current.reports.filter {
-            query.isBlank() || (it.title + " " + it.date + " " +
+            val learnedTitle = if (revision >= 0) ReportTitleCache.get(it.url).orEmpty() else ""
+            query.isBlank() || (it.title + " " + learnedTitle + " " + it.date + " " +
                 BulkParser.isoDate(it.date) + " " + it.department).contains(query, true)
         }
         LazyColumn(
@@ -1389,8 +1401,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(report.title, fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
-                                Text(listOf(report.date, report.department).filter { it.isNotBlank() }.joinToString(" · "), color = Color(0xFF66788A), fontSize = 12.sp)
+                                val learned = ReportTitleCache.get(report.url)
+                                val isAccession = OpaqueReportTitles.isCode(report.title)
+                                Text(
+                                    learned ?: if (isAccession) "Source report · test not identified" else report.title,
+                                    fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
+                                    maxLines = 2
+                                )
+                                if (isAccession) {
+                                    Text("Source ID: " + report.title,
+                                        color = Color(0xFF486581), fontSize = 11.sp)
+                                }
+                                Text(listOf(report.date, report.department).filter { it.isNotBlank() }
+                                    .joinToString(" · "), color = Color(0xFF66788A), fontSize = 11.sp)
+                                if (isAccession && learned == null) {
+                                    Text("Open PDF → Text to identify investigation",
+                                        color = Color(0xFF66788A), fontSize = 10.sp)
+                                }
                             }
                             if (report.url.isNotBlank()) {
                                 Button(onClick = { openReport(report.url) }) { Text("Open PDF") }
