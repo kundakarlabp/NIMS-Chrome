@@ -10,6 +10,7 @@ on:
       - fix/android-v105-clinical-workspace
       - fix/android-v106-dashboard-api-parity
       - fix/android-v107-report-reading-persistence
+      - fix/android-v108-provenance-report-fidelity
   pull_request:
     branches:
       - release/android-native-rebuild-base
