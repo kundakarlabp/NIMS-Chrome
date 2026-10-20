@@ -16,8 +16,9 @@ Chrome connector
 manual clinician NIMS login / CAPTCHA
    ↓
 authenticated NIMS session
-   ├─ REST reportList discovery first
-   │    └─ verified NIMS report fetch + parser
+   ├─ NIMS GETMETABOLICDATA Custom Sheet structured API first
+   │    └─ authenticated source-report inventory when available
+   ├─ verified REST reportList fetch + parser if bulk results fail
    └─ existing CR-wise browser bridge fallback
         └─ proven direct-report processor + parser
    ↓
@@ -26,7 +27,7 @@ canonical structured results
 Dashboard
 ```
 
-The REST endpoint is an optimization layered on top of the existing working bridge. It does not replace authentication and it does not bypass CAPTCHA.
+The authenticated structured Custom Sheet endpoint is the primary values path. Verified REST reportList metadata enriches source links when available; if structured retrieval fails, REST parsing and then the existing CR-wise browser bridge provide bounded fallbacks. None of these bypass clinician authentication or CAPTCHA.
 
 ## What is intentionally not in this repository
 
@@ -54,8 +55,8 @@ The REST endpoint is an optimization layered on top of the existing working brid
 4. Complete NIMS login and CAPTCHA manually. If a CR request started while logged out, the same CR resumes automatically after login.
 5. Return to the dashboard; it detects the authenticated session.
 6. Enter the 15-digit CR and click **Get results**.
-7. REST is attempted first. If it cannot supply usable reports, the dashboard automatically uses the authenticated browser bridge.
-8. The dashboard's connection help can read masked parser-helper status and save the Railway helper URL/API key directly into extension-local storage; the full key is never read back into the page.
+7. Structured Custom Sheet values are attempted first. Verified reportList metadata enriches source links; if values fail, verified REST parsing and then the authenticated browser bridge are fallback routes.
+8. The dashboard's connection help can read masked parser-helper status and save the Railway helper URL/API key directly into extension-local storage; the full key is never read back into the page.\n9. The separate clinical-record service can receive a verified CR bundle through its browser handoff once configured. This connector does not automatically export identifiable NIMS records into ChatGPT.
 
 ## Development validation
 

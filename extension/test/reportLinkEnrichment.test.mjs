@@ -50,15 +50,16 @@ test('report inventory enrichment uses an inactive isolated NIMS tab and closes 
   assert.doesNotMatch(body, /NIMS_BRIDGE_RUN_SUMMARY/);
 });
 
-test('REST and browser report inventories merge by test and date and preserve a PDF URL', () => {
+test('REST and browser inventory rows with different IDs stay separate and preserve verified PDF', () => {
   const keyFn = isolate(background, 'canonicalReportKey');
   const mergeFn = isolate(background, 'mergeReportInventories', { canonicalReportKey: keyFn });
   const merged = mergeFn(
     [{ id: 'rest-a', title: 'Complete Blood Count', date: '15-Oct-2026', url: '' }],
     [{ id: 'browser-b', title: 'Complete Blood Count', date: '15-Oct-2026', url: 'https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=safe.pdf' }]
   );
-  assert.equal(merged.length, 1);
-  assert.match(merged[0].url, /PRINTREPORT/);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].url, '');
+  assert.match(merged[1].url, /PRINTREPORT/);
 });
 
 test('report inventory absence does not discard structured result retrieval', () => {

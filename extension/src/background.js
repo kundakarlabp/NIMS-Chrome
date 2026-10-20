@@ -1323,32 +1323,43 @@ async function optionalBulkReportMetadata(crNo) {
 }
 
 function canonicalReportKey(report) {
-  const title = String(report && report.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const date = String(report && report.date || "").trim().toLowerCase();
+  // Title/date can describe multiple report instances on the same day.
   const id = String(report && report.id || "").trim();
-  return title || date ? [title, date].join("|") : ("id|" + id);
+  if (id && !/^(?:api-report-|report-)\d+$/i.test(id)) return "id|" + id;
+  const url = String(report && report.url || "").trim();
+  return url ? "url|" + url : "";
 }
 
 function mergeReportInventories(...lists) {
-  const merged = new Map();
+  const merged = [];
+  const indices = new Map();
   for (const list of lists) {
     for (const report of Array.isArray(list) ? list : []) {
       if (!report || !report.title) continue;
       const key = canonicalReportKey(report);
-      const previous = merged.get(key);
-      if (!previous) {
-        merged.set(key, { ...report });
+      const position = key ? indices.get(key) : undefined;
+      if (position === undefined) {
+        if (key) indices.set(key, merged.length);
+        merged.push({ ...report });
         continue;
       }
-      merged.set(key, {
+      const previous = merged[position];
+      if ((previous.title && report.title && previous.title !== report.title)
+        || (previous.date && report.date && previous.date !== report.date)
+        || (previous.url && report.url && previous.url !== report.url)) {
+        // Reused lab identifiers, conflicting metadata or PDFs cannot be silently merged.
+        merged.push({ ...report });
+        continue;
+      }
+      merged[position] = {
         ...previous,
         ...report,
         url: previous.url || report.url || "",
         provenance: report.provenance || previous.provenance
-      });
+      };
     }
   }
-  return Array.from(merged.values());
+  return merged;
 }
 
 async function fetchBrowserReportInventory(tabId, crNo) {
@@ -1542,13 +1553,37 @@ function bundleFromParsedReports(crNo, extracted, state) {
     ...report,
     provenance: { source: "nims" }
   }));
-  const linkByKey = new Map(reports.map(report => [[report.title || "", report.date || ""].join("|"), report.url || ""]));
+  const sourcesById = new Map();
+  const sourcesByNameDate = new Map();
+  for (const source of reports) {
+    const id = String(source.id || "").trim();
+    const key = [source.title || "", source.date || ""].join("|");
+    if (id && !/^(?:api-report-|report-)\d+$/i.test(id)) {
+      if (!sourcesById.has(id)) sourcesById.set(id, []);
+      sourcesById.get(id).push(source);
+    }
+    if (!sourcesByNameDate.has(key)) sourcesByNameDate.set(key, []);
+    sourcesByNameDate.get(key).push(source);
+  }
+  function exactPdfUrl(parsed) {
+    const id = String(parsed.report_id || "").trim();
+    const exact = id ? sourcesById.get(id) : null;
+    if (exact) {
+      const matching = exact.filter(source => source.title === parsed.report_name && source.date === parsed.date_sent);
+      const urls = [...new Set(matching.map(source => source.url).filter(Boolean))];
+      return urls.length === 1 ? urls[0] : "";
+    }
+    // A known but unmatched accession cannot be linked by title/date guesswork.
+    if (id && !/^(?:api-report-|report-)\d+$/i.test(id)) return "";
+    const key = [parsed.report_name || "", parsed.date_sent || ""].join("|");
+    const matches = sourcesByNameDate.get(key) || [];
+    return matches.length === 1 ? matches[0].url || "" : "";
+  }
   const results = [];
   let resultIndex = 0;
   const parsedReports = (state && state.parsedReports) || [];
   for (const report of parsedReports) {
-    const key = [report.report_name || "", report.date_sent || ""].join("|");
-    const pdfUrl = linkByKey.get(key) || "";
+    const pdfUrl = exactPdfUrl(report);
     for (const parameter of report.parameters || []) {
       results.push({
         id: "nims-" + (++resultIndex),
@@ -1649,7 +1684,7 @@ async function tryRestApiForDashboard(crNo) {
         });
         if (parsed && parsed.ok && parsed.data) {
           parsedReports.push(parsed.data);
-          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department });
+          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department, url: report.resolvedUrl });
           reportDiagnostics.parsed += 1;
         } else {
           reportDiagnostics.parseFailures += 1;
