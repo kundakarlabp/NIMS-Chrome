@@ -15,6 +15,7 @@ on:
       - fix/android-v110-clinical-report-renderers
       - fix/android-v111-source-provenance-routing
       - fix/android-v112-report-completeness
+      - fix/android-v113-inline-review-diagnostics
   pull_request:
     branches:
       - release/android-native-rebuild-base
