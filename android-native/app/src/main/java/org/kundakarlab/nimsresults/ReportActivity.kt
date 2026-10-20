@@ -46,6 +46,7 @@ class ReportActivity : Activity() {
     private lateinit var horizontalScroll: HorizontalScrollView
     private var zoom = 1f
     private var sourceUrl = ""
+    private var expectedCr = ""
     private lateinit var readTextButton: Button
 
     private var renderer: PdfRenderer? = null
@@ -58,6 +59,7 @@ class ReportActivity : Activity() {
         super.onCreate(savedInstanceState)
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         sourceUrl = url
+        expectedCr = intent.getStringExtra(EXTRA_EXPECTED_CR).orEmpty()
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) {
             finish()
             return
@@ -379,7 +381,18 @@ class ReportActivity : Activity() {
                 if (text.isBlank()) {
                     status.text = "No selectable PDF text. Use the original report image."
                 } else {
-                    ReportTitleCache.learn(sourceUrl, text)
+                    val header = PdfDocumentHeaders.parse(text)
+                    if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
+                        header.crNo != expectedCr) {
+                        status.text = "WARNING: PDF patient CR does not match selected patient"
+                        AlertDialog.Builder(this)
+                            .setTitle("Wrong patient report — do not use")
+                            .setMessage("The PDF text contains a different CR number. This report was not linked to the selected patient.")
+                            .setPositiveButton("Close", null)
+                            .show()
+                        return@runOnUiThread
+                    }
+                    ReportTitleCache.learn(sourceUrl, text, expectedCr)
                     AlertDialog.Builder(this)
                         .setTitle("NIMS source report · extracted text")
                         .setMessage("Extraction may reorder PDF tables or omit symbols. Verify against the original page.\n\n" + text)
@@ -440,6 +453,7 @@ class ReportActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "report_url"
+        const val EXTRA_EXPECTED_CR = "expected_patient_cr"
         private const val REQUEST_SAVE_PDF = 231
         private const val MAX_PDF_BYTES = 20L * 1024 * 1024
         private const val MAX_CACHE_FILES = 8
