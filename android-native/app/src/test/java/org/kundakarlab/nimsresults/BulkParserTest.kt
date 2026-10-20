@@ -212,4 +212,32 @@ class BulkParserTest {
         assertEquals(null, result.numericValue)
     }
 
+    @Test fun suppliedCollectionAndReportedDatesDoNotOverwriteResultDate() {
+        val raw = """
+          {"status":1,"crNo":"123456789012345","groups":[
+            {"testName":"Aerobic Culture","collectionDate":"03-May-2026",
+             "reportingDate":"08-May-2026","labStudyNo":"ABC123",
+             "rows":[{"parameterName":"Result",
+               "valuesByDate":{"07-May-2026":"Culture shows growth of test organism"}}]}
+          ]}
+        """.trimIndent()
+        val row = BulkParser.parse(raw, "123456789012345",
+            PatientInfo(crNo="123456789012345"), emptyList()).results.single()
+        assertEquals("2026-05-07", row.date)
+        assertEquals("03-May-2026", row.sentDate)
+        assertEquals("08-May-2026", row.reportedDate)
+        assertEquals("ABC123", row.labNumber)
+    }
+
+    @Test fun missingSourceDatesStayUnknownRatherThanInvented() {
+        val raw = """{"status":1,"crNo":"123456789012345","groups":[
+          {"testName":"Aerobic Culture","rows":[{"parameterName":"Result",
+            "valuesByDate":{"07-May-2026":"No growth"}}]}]}"""
+        val row = BulkParser.parse(raw, "123456789012345",
+            PatientInfo(crNo="123456789012345"), emptyList()).results.single()
+        assertEquals("", row.sentDate)
+        assertEquals("", row.reportedDate)
+        assertEquals("", row.labNumber)
+    }
+
 }
