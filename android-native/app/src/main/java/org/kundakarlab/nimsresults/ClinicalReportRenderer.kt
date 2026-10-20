@@ -71,15 +71,23 @@ object ClinicalReportRenderer {
         rows.filterNot(::isUninterpretedCode).filterNot(::isPlaceholder)
 
     fun preferredRows(rows: List<LabResult>): List<LabResult> {
-        // Same observation is often repeated by the HIS as "Result" and
-        // "textarea". Keep the more descriptive label, not two copies.
-        return clinicalRows(rows).sortedWith(compareBy<LabResult> {
-            if (it.parameter.equals("textarea", true) ||
-                it.parameter.equals("Result", true)) 1 else 0
-        }.thenByDescending { it.valueText.length }).distinctBy {
-            it.date + "|" + it.valueText.trim().lowercase(Locale.US)
-                .replace(Regex("""\s+"""), " ")
+        val ordered = clinicalRows(rows).sortedByDescending { it.valueText.length }
+        val displayed = mutableListOf<LabResult>()
+        ordered.forEach { candidate ->
+            // Merge only the same text mirrored across Result/textarea;
+            // never merge two source observations of the same parameter.
+            val counterpart = displayed.any { known ->
+                candidate.date == known.date &&
+                    candidate.labNumber == known.labNumber &&
+                    candidate.valueText.trim().equals(known.valueText.trim(), true) &&
+                    ((candidate.parameter.equals("Result", true) &&
+                        known.parameter.equals("textarea", true)) ||
+                        (candidate.parameter.equals("textarea", true) &&
+                        known.parameter.equals("Result", true)))
+            }
+            if (!counterpart) displayed += candidate
         }
+        return displayed
     }
 
     fun sourceSections(input: String): List<SourceSection> {
