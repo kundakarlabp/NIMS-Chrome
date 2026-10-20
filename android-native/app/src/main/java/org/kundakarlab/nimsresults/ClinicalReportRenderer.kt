@@ -37,6 +37,14 @@ object ClinicalReportRenderer {
         val name = row.parameter.trim()
         val code = row.valueText.trim()
         if (ClinicalPresentation.isTechnical(row) || ClinicalPresentation.isOpaquePanelCode(row)) return true
+        // A qualitative word in an unmapped BioFire/ANA control field does
+        // not identify the target to which that word belongs.
+        val panel = Regex("""(?i)biofire|filmarray|ana\s*(?:profile|blot|panel)|blood\s*group|antibody\s*screen""")
+            .containsMatchIn(row.test)
+        val control = Regex(
+            """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|control|[12]|a1\s*cells|b\s*cells|anti-[ab]|rh)$"""
+        ).matches(name)
+        if (panel && control) return true
         // Generic /HPF or /LPF fields lack the named urinary sediment
         // analyte; an apparently numeric value must not be labeled as RBC/WBC.
         if (Regex("""(?i)^/[hl]pf\s*\(result\)$""").matches(name)) return true
