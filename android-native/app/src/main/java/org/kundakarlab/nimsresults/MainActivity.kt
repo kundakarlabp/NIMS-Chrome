@@ -1914,6 +1914,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val opaque = OpaqueReportTitles.isCode(report.title)
                     val extracted = ReportTitleCache.extracted(report.url)
                     val verifiedHeader = ReportTitleCache.header(report.url)
+                    val verifiedText = extracted.takeIf {
+                        verifiedHeader?.crNo == current.patient.crNo
+                    }.orEmpty()
+                    val grouping = PdfClinicalSummaries.bloodGrouping(verifiedText)
                     val rad = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
                         .containsMatchIn(report.title + " " + report.department)
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -1975,8 +1979,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text(report.department, fontSize = 10.sp,
                                     color = Color(0xFF66788A))
                             }
-                            if (rad && extracted != null) {
-                                val sections = RadiologyNarrative.parse(extracted)
+                            if (grouping != null) {
+                                Text("Source-PDF blood grouping (verify against original)",
+                                    fontWeight = FontWeight.Bold, fontSize = 11.sp,
+                                    color = Color(0xFF102A43))
+                                Text("ABO/Rh: " + grouping.group +
+                                    if (grouping.antibodyScreen.isNotBlank())
+                                        " · Antibody screening: " + grouping.antibodyScreen else "",
+                                    fontSize = 12.sp)
+                            }
+                            if (rad && verifiedText.isNotBlank()) {
+                                val sections = RadiologyNarrative.parse(verifiedText)
                                 if (sections.impression.isNotBlank()) {
                                     Text("Source impression", fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
