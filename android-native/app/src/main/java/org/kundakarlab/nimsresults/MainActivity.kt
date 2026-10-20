@@ -185,6 +185,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     private fun toggleAppLock() {
+        if (appLockEnabled && shelfEntries.isNotEmpty()) {
+            Toast.makeText(this,
+                "Saved patient CRs require device lock. Remove saved patients first.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
         if (!appLockEnabled && !keyguard.isDeviceSecure) {
             Toast.makeText(this, "Set a device PIN or password before enabling app lock.", Toast.LENGTH_LONG).show()
