@@ -518,7 +518,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun openReport(url: String) {
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) return
-        startActivity(Intent(this, ReportActivity::class.java).putExtra(ReportActivity.EXTRA_URL, url))
+        startActivity(Intent(this, ReportActivity::class.java)
+            .putExtra(ReportActivity.EXTRA_URL, url)
+            .putExtra(ReportActivity.EXTRA_EXPECTED_CR, bundle?.patient?.crNo.orEmpty()))
     }
 
     @Composable
@@ -1462,6 +1464,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val learned = ReportTitleCache.get(report.url)
                     val opaque = OpaqueReportTitles.isCode(report.title)
                     val extracted = ReportTitleCache.extracted(report.url)
+                    val verifiedHeader = ReportTitleCache.header(report.url)
                     val rad = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
                         .containsMatchIn(report.title + " " + report.department)
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -1475,8 +1478,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         Text("Source accession: " + report.title,
                                             color = Color(0xFF486581), fontSize = 10.sp)
                                     }
-                                    if (report.labNumber.isNotBlank()) {
-                                        Text("Lab/study no: " + report.labNumber,
+                                    val sourceLab = verifiedHeader?.labNumber.orEmpty()
+                                        .ifBlank { report.labNumber }
+                                    if (sourceLab.isNotBlank()) {
+                                        Text("Lab/study no: " + sourceLab,
                                             color = Color(0xFF486581), fontSize = 10.sp)
                                     }
                                 }
@@ -1487,16 +1492,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if (report.sentDate.isNotBlank()) {
-                                Text("Specimen sent: " + report.sentDate, fontSize = 11.sp,
+                            val sampleDate = verifiedHeader?.collectionDate.orEmpty()
+                                .ifBlank { report.sentDate }
+                            val finalizedDate = verifiedHeader?.reportedDate.orEmpty()
+                                .ifBlank { report.reportedDate }
+                            if (sampleDate.isNotBlank()) {
+                                Text("Sample collected / sent: " + sampleDate, fontSize = 11.sp,
                                     color = Color(0xFF486581))
                             } else {
                                 Text("Listed result date: " + report.date +
                                     " · specimen collection date unconfirmed",
                                     fontSize = 10.sp, color = Color(0xFF66788A))
                             }
-                            if (report.reportedDate.isNotBlank()) {
-                                Text("Reported: " + report.reportedDate, fontSize = 11.sp,
+                            if (finalizedDate.isNotBlank()) {
+                                Text("Reported: " + finalizedDate, fontSize = 11.sp,
                                     color = Color(0xFF486581))
                             }
                             if (report.department.isNotBlank()) {
