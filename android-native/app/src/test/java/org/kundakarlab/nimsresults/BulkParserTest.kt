@@ -173,4 +173,34 @@ class BulkParserTest {
         assertTrue(!parsed.resistant.contains("Repeat culture"))
     }
 
+    @Test
+    fun preservesLessThanCutoffsAndSerologyValuesWithoutNumericInventing() {
+        val raw = """
+          {"status":1,"crNo":"123456789012345","groups":[
+            {"testName":"Dengue serology","rows":[
+              {"parameterName":"Dengue NS1 antigen","valuesByDate":{"18-Oct-2026":"&lt;1.00 - Negative"}},
+              {"parameterName":"Dengue IgM","valuesByDate":{"18-Oct-2026":"<0.8"}},
+              {"parameterName":"Dengue IgG","valuesByDate":{"18-Oct-2026":"< 6 mg/mL"}},
+              {"parameterName":"Serology remarks","valuesByDate":{"18-Oct-2026":"Index <1.00: Negative; >=1.00: Positive"}}
+            ]}
+          ]}
+        """.trimIndent()
+        val data = BulkParser.parse(raw, "123456789012345", PatientInfo(crNo = "123456789012345"), emptyList())
+        assertEquals(4, data.results.size)
+        val byParameter = data.results.associateBy { it.parameter }
+        assertEquals("<1.00 - Negative", byParameter.getValue("Dengue NS1 antigen").valueText)
+        assertEquals("<0.8", byParameter.getValue("Dengue IgM").valueText)
+        assertEquals("< 6 mg/mL", byParameter.getValue("Dengue IgG").valueText)
+        assertTrue(byParameter.getValue("Serology remarks").valueText.contains("Index <1.00"))
+        assertTrue(data.results.all { it.numericValue == null })
+        assertTrue(data.results.all(ClinicalResultRules::isSerology))
+    }
+
+    @Test
+    fun adminCodesRemainSourceValuesNotClinicalMeasurements() {
+        assertTrue(ClinicalResultRules.isAdministrativeParameter("Sample Processed:"))
+        assertTrue(ClinicalResultRules.isAdministrativeParameter("Test Done By"))
+        assertTrue(!ClinicalResultRules.isAdministrativeParameter("Serum Creatinine"))
+    }
+
 }
