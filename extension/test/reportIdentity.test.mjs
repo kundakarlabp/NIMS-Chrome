@@ -83,3 +83,9 @@ test('reused identifier with different source test title cannot collapse reports
   const records = context.mergeReportInventories([a], [{ ...a, title: 'Urine culture' }]);
   assert.equal(records.length, 2);
 });
+
+test('REST parsed report source retains its already verified PDF URL', () => {
+  const rest = section('async function tryRestApiForDashboard(crNo)', 'async function fetchCrForDashboardLegacy');
+  assert.match(rest, /resolvedUrl: report\.url \|\| self\.NimsRestApi\.verifiedReportUrlForToken/);
+  assert.match(rest, /sourceReports\.push\(\{[^}]*url: report\.resolvedUrl \}\)/);
+});
