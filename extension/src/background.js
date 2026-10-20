@@ -1684,7 +1684,7 @@ async function tryRestApiForDashboard(crNo) {
         });
         if (parsed && parsed.ok && parsed.data) {
           parsedReports.push(parsed.data);
-          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department });
+          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department, url: report.resolvedUrl });
           reportDiagnostics.parsed += 1;
         } else {
           reportDiagnostics.parseFailures += 1;
