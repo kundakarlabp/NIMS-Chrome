@@ -1213,6 +1213,102 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
 
     @Composable
+    private fun ClinicalNarrativeCard(test: String, rows: List<LabResult>,
+                                      layout: ClinicalLayout, patientCr: String) {
+        val byDate = remember(rows) {
+            rows.groupBy { it.date }.toList()
+                .sortedByDescending { BulkParser.dateKey(it.first) }
+        }
+        var showAll by remember(patientCr, test) { mutableStateOf(false) }
+        val datesToShow = if (showAll) byDate else byDate.take(4)
+        val uninterpreted = rows.count {
+            ClinicalReportRenderer.isUninterpretedCode(it) ||
+                ClinicalReportRenderer.isPlaceholder(it)
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(test, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = Color(0xFF102A43))
+                Text(
+                    when (layout) {
+                        ClinicalLayout.NARRATIVE -> "Narrative report"
+                        ClinicalLayout.QUALITATIVE -> "Qualitative result"
+                        ClinicalLayout.SOURCE_CODED -> "Coded source report · interpretation requires verification"
+                        else -> "Clinical results"
+                    } + " · " + byDate.size + " result dates",
+                    fontSize = 10.sp, color = Color(0xFF66788A)
+                )
+                if (uninterpreted > 0) {
+                    Text("$uninterpreted source/placeholder fields not interpreted as clinical results",
+                        fontSize = 10.sp, color = Color(0xFF875B22))
+                }
+                if (layout == ClinicalLayout.SOURCE_CODED) {
+                    Text("Targets or blood-group values cannot be decoded from NIMS control codes. Use the signed source report.",
+                        fontSize = 11.sp, color = Color(0xFF875B22))
+                }
+                datesToShow.forEach { (date, dateRows) ->
+                    HorizontalDivider()
+                    Text("Result date: " + date, fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold, color = Color(0xFF486581))
+                    val clinical = ClinicalReportRenderer.preferredRows(dateRows)
+                    val shown = if (layout == ClinicalLayout.NARRATIVE &&
+                        clinical.any { it.valueText.length > 180 }) {
+                        // Unstructured HIS reports duplicate the beginning of a
+                        // narrative in "Result" and the full text in "textarea".
+                        val longest = clinical.maxByOrNull { it.valueText.length }
+                        clinical.filter { item ->
+                            item == longest || (item.parameter != "textarea" &&
+                                !item.parameter.equals("Result", true) &&
+                                item.valueText.length > 3 &&
+                                !(longest?.valueText?.contains(item.valueText) ?: false))
+                        }
+                    } else clinical
+                    if (shown.isEmpty()) {
+                        Text("No interpretable clinical fields in the structured feed.",
+                            fontSize = 11.sp, color = Color(0xFF66788A))
+                    }
+                    shown.forEach { result ->
+                        if (result.parameter.isNotBlank() &&
+                            !result.parameter.equals("Result", true) &&
+                            !result.parameter.equals("textarea", true)) {
+                            Text(result.parameter, fontSize = 11.sp,
+                                color = Color(0xFF486581), fontWeight = FontWeight.Medium)
+                        }
+                        val sections = if (layout == ClinicalLayout.NARRATIVE)
+                            ClinicalReportRenderer.sourceSections(result.valueText)
+                        else listOf(SourceSection("", result.valueText))
+                        sections.forEach { section ->
+                            if (section.heading.isNotBlank() &&
+                                section.heading !in listOf("Source result", "Source details")) {
+                                Text(section.heading, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF102A43))
+                            }
+                            Text(section.content, fontSize = 12.sp, color = Color(0xFF243B53))
+                        }
+                        result.unit.takeIf(String::isNotBlank)?.let {
+                            Text("Units: " + it, fontSize = 10.sp,
+                                color = Color(0xFF66788A))
+                        }
+                    }
+                }
+                if (byDate.size > 4) {
+                    TextButton(onClick = { showAll = !showAll }) {
+                        Text(if (showAll) "Show latest four dates"
+                        else "Show all " + byDate.size + " dates")
+                    }
+                }
+                TextButton(onClick = {
+                    reportQueryPrefill = ""
+                    selectedTab = ResultsTab.REPORTS
+                }) {
+                    Text("Browse original NIMS source reports", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+
+    @Composable
     private fun LabsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -1314,7 +1410,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (groups.isEmpty()) {
                 item { Text("No matching values in this date range.", color = Color(0xFF66788A)) }
             }
-            items(groups, key = { it.first }) { (test, rows) ->
+            items(groups, key = { it.first }) { (test, sourceRows) ->
+                val selectedLayout = ClinicalReportRenderer.layout(test, sourceRows)
+                if (selectedLayout != ClinicalLayout.SERIES && kind != "Raw") {
+                    ClinicalNarrativeCard(test, sourceRows, selectedLayout, current.patient.crNo)
+                } else {
+                val rows = if (kind == "Raw") sourceRows else sourceRows.filter {
+                    !ClinicalReportRenderer.isUninterpretedCode(it) &&
+                        !ClinicalReportRenderer.isPlaceholder(it)
+                }
                 val dates = remember(rows, columns) {
                     val allDates = rows.map { it.date }.distinct()
                         .sortedByDescending { BulkParser.dateKey(it) }
@@ -1415,6 +1519,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             TextButton(onClick = { selectedValue = null }) { Text("Close detail") }
                         }
                     }
+                }
                 }
             }
         }
