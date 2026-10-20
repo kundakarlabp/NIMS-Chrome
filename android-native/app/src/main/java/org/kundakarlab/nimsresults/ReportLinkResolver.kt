@@ -12,7 +12,7 @@ data class ReportCandidates(val verified: ReportRef?, val candidates: List<Repor
  */
 object ReportLinkResolver {
     private fun normalize(s: String) = s.lowercase(Locale.US).replace(Regex("""[^a-z0-9]"""), "")
-        .replace("grams", "gram").replace("staining", "stain")
+        .replace("staining", "stain").replace(Regex("^gramsstain"), "gramstain")
     private fun accessionParts(s: String): Set<String> =
         s.split('/', '\\', '|').map(::normalize).filter { it.length >= 5 }.toSet()
     private fun uniqueLabMatch(lab: String, pdfLab: String): Boolean {
