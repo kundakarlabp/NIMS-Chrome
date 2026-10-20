@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var root: FrameLayout
@@ -617,6 +620,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         )
         val current = bundle
         var toolsOpen by remember(current?.patient?.crNo) { mutableStateOf(false) }
+        val scrollByTab = remember(current?.patient?.crNo) {
+            ResultsTab.entries.associateWith { LazyListState() }
+        }
+        val scrollScope = rememberCoroutineScope()
         MaterialTheme(colorScheme = colors) {
             Scaffold(
                 topBar = { AppHeader() },
@@ -671,13 +678,35 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
-                                ResultsTab.OVERVIEW -> OverviewScreen(current)
-                                ResultsTab.ID -> IdFocusScreen(current)
-                                ResultsTab.LABS -> LabsScreen(current)
-                                ResultsTab.MICROBIOLOGY -> MicroScreen(current)
-                                ResultsTab.REPORTS -> ReportsScreen(current)
-                                ResultsTab.TRENDS -> TrendsScreen(current)
-                                ResultsTab.ALL -> AllResultsScreen(current)
+                                ResultsTab.OVERVIEW -> OverviewScreen(current, scrollByTab.getValue(ResultsTab.OVERVIEW))
+                                ResultsTab.ID -> IdFocusScreen(current, scrollByTab.getValue(ResultsTab.ID))
+                                ResultsTab.LABS -> LabsScreen(current, scrollByTab.getValue(ResultsTab.LABS))
+                                ResultsTab.MICROBIOLOGY -> MicroScreen(current, scrollByTab.getValue(ResultsTab.MICROBIOLOGY))
+                                ResultsTab.REPORTS -> ReportsScreen(current, scrollByTab.getValue(ResultsTab.REPORTS))
+                                ResultsTab.TRENDS -> TrendsScreen(current, scrollByTab.getValue(ResultsTab.TRENDS))
+                                ResultsTab.ALL -> AllResultsScreen(current, scrollByTab.getValue(ResultsTab.ALL))
+                            }
+                            // Works across all long result tabs, without changing
+                            // the selected clinical report or switching tabs.
+                            val activeScroll = scrollByTab.getValue(selectedTab)
+                            if (activeScroll.layoutInfo.totalItemsCount > 8) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                        .padding(end = 7.dp, bottom = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { scrollScope.launch { activeScroll.animateScrollToItem(0) } },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    ) { Text("↑ Top", fontSize = 11.sp) }
+                                    OutlinedButton(
+                                        onClick = { scrollScope.launch {
+                                            activeScroll.animateScrollToItem(
+                                                (activeScroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                                        } },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    ) { Text("↓ End", fontSize = 11.sp) }
+                                }
                             }
                         }
                     }
@@ -1051,7 +1080,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
 
     @Composable
-    private fun OverviewScreen(current: ClinicalBundle) {
+    private fun OverviewScreen(current: ClinicalBundle, scroll: LazyListState) {
         val eligible = remember(current.results) {
             current.results.filter { ClinicalResultRules.isTrendEligible(it) }
         }
@@ -1095,7 +1124,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }.sortedByDescending { BulkParser.dateKey(it.date) }
                 .distinctBy { normalizeKey(it.parameter) }.take(6)
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -1417,7 +1446,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun IdFocusScreen(current: ClinicalBundle) {
+    private fun IdFocusScreen(current: ClinicalBundle, scroll: LazyListState) {
         // The ID view is a filtered longitudinal index, not an AI diagnosis.
         val markers = listOf(
             "CRP / hsCRP" to setOf("crp", "creactiveprotein", "hscrp",
@@ -1451,7 +1480,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ReportTitleCache.get(report.url).orEmpty())
             }
         }
-        LazyColumn(modifier = Modifier.fillMaxSize(),
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
@@ -1527,7 +1556,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun LabsScreen(current: ClinicalBundle) {
+    private fun LabsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
         var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
@@ -1578,7 +1607,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             filtered.groupBy { it.test.ifBlank { "Other investigations" } }
                 .toList().sortedBy { it.first }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -1768,7 +1797,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun MicroScreen(current: ClinicalBundle) {
+    private fun MicroScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var showSourceInventory by remember(current.patient.crNo) { mutableStateOf(false) }
         // Source inventory is intentionally independent of structured rows:
@@ -1800,7 +1829,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ClinicalPresentation.sentDate(values).ifBlank { key.second }))
                 }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2071,7 +2100,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             .matches(parameter.trim().trimEnd(':').trim())
 
     @Composable
-    private fun ReportsScreen(current: ClinicalBundle) {
+    private fun ReportsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         val revision = reportTitleEpoch
@@ -2091,7 +2120,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     (query.isBlank() || searchable.contains(query, true))
             }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -2226,7 +2255,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun TrendsScreen(current: ClinicalBundle) {
+    private fun TrendsScreen(current: ClinicalBundle, scroll: LazyListState) {
         val series = remember(current.results) {
             current.results.filter { ClinicalResultRules.isTrendEligible(it) }
                 .groupBy { ClinicalResultRules.parameterKey(it) }
@@ -2254,7 +2283,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val rows = selected?.second?.filter {
             ClinicalResultRules.inWindow(it.date, latest, period)
         }.orEmpty()
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -2348,7 +2377,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
 
     @Composable
-    private fun AllResultsScreen(current: ClinicalBundle) {
+    private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2383,7 +2412,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             filtered.groupBy { it.date }.toList()
                 .sortedByDescending { BulkParser.dateKey(it.first) }
         }
-        LazyColumn(modifier = Modifier.fillMaxSize(),
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
