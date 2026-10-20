@@ -25,6 +25,11 @@ object ClinicalReportRenderer {
     )
     private val unknownValues = setOf("", "--", "—", "null", "n/a")
 
+    fun isMicrobiologyInvestigation(test: String): Boolean =
+        Regex(
+            """(?i)\b(?:culture|sensitivity|susceptibility|genexpert|gene\s*xpert|cbnaat|afb\s*smear|mycobacterial\s*pcr|blood\s*culture)\b"""
+        ).containsMatchIn(test)
+
     fun isPlaceholder(row: LabResult): Boolean =
         row.valueText.trim().lowercase(Locale.US) in unknownValues
 
