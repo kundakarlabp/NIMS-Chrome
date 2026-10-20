@@ -431,8 +431,7 @@ object ReportTitleCache {
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean {
         val header = PdfDocumentHeaders.parse(extracted)
         // Wrong-patient source PDFs must never enrich the clinical dashboard.
-        if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
-            header.crNo != expectedCr) return false
+        if (expectedCr.isNotBlank() && header.crNo != expectedCr) return false
         OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
         // Volatile, on-device only; no persistent source text or external upload.
         extractedByUrl[url] = extracted.take(12000)
