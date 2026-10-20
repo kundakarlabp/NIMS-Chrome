@@ -998,7 +998,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
                         .filter { it.isNotBlank() }.joinToString(" · ")
                     Text(listOf(demographics,
-                        current.results.size.toString() + " labs",
+                        current.results.size.toString() + " source values",
                         current.reports.size.toString() + " reports")
                         .filter { it.isNotBlank() }.joinToString(" · "),
                         color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
