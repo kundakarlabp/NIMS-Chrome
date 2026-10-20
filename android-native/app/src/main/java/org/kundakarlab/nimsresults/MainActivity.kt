@@ -1953,6 +1953,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 maxLines = if (expanded) Int.MAX_VALUE else 6)
                             Spacer(Modifier.height(7.dp))
                         }
+                        if (parts.intermediate.isNotBlank()) {
+                            Text("Source intermediate section", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Color(0xFF805400))
+                            Text(parts.intermediate, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 6)
+                            Spacer(Modifier.height(7.dp))
+                        }
                         if (parts.resistant.isNotBlank()) {
                             Text("Reported resistance", fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold, color = Color(0xFF8B3131))
