@@ -459,14 +459,20 @@ class ReportActivity : Activity() {
                     return@runOnUiThread
                 }
                 cachedExtractedText = text
+                if (geometry.isNotBlank()) cachedGeometryText = geometry
                 ReportTitleCache.learn(sourceUrl, text, expectedCr)
-                showSourceText(text, tableView)
+                showSourceText(if (tableView && geometry.isNotBlank()) geometry else text, tableView)
             }
         }
     }
 
     private fun showSourceText(text: String, tableView: Boolean) {
-        val content = if (tableView) ReportTableReader.present(text) else text
+        val content = when {
+            tableView && cachedGeometryText.isNotBlank() ->
+                "PDF coordinate-aligned layout. Confirm against the original page.\n\n" + text
+            tableView -> ReportTableReader.present(text)
+            else -> text
+        }
         val editable = TextView(this).apply {
             setTextIsSelectable(true)
             setTextColor(Color.rgb(20, 40, 58))
