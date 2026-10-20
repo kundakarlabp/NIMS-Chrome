@@ -269,6 +269,8 @@ object ReportPayloadParser {
             val id = token.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             // The HTML index may contain only one unlabeled date.
             // Do not mislabel it as specimen collection or report validation.
+            // Ignore decorative "View Report" rows without a usable source PDF.
+            if (url.isBlank()) return@forEachIndexed
             reports += ReportRef(id, title, date, department, url,
                 labNumber = cells.firstOrNull { OpaqueReportTitles.isCode(it) }.orEmpty()
             )
@@ -364,7 +366,7 @@ object ReportPayloadParser {
                 !Regex("""(?i)^(clinical|microbiology|biochemistry|laboratory|pathology)\s*(?:lab)?$""").matches(it)
             }
             ?: candidates.firstOrNull { OpaqueReportTitles.isCode(it) }
-            ?: rowText.take(100)
+            ?: "Investigation title unavailable"
     }
 
     private fun compact(value: String) = value.replace(Regex("\\s+"), " ").trim()
@@ -389,6 +391,9 @@ object OpaqueReportTitles {
             """(?i)\b(?:aerobic|blood|fungal|urine)\s+culture\b""" to "Microbiology culture report",
             """(?i)\bc[- ]?reactive\s+protein\b""" to "C-reactive protein",
             """(?i)\b(?:complete\s+blood\s+count|cbc\s*[\(+])\b""" to "Complete blood count",
+            """(?i)\bgrouping\s+and\s+(?:antibody\s+)?screening\b|\bblood\s+grouping\s+and\s+antibody\s+screening\b""" to "Blood grouping and antibody screening",
+            """(?i)\b(?:biofire|filmarray)\s+(?:joint\s+infection|meningitis|respiratory|gastrointestinal)\s+panel\b""" to "BioFire molecular panel",
+            """(?i)\bf\s*-?\s*18\s+fdg\b.*?\bpet\s*-?\s*ct\b""" to "F-18 FDG PET-CT",
             """(?im)^\s*esr\s*$""" to "Erythrocyte sedimentation rate"
         )
         return patterns.firstOrNull { Regex(it.first).containsMatchIn(text) }?.second
@@ -400,7 +405,8 @@ data class PdfDocumentHeader(
     val crNo: String = "",
     val labNumber: String = "",
     val collectionDate: String = "",
-    val reportedDate: String = ""
+    val reportedDate: String = "",
+    val orderDate: String = ""
 )
 
 object PdfDocumentHeaders {
@@ -412,7 +418,8 @@ object PdfDocumentHeaders {
             crNo = field("""(?i)\bCR\s*No\.?\s*:\s*(\d{15})\b"""),
             labNumber = field("""(?i)\bLab/Study\s*No\.?\s*:\s*([A-Za-z0-9/_-]+)"""),
             collectionDate = field("(?i)\\bColl/Study\\s*Date\\s*:\\s*" + date),
-            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date)
+            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date),
+            orderDate = field("(?i)\\bRequisition\\s*Date\\s*:\\s*" + date)
         )
     }
 }
