@@ -1269,7 +1269,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (grouped.isEmpty()) {
                 item { Text("No matching microbiology reports.", color = Color(0xFF66788A)) }
             }
-            items(grouped, key = { it.first.first + "|" + it.first.second }) { (key, rows) ->
+            items(grouped, key = { it.first.first + "|" + it.first.second + "|" + it.first.third }) { (key, rows) ->
                 val (test, date) = key
                 val clinical = rows.filterNot { isMicroTechnicalField(it.parameter) }
                     .sortedWith(compareBy<LabResult> {
