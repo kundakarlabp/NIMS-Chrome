@@ -1326,8 +1326,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         !ClinicalPresentation.isTechnical(row) &&
                         !ClinicalPresentation.isOpaquePanelCode(row)
                     "Raw" -> true
-                    else -> !ClinicalPresentation.isTechnical(row) &&
-                        !ClinicalPresentation.isOpaquePanelCode(row)
+                    else -> !ClinicalPresentation.isTechnical(row)
                 }
             }
         }
@@ -1342,14 +1341,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             else -> null
         }
         val options = remember(clinicalRows) {
-            clinicalRows.filter { it.parameter.isNotBlank() }
+            clinicalRows.filter { it.parameter.isNotBlank() &&
+                (kind == "Raw" || !ClinicalReportRenderer.isUninterpretedCode(it)) }
                 .groupingBy { it.parameter }.eachCount()
                 .entries.sortedByDescending { it.value }
                 .take(20).map { it.key }
         }
         val filtered = remember(clinicalRows, query, parameter, period, latest) {
             clinicalRows.filter { row ->
-                (parameter == "All" || row.parameter == parameter) &&
+                (kind == "Raw" || !ClinicalReportRenderer.isPlaceholder(row)) &&
+                    (parameter == "All" || row.parameter == parameter) &&
                     ClinicalResultRules.inWindow(row.date, latest, periodDays) &&
                     (query.isBlank() || (row.test + " " + row.parameter + " " + row.date)
                         .contains(query, true))
@@ -2132,8 +2133,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     private fun isMicro(row: LabResult): Boolean {
-        val text = (row.test + " " + row.parameter + " " + row.valueText).lowercase()
-        return Regex("""culture|microbiology|organism|sensitivity|susceptib|no growth|growth|gram stain|pcr|cbnaat|genexpert""").containsMatchIn(text)
+        // Source narrative may mention earlier cultures/PCR in radiology or
+        // pathology history. Classify by investigation identity, not prose.
+        return Regex(
+            """(?i)\b(?:culture|sensitivity|susceptibility|genexpert|gene\s*xpert|cbnaat|afb\s*smear|mycobacterial\s*pcr|blood\s*culture)\b"""
+        ).containsMatchIn(row.test)
     }
 
     private fun normalizeKey(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
