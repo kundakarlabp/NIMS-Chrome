@@ -105,4 +105,11 @@ class ReportCompletenessV112Test {
         assertEquals("O Positive", parsed?.group)
         assertEquals("Negative", parsed?.antibodyScreen)
     }
+
+    @Test fun hsCrpAndEsrTrendAliasesAreQuantitativeOnly() {
+        val row = LabResult("hscrp", "hsCRP", "High Sensitivity CRP", "2025-07-08", "2.3",
+            numericValue = 2.3, unit = "mg/L")
+        assertTrue(ClinicalResultRules.isTrendEligible(row))
+        assertFalse(ClinicalResultRules.isTrendEligible(row.copy(valueText = "<2.3", numericValue = null)))
+    }
 }
