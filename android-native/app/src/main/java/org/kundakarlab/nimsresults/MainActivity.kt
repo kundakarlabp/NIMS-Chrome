@@ -824,6 +824,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                     }
                 }
+                val suggested = shelfEntries.filter {
+                    localCr.isBlank() || it.cr.startsWith(localCr)
+                }.take(4)
+                if (suggested.isNotEmpty()) {
+                    Text("Previously used CRs", fontSize = 10.sp,
+                        color = Color(0xFF66788A))
+                    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        suggested.forEach { patient ->
+                            TextButton(onClick = { openSavedCr(patient.cr) }) {
+                                Text(patient.name.ifBlank { patient.cr }.take(24),
+                                    fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
                 TextButton(onClick = { shelfOpen = !shelfOpen },
                     modifier = Modifier.fillMaxWidth()) {
                     Text(if (shelfOpen) "Close saved patients"
