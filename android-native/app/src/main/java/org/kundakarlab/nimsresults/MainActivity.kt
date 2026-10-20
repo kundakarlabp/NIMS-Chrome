@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -79,6 +80,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var root: FrameLayout
     private lateinit var engine: NimsEngine
     private lateinit var vault: SessionVault
+    private lateinit var patientShelf: PatientShelf
+    private var shelfEntries by mutableStateOf<List<PatientBookmark>>(emptyList())
+    private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
     private val worker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -156,6 +160,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         vault = SessionVault(this)
+        patientShelf = PatientShelf(this)
+        shelfEntries = patientShelf.read()
         appLockEnabled = getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
             .getBoolean("device_lock_enabled", false)
         appUnlocked = !appLockEnabled
@@ -227,6 +233,51 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    private fun updateShelf(operation: () -> List<PatientBookmark>) {
+        runCatching { operation() }.onSuccess { shelfEntries = it }
+            .onFailure {
+                Toast.makeText(this, "Could not save patient shortcut securely.",
+                    Toast.LENGTH_LONG).show()
+            }
+    }
+
+    private fun rememberCrLocally(cr: String) {
+        if (!PatientShelfRules.validCr(cr)) return
+        val guard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!guard.isDeviceSecure) return  // no PHI history on an unlocked phone
+        if (!appLockEnabled) {
+            appLockEnabled = true
+            getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+                .edit().putBoolean("device_lock_enabled", true).apply()
+            Toast.makeText(this, "Device PIN protection enabled for saved patient history.",
+                Toast.LENGTH_LONG).show()
+        }
+        updateShelf { patientShelf.rememberCr(cr) }
+    }
+
+    private fun togglePatientList(cr: String, list: String) {
+        val guard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (!guard.isDeviceSecure) {
+            Toast.makeText(this, "Set a device PIN before saving patient identifiers.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!appLockEnabled) {
+            appLockEnabled = true
+            getSharedPreferences("nims_app_settings", Context.MODE_PRIVATE)
+                .edit().putBoolean("device_lock_enabled", true).apply()
+        }
+        val enabled = shelfEntries.firstOrNull { it.cr == cr }?.lists?.contains(list) != true
+        updateShelf { patientShelf.setList(cr, list, enabled) }
+    }
+
+    private fun openSavedCr(cr: String) {
+        if (!PatientShelfRules.validCr(cr)) return
+        crInput = cr
+        shelfOpen = false
+        requestFetch()
+    }
+
     private fun requestFetch() {
         val cr = crInput.filter(Char::isDigit)
         if (!cr.matches(Regex("""\d{15}"""))) {
@@ -236,6 +287,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         if (bundle?.patient?.crNo != cr) bundle = null
         activeCr = cr
+        rememberCrLocally(cr)
+        shelfOpen = false
         activeRequestId = "native-" + UUID.randomUUID()
         val requestId = activeRequestId
         pendingPatient = PatientInfo(crNo = cr)
@@ -422,6 +475,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     bundle = initial
+                    if (initial.patient.name.isNotBlank()) {
+                        updateShelf { patientShelf.confirmedPatient(cr, initial.patient.name) }
+                    }
                     apiStage = "structured_verified"
                     crInput = cr
                     selectedTab = ResultsTab.OVERVIEW
@@ -577,7 +633,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text(statusText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.dp),
                             color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     }
-                    if (current == null) {
+                    if (shelfOpen) {
+                        PatientShelfScreen()
+                    } else if (current == null) {
                         EmptyHome()
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
@@ -766,6 +824,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                     }
                 }
+                TextButton(onClick = { shelfOpen = !shelfOpen },
+                    modifier = Modifier.fillMaxWidth()) {
+                    Text(if (shelfOpen) "Close saved patients"
+                         else "Recent CRs / Favorites / Follow-up / Research")
+                }
             }
         }
     }
@@ -785,6 +848,109 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 "Login is requested only when the NIMS server session is absent or expired. The CR field remains native and usable even while NIMS pages load in the background.",
                 color = Color(0xFF66788A),
                 fontSize = 13.sp
+            )
+        }
+    }
+
+    @Composable
+    private fun PatientShelfScreen() {
+        var filter by remember { mutableStateOf("Recent") }
+        var editingCr by remember { mutableStateOf("") }
+        var draftNote by remember { mutableStateOf("") }
+        val shown = shelfEntries.filter { row ->
+            filter == "Recent" || filter in row.lists
+        }.sortedByDescending { it.lastUsed }
+        LazyColumn(modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Saved patients", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = { shelfOpen = false }) { Text("Close") }
+                }
+                Text("Encrypted on this phone · no laboratory data saved · unlock required on app return",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    (listOf("Recent") + PatientShelfRules.LISTS).forEach { option ->
+                        FilterChip(selected = filter == option,
+                            onClick = { filter = option },
+                            label = { Text(option, fontSize = 11.sp) })
+                    }
+                }
+            }
+            if (shown.isEmpty()) {
+                item { Text("No patients in this list yet. Enter a CR number or save a patient from the result header.",
+                    color = Color(0xFF66788A), fontSize = 12.sp) }
+            }
+            items(shown, key = { it.cr }) { person ->
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(person.name.ifBlank { "CR " + person.cr },
+                                    fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(person.cr, color = Color(0xFF66788A), fontSize = 11.sp)
+                            }
+                            Button(onClick = { openSavedCr(person.cr) },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)) {
+                                Text("Open", fontSize = 12.sp)
+                            }
+                        }
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            PatientShelfRules.LISTS.forEach { list ->
+                                FilterChip(selected = list in person.lists,
+                                    onClick = { togglePatientList(person.cr, list) },
+                                    label = { Text(list, fontSize = 10.sp) })
+                            }
+                        }
+                        if (person.note.isNotBlank()) {
+                            Text(person.note, fontSize = 11.sp, color = Color(0xFF486581),
+                                maxLines = 3)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                editingCr = person.cr
+                                draftNote = person.note
+                            }) { Text("Edit note", fontSize = 11.sp) }
+                            TextButton(onClick = {
+                                updateShelf { patientShelf.remove(person.cr) }
+                            }) { Text("Remove", fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                }
+            }
+            if (filter == "Recent" && shelfEntries.any { it.lists.isEmpty() }) {
+                item {
+                    TextButton(onClick = {
+                        updateShelf { patientShelf.clearRecent() }
+                    }) { Text("Clear unsaved recent CRs", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        }
+        if (editingCr.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { editingCr = "" },
+                title = { Text("Private patient note") },
+                text = {
+                    OutlinedTextField(value = draftNote,
+                        onValueChange = { draftNote = it.take(180) },
+                        minLines = 2, maxLines = 4,
+                        label = { Text("Follow-up note (optional)") })
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val cr = editingCr
+                        updateShelf { patientShelf.setNote(cr, draftNote) }
+                        editingCr = ""
+                    }) { Text("Save") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { editingCr = "" }) { Text("Cancel") }
+                }
             )
         }
     }
@@ -816,6 +982,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        togglePatientList(current.patient.crNo, "Favorites")
+                    }, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
+                        val favorite = shelfEntries.firstOrNull { it.cr == current.patient.crNo }
+                            ?.lists?.contains("Favorites") == true
+                        Text(if (favorite) "★" else "☆", fontSize = 20.sp)
+                    }
+                    TextButton(onClick = { shelfOpen = true },
+                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
+                        Text("Patients", fontSize = 11.sp)
+                    }
                     TextButton(onClick = { refreshCurrent() },
                         contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) {
                         Text("↻", fontSize = 19.sp)
