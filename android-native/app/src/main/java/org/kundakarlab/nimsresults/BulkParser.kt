@@ -157,6 +157,10 @@ object BulkParser {
             .replace(Regex("""(?i)</(?:td|th)>"""), " ")
             .replace(Regex("""(?i)</?(?:b|strong|i|em|span|p|div|tr|table|ul|ol|li)(?:\s+[^>]*)?>"""), " ")
         return Parser.unescapeEntities(raw, false)
+            // Some HIS output has malformed literal 'lt;1.0' or double-encoded
+            // '&amp;lt;1.0' instead of a proper less-than character.
+            .replace(Regex("(?i)&lt;(?=[=\\d])"), "<")
+            .replace(Regex("(?i)(?<![a-z0-9&])lt;\\s*(?=[=\\d])"), "<")
             .replace('\u00a0', ' ')
             .replace("\r\n", "\n")
             .split("\n")
