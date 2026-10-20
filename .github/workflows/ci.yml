@@ -11,6 +11,7 @@ on:
       - fix/android-v106-dashboard-api-parity
       - fix/android-v107-report-reading-persistence
       - fix/android-v108-provenance-report-fidelity
+      - fix/android-v109-patient-shelf-pdf-tables
   pull_request:
     branches:
       - release/android-native-rebuild-base
