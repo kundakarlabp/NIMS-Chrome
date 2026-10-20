@@ -1,7 +1,11 @@
 package org.kundakarlab.nimsresults
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
@@ -41,6 +45,8 @@ class ReportActivity : Activity() {
     private lateinit var verticalScroll: ScrollView
     private lateinit var horizontalScroll: HorizontalScrollView
     private var zoom = 1f
+    private var sourceUrl = ""
+    private lateinit var readTextButton: Button
 
     private var renderer: PdfRenderer? = null
     private var descriptor: ParcelFileDescriptor? = null
@@ -51,6 +57,7 @@ class ReportActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
+        sourceUrl = url
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) {
             finish()
             return
@@ -145,16 +152,22 @@ class ReportActivity : Activity() {
             text = "Fit"
             setOnClickListener { zoom = 1f; render(pageIndex) }
         }
+        readTextButton = Button(this).apply {
+            text = "Text"
+            isEnabled = false
+            contentDescription = "Read selectable text extracted from source PDF"
+            setOnClickListener { extractText() }
+        }
         saveButton = Button(this).apply {
             text = "Save"
             isEnabled = false
             setOnClickListener { savePdf() }
         }
-        listOf(previous, next, zoomOut, zoomIn, fit).forEach { control ->
+        listOf(previous, next, zoomOut, zoomIn, fit, readTextButton).forEach { control ->
             control.minimumWidth = 0
             control.minWidth = 0
             control.isAllCaps = false
-            control.textSize = 14f
+            control.textSize = 12f
             control.setPadding(0, 0, 0, 0)
             nav.addView(control, LinearLayout.LayoutParams(0, dp(44), 1f))
         }
@@ -184,20 +197,13 @@ class ReportActivity : Activity() {
                     runOnUiThread { if (!isFinishing && !isDestroyed) open(cached) }
                     return@execute
                 }
-                val client = OkHttpClient.Builder()
-                    .connectTimeout(12, TimeUnit.SECONDS)
-                    .readTimeout(45, TimeUnit.SECONDS)
-                    .callTimeout(60, TimeUnit.SECONDS)
-                    .followRedirects(true)
-                    .followSslRedirects(true)
-                    .build()
                 val request = Request.Builder()
                     .url(url)
                     .header("User-Agent", NimsUrls.DESKTOP_UA)
                     .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
                     .build()
 
-                client.newCall(request).execute().use { response ->
+                SHARED_CLIENT.newCall(request).execute().use { response ->
                     response.headers("Set-Cookie").forEach {
                         runCatching { CookieManager.getInstance().setCookie(response.request.url.toString(), it) }
                     }
@@ -293,6 +299,7 @@ class ReportActivity : Activity() {
                 return
             }
             saveButton.isEnabled = true
+            readTextButton.isEnabled = true
             render(0)
         } catch (_: Exception) {
             status.text = "PDF cannot be displayed. Try another source report."
@@ -345,6 +352,44 @@ class ReportActivity : Activity() {
         }
     }
 
+    private fun extractText() {
+        val file = tempFile?.takeIf { it.isFile } ?: return
+        if (file.length() > 6L * 1024 * 1024) {
+            status.text = "PDF too large for on-device text extraction. Use zoom."
+            return
+        }
+        readTextButton.isEnabled = false
+        executor.execute {
+            val extraction = runCatching {
+                PDFBoxResourceLoader.init(applicationContext)
+                PDDocument.load(file).use { doc ->
+                    val pages = minOf(doc.numberOfPages, 8)
+                    val stripper = PDFTextStripper().apply {
+                        startPage = 1
+                        endPage = pages
+                        sortByPosition = true
+                    }
+                    stripper.getText(doc).take(16000).trim()
+                }
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                readTextButton.isEnabled = true
+                val text = extraction.getOrNull().orEmpty()
+                if (text.isBlank()) {
+                    status.text = "No selectable PDF text. Use the original report image."
+                } else {
+                    ReportTitleCache.learn(sourceUrl, text)
+                    AlertDialog.Builder(this)
+                        .setTitle("NIMS source report · extracted text")
+                        .setMessage("Extraction may reorder PDF tables or omit symbols. Verify against the original page.\n\n" + text)
+                        .setPositiveButton("Close", null)
+                        .show()
+                }
+            }
+        }
+    }
+
     private fun savePdf() {
         if (tempFile?.isFile != true) return
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -388,7 +433,8 @@ class ReportActivity : Activity() {
         bitmap?.recycle()
         renderer?.close()
         descriptor?.close()
-        if (tempFile?.name?.startsWith("nims-work-") == true) tempFile?.delete()
+        if (tempFile?.name?.startsWith("nims-report-") == true ||
+            tempFile?.name?.startsWith("nims-work-") == true) tempFile?.delete()
         super.onDestroy()
     }
 
@@ -398,5 +444,14 @@ class ReportActivity : Activity() {
         private const val MAX_PDF_BYTES = 20L * 1024 * 1024
         private const val MAX_CACHE_FILES = 8
         private const val CACHE_TTL_MS = 10L * 60L * 1000L
+        private val SHARED_CLIENT: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(12, TimeUnit.SECONDS)
+                .readTimeout(45, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .build()
+        }
     }
 }
