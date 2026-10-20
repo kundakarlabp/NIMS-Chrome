@@ -411,8 +411,12 @@ class ReportActivity : Activity() {
             status.text = "PDF too large for on-device extraction. Use zoom."
             return
         }
-        if (cachedExtractedText.isNotBlank()) {
-            showSourceText(cachedExtractedText, tableView)
+        if (tableView && cachedGeometryText.isNotBlank()) {
+            showSourceText(cachedGeometryText, true)
+            return
+        }
+        if (!tableView && cachedExtractedText.isNotBlank()) {
+            showSourceText(cachedExtractedText, false)
             return
         }
         readTextButton.isEnabled = false
