@@ -7,10 +7,13 @@ data class VerifiedBloodGrouping(val group: String, val antibodyScreen: String =
 
 object PdfClinicalSummaries {
     private val reportHeader = Regex(
-        """(?i)\b(?:blood\s+group(?:ing)?|grouping\s+and\s+(?:antibody\s+)?screening|abo\s*(?:and|&|/)\s*rh)\b"""
+        """(?i)\b(?:blood\s+group(?:ing)?|grouping\s+and\s+(?:antibody\s+)?screening|abo\s*(?:and|&|/|\s+)\s*rh(?:\s*typing)?|blood\s*bank\s*grouping)\b"""
     )
     private val combinedGroup = Regex(
         """(?im)^\s*(?:final\s+)?(?:result|interpretation|blood\s+group(?:ing)?|abo\s*(?:/|and\s*)\s*rh)\s*[:\-]\s*(AB|A|B|O)\s*(?:rh(?:esus)?(?:\s*\(d\))?\s*[:\-]?\s*)?(POSITIVE|NEGATIVE|POS|NEG)\b"""
+    )
+    private val signedSymbol = Regex(
+        """(?im)^\s*(?:final\s+)?(?:result|blood\s+group(?:ing)?|abo\s*(?:/|and\s*)\s*rh)\s*[:\-]\s*(AB|A|B|O)\s*([+\-])\s*$"""
     )
     private val groupOnly = Regex(
         """(?im)^\s*(?:abo\s*(?:blood\s*)?group|blood\s+group(?:ing)?)\s*[:\-]\s*(AB|A|B|O)\s*$"""
@@ -28,7 +31,12 @@ object PdfClinicalSummaries {
         val combined = combinedGroup.findAll(source).map {
             it.groupValues[1].uppercase(Locale.US) to it.groupValues[2].uppercase(Locale.US)
         }.toList()
-        val groups = if (combined.isNotEmpty()) combined else {
+        val symbols = signedSymbol.findAll(source).map {
+            it.groupValues[1].uppercase(Locale.US) to
+                if (it.groupValues[2] == "+") "POSITIVE" else "NEGATIVE"
+        }.toList()
+        val groups = if (combined.isNotEmpty() || symbols.isNotEmpty())
+            combined + symbols else {
             val abo = groupOnly.findAll(source).map { it.groupValues[1].uppercase(Locale.US) }.distinct().toList()
             val rh = rhesus.findAll(source).map { it.groupValues[1].uppercase(Locale.US) }.distinct().toList()
             if (abo.size == 1 && rh.size == 1) listOf(abo.single() to rh.single()) else emptyList()
