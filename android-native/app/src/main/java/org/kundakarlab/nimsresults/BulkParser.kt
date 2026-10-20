@@ -265,14 +265,15 @@ data class CultureSections(
     val culture: String,
     val susceptible: String,
     val resistant: String,
-    val advice: String
+    val advice: String,
+    val intermediate: String = ""
 )
 
 object CultureNarrative {
     // Only section words in an actual laboratory report act as delimiters.
     // Values are copied verbatim; no organism, MIC, or S/I/R is inferred.
     private val headings = Regex(
-        """(?i)\b(CULTURE\s+REPORT|SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|RESISTANCE\s+REPORT|ADVICE\s*(?::|TO\b)|COMMENTS\s*:|REMARKS\s*:|NOTE\s*:|NOTES\s*:|INTERPRETATION\s*:)"""
+        """(?i)\b(CULTURE\s+REPORT|SENSITIVITY\s+REPORT|SUSCEPTIBILITY\s+REPORT|RESISTANCE\s+REPORT|INTERMEDIATE\s+REPORT|ADVICE\s*(?::|TO\b)|COMMENTS\s*:|REMARKS\s*:|NOTE\s*:|NOTES\s*:|INTERPRETATION\s*:)"""
     )
     fun parse(text: String): CultureSections {
         val matches = headings.findAll(text).toList()
@@ -281,6 +282,7 @@ object CultureNarrative {
         var sensitivity = ""
         var resistance = ""
         var advice = ""
+        var intermediate = ""
         matches.forEachIndexed { i, match ->
             val end = matches.getOrNull(i + 1)?.range?.first ?: text.length
             val value = text.substring(match.range.last + 1, end).trim(' ', ':', '-', '\n')
@@ -290,6 +292,8 @@ object CultureNarrative {
                     listOf(sensitivity, value).filter { it.isNotBlank() }.joinToString("\n")
                 match.value.contains("RESISTANCE", true) -> resistance =
                     listOf(resistance, value).filter { it.isNotBlank() }.joinToString("\n")
+                match.value.contains("INTERMEDIATE", true) -> intermediate =
+                    listOf(intermediate, value).filter { it.isNotBlank() }.joinToString("\n")
                 match.value.startsWith("ADVICE", true) ||
                     match.value.startsWith("COMMENTS", true) ||
                     match.value.startsWith("REMARKS", true) ||
@@ -299,7 +303,7 @@ object CultureNarrative {
                 else -> culture = listOf(culture, value).filter { it.isNotBlank() }.joinToString("\n")
             }
         }
-        return CultureSections(culture, sensitivity, resistance, advice)
+        return CultureSections(culture, sensitivity, resistance, advice, intermediate)
     }
 }
 
