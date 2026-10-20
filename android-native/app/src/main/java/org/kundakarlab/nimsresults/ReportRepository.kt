@@ -394,9 +394,16 @@ object OpaqueReportTitles {
 /** In-memory only, intentionally not persisted as PHI-bearing metadata. */
 object ReportTitleCache {
     private val recognized = ConcurrentHashMap<String, String>()
+    private val extractedByUrl = ConcurrentHashMap<String, String>()
     fun learn(url: String, extracted: String) {
         OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
+        // Volatile, on-device only; no persistent source text or external upload.
+        extractedByUrl[url] = extracted.take(12000)
     }
     fun get(url: String): String? = recognized[url]
-    fun clear() = recognized.clear()
+    fun extracted(url: String): String? = extractedByUrl[url]
+    fun clear() {
+        recognized.clear()
+        extractedByUrl.clear()
+    }
 }
