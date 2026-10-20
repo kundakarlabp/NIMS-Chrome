@@ -82,4 +82,12 @@ class ClinicalReportRendererTest {
         assertTrue(ClinicalReportRenderer.isMicrobiologyInvestigation("GeneXpert"))
         assertFalse(ClinicalReportRenderer.isMicrobiologyInvestigation("CRP AGGLUTINATION"))
     }
+    @Test fun sameDayRepeatObservationsArePreserved() {
+        val a = row("CBC", "Hemoglobin", "10.3", 10.3).copy(labNumber = "L001")
+        val b = row("CBC", "Hemoglobin", "11.1", 11.1).copy(labNumber = "L002")
+        assertEquals(2, ClinicalReportRenderer.preferredRows(listOf(a,b)).size)
+        val identicalValuesFromDifferentSamples = listOf(a, a.copy(labNumber = "L003"))
+        assertEquals(2, ClinicalReportRenderer.preferredRows(identicalValuesFromDifferentSamples).size)
+    }
+
 }
