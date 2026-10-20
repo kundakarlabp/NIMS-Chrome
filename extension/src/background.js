@@ -1344,8 +1344,10 @@ function mergeReportInventories(...lists) {
         continue;
       }
       const previous = merged[position];
-      if (previous.url && report.url && previous.url !== report.url) {
-        // A conflicting PDF URL must never be silently reassigned.
+      if ((previous.title && report.title && previous.title !== report.title)
+        || (previous.date && report.date && previous.date !== report.date)
+        || (previous.url && report.url && previous.url !== report.url)) {
+        // Reused lab identifiers, conflicting metadata or PDFs cannot be silently merged.
         merged.push({ ...report });
         continue;
       }
@@ -1567,9 +1569,12 @@ function bundleFromParsedReports(crNo, extracted, state) {
     const id = String(parsed.report_id || "").trim();
     const exact = id ? sourcesById.get(id) : null;
     if (exact) {
-      const urls = [...new Set(exact.map(source => source.url).filter(Boolean))];
+      const matching = exact.filter(source => source.title === parsed.report_name && source.date === parsed.date_sent);
+      const urls = [...new Set(matching.map(source => source.url).filter(Boolean))];
       return urls.length === 1 ? urls[0] : "";
     }
+    // A known but unmatched accession cannot be linked by title/date guesswork.
+    if (id && !/^(?:api-report-|report-)\d+$/i.test(id)) return "";
     const key = [parsed.report_name || "", parsed.date_sent || ""].join("|");
     const matches = sourcesByNameDate.get(key) || [];
     return matches.length === 1 ? matches[0].url || "" : "";
