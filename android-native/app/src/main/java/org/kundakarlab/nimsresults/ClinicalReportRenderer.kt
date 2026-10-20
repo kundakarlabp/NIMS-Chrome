@@ -31,7 +31,7 @@ object ClinicalReportRenderer {
         if (Regex("""(?i)^\s*(?:ct\b|hrct\b|mri\b|pet[\s-]*ct\b|usg\b|ultrasound\b|radiology\b|x[\s-]*ray\b|histopathology\b|cytology\b)""")
                 .containsMatchIn(test)) return false
         return Regex(
-            """(?i)\b(?:culture|sensitivity|susceptibility|antibiogram|gram(?:s)?[\s-]*stain(?:ing)?|gram[\s-]*smear|genexpert|gene\s*xpert|cbnaat|afb[\s-]*(?:smear|stain)|acid[\s-]*fast[\s-]*(?:bacilli|stain)|mycobacterial[\s-]*pcr|calcofluor|koh[\s-]*(?:mount|preparation|prep)|fungal[\s-]*(?:smear|stain)|biofire|filmarray|bacteriology|meningitis[\s/-]*encephalitis[\s-]*panel|respiratory[\s-]*pathogen[\s-]*panel)\b"""
+            """(?i)\b(?:culture|sensitivity|susceptibility|antibiogram|gram(?:s)?[\s-]*stain(?:ing)?|gram[\s-]*smear|genexpert|gene\s*xpert|cbnaat|afb[\s-]*(?:smear|stain)|acid[\s-]*fast[\s-]*(?:bacilli|stain)|mycobacterial[\s-]*pcr|calcofluor|fluorescen(?:t|ce)[\s-]*stain(?:ing)?|auramine|rhodamine|tb[\s-]*fluorescen(?:t|ce)|koh[\s-]*(?:mount|preparation|prep)|fungal[\s-]*(?:smear|stain)|biofire|filmarray|bacteriology|meningitis[\s/-]*encephalitis[\s-]*panel|respiratory[\s-]*pathogen[\s-]*panel)\b"""
         ).containsMatchIn(test)
     }
 
@@ -67,7 +67,15 @@ object ClinicalReportRenderer {
         value.length >= 8 || Regex("""(?i)\b(?:detected|not detected|positive|negative|reactive|nonreactive|nil)\b""")
             .containsMatchIn(value)
 
+    fun isUrineRoutine(test: String): Boolean =
+        Regex("""(?i)(?:complete\s+urine\s+examination|\bcue\b|urine\s+(?:routine|analysis|examination)(?:\s*\(|\b))""")
+            .containsMatchIn(test)
+
     fun layout(test: String, rows: List<LabResult>): ClinicalLayout {
+        // Urine microscopy has valid qualitative entries and interval values
+        // (e.g. 10-12 /HPF). Numeric-only heuristics must not force this
+        // investigation into dated narrative cards.
+        if (isUrineRoutine(test)) return ClinicalLayout.SERIES
         if (narrativeTest.containsMatchIn(test)) return ClinicalLayout.NARRATIVE
         if (Regex("""(?i)biofire|filmarray|ana\s*(?:profile|blot|panel)|blood\s+group|antibody\s+screen""")
                 .containsMatchIn(test)) return ClinicalLayout.SOURCE_CODED

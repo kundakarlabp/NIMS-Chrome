@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var root: FrameLayout
@@ -96,6 +99,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var reportCategoryPrefill by mutableStateOf("All")
     private var reportTitleEpoch by mutableStateOf(0)
     private var microFilter by mutableStateOf("All")
     private var crInput by mutableStateOf("")
@@ -581,6 +585,27 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         Toast.makeText(this, "Safe diagnostics copied", Toast.LENGTH_SHORT).show()
     }
 
+    private fun browseSourceReports(test: String) {
+        // NIMS often uses accession or generic department titles in its index.
+        // Do not apply an exact-name search that hides the actual source PDF.
+        reportQueryPrefill = ""
+        reportCategoryPrefill = when {
+            Regex("""(?i)blood\s*group|antibody\s*screen|transfusion|cross\s*match""")
+                .containsMatchIn(test) -> "Blood bank"
+            ClinicalReportRenderer.isMicrobiologyInvestigation(test) -> "Microbiology"
+            else -> "All"
+        }
+        selectedTab = ResultsTab.REPORTS
+    }
+
+    private fun copyReportDiagnostics(test: String, rows: List<LabResult>,
+                                      reports: List<ReportRef>, cr: String) {
+        val report = ReportDiagnostics.describe(test, rows, reports, cr)
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS report diagnostics", report))
+        Toast.makeText(this, "Redacted report diagnostics copied", Toast.LENGTH_SHORT).show()
+    }
+
     private fun openReport(url: String) {
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) return
         startActivity(Intent(this, ReportActivity::class.java)
@@ -617,6 +642,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         )
         val current = bundle
         var toolsOpen by remember(current?.patient?.crNo) { mutableStateOf(false) }
+        val scrollByTab = remember(current?.patient?.crNo) {
+            ResultsTab.entries.associateWith { LazyListState() }
+        }
+        val scrollScope = rememberCoroutineScope()
         MaterialTheme(colorScheme = colors) {
             Scaffold(
                 topBar = { AppHeader() },
@@ -671,13 +700,35 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
-                                ResultsTab.OVERVIEW -> OverviewScreen(current)
-                                ResultsTab.ID -> IdFocusScreen(current)
-                                ResultsTab.LABS -> LabsScreen(current)
-                                ResultsTab.MICROBIOLOGY -> MicroScreen(current)
-                                ResultsTab.REPORTS -> ReportsScreen(current)
-                                ResultsTab.TRENDS -> TrendsScreen(current)
-                                ResultsTab.ALL -> AllResultsScreen(current)
+                                ResultsTab.OVERVIEW -> OverviewScreen(current, scrollByTab.getValue(ResultsTab.OVERVIEW))
+                                ResultsTab.ID -> IdFocusScreen(current, scrollByTab.getValue(ResultsTab.ID))
+                                ResultsTab.LABS -> LabsScreen(current, scrollByTab.getValue(ResultsTab.LABS))
+                                ResultsTab.MICROBIOLOGY -> MicroScreen(current, scrollByTab.getValue(ResultsTab.MICROBIOLOGY))
+                                ResultsTab.REPORTS -> ReportsScreen(current, scrollByTab.getValue(ResultsTab.REPORTS))
+                                ResultsTab.TRENDS -> TrendsScreen(current, scrollByTab.getValue(ResultsTab.TRENDS))
+                                ResultsTab.ALL -> AllResultsScreen(current, scrollByTab.getValue(ResultsTab.ALL))
+                            }
+                            // Works across all long result tabs, without changing
+                            // the selected clinical report or switching tabs.
+                            val activeScroll = scrollByTab.getValue(selectedTab)
+                            if (activeScroll.layoutInfo.totalItemsCount > 8) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                        .padding(end = 7.dp, bottom = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { scrollScope.launch { activeScroll.animateScrollToItem(0) } },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    ) { Text("↑ Top", fontSize = 11.sp) }
+                                    OutlinedButton(
+                                        onClick = { scrollScope.launch {
+                                            activeScroll.animateScrollToItem(
+                                                (activeScroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                                        } },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    ) { Text("↓ End", fontSize = 11.sp) }
+                                }
                             }
                         }
                     }
@@ -1051,7 +1102,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
 
     @Composable
-    private fun OverviewScreen(current: ClinicalBundle) {
+    private fun OverviewScreen(current: ClinicalBundle, scroll: LazyListState) {
         val eligible = remember(current.results) {
             current.results.filter { ClinicalResultRules.isTrendEligible(it) }
         }
@@ -1095,7 +1146,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }.sortedByDescending { BulkParser.dateKey(it.date) }
                 .distinctBy { normalizeKey(it.parameter) }.take(6)
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -1363,8 +1414,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                     } else if (inventory.isNotEmpty()) {
                         TextButton(onClick = {
-                            reportQueryPrefill = test
-                            selectedTab = ResultsTab.REPORTS
+                            browseSourceReports(test)
                         }) { Text("Browse source reports · no verified PDF match") }
                     }
                     if (showSources) {
@@ -1410,6 +1460,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else "Show all " + byDate.size + " dates")
                     }
                 }
+                TextButton(onClick = {
+                    copyReportDiagnostics(test, rows, inventory, patientCr)
+                }) { Text("Copy report diagnostics (redacted)", fontSize = 11.sp) }
                 Text("Original report identity must match the source accession.",
                     color = Color(0xFF66788A), fontSize = 10.sp)
             }
@@ -1417,7 +1470,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun IdFocusScreen(current: ClinicalBundle) {
+    private fun IdFocusScreen(current: ClinicalBundle, scroll: LazyListState) {
         // The ID view is a filtered longitudinal index, not an AI diagnosis.
         val markers = listOf(
             "CRP / hsCRP" to setOf("crp", "creactiveprotein", "hscrp",
@@ -1451,7 +1504,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ReportTitleCache.get(report.url).orEmpty())
             }
         }
-        LazyColumn(modifier = Modifier.fillMaxSize(),
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
@@ -1527,7 +1580,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun LabsScreen(current: ClinicalBundle) {
+    private fun LabsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
         var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
@@ -1578,7 +1631,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             filtered.groupBy { it.test.ifBlank { "Other investigations" } }
                 .toList().sortedBy { it.first }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -1663,8 +1716,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text("Panel codes are uninterpreted without a validated target dictionary. Verify the original PDF.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = {
-                                reportQueryPrefill = test
-                                selectedTab = ResultsTab.REPORTS
+                                browseSourceReports(test)
                             }) { Text("Find source panel PDF") }
                         }
                         if (Regex("(?i)blood grouping|antibody screening").containsMatchIn(test)) {
@@ -1768,7 +1820,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun MicroScreen(current: ClinicalBundle) {
+    private fun MicroScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var showSourceInventory by remember(current.patient.crNo) { mutableStateOf(false) }
         // Source inventory is intentionally independent of structured rows:
@@ -1800,7 +1852,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ClinicalPresentation.sentDate(values).ifBlank { key.second }))
                 }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1913,6 +1965,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 maxLines = if (expanded) Int.MAX_VALUE else 6)
                             Spacer(Modifier.height(7.dp))
                         }
+                        if (parts.intermediate.isNotBlank()) {
+                            Text("Source intermediate section", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold, color = Color(0xFF805400))
+                            Text(parts.intermediate, fontSize = 13.sp,
+                                maxLines = if (expanded) Int.MAX_VALUE else 6)
+                            Spacer(Modifier.height(7.dp))
+                        }
                         if (parts.resistant.isNotBlank()) {
                             Text("Reported resistance", fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold, color = Color(0xFF8B3131))
@@ -1972,8 +2031,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                         } else if (current.reports.isNotEmpty()) {
                             TextButton(onClick = {
-                                reportQueryPrefill = test
-                                selectedTab = ResultsTab.REPORTS
+                                browseSourceReports(test)
                             }) { Text("Browse source reports · no verified PDF match") }
                         }
                         if (chooseSource) {
@@ -2018,6 +2076,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             )
                         }
+                        TextButton(onClick = {
+                            copyReportDiagnostics(test, rows, current.reports,
+                                current.patient.crNo)
+                        }) { Text("Copy report diagnostics", fontSize = 11.sp) }
                         if (isCulture && clinical.none { row ->
                                 Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
                                     .containsMatchIn(row.parameter + " " + row.valueText)
@@ -2071,41 +2133,46 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             .matches(parameter.trim().trimEnd(':').trim())
 
     @Composable
-    private fun ReportsScreen(current: ClinicalBundle) {
+    private fun ReportsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
-        var category by remember(current.patient.crNo) { mutableStateOf("All") }
+        var category by remember(current.patient.crNo, reportCategoryPrefill) { mutableStateOf(reportCategoryPrefill) }
         val revision = reportTitleEpoch
         val filtered = remember(current.reports, query, category, revision) {
             current.reports.filter { report ->
                 val searchable = (report.title + " " + ReportTitleCache.get(report.url).orEmpty() +
                     " " + report.date + " " + report.sentDate + " " +
                     report.reportedDate + " " + report.department + " " + report.labNumber)
+                val label = report.title + " " + report.department + " " +
+                    ReportTitleCache.get(report.url).orEmpty()
                 val radiology = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
-                    .containsMatchIn(report.title + " " + report.department)
-                val micro = Regex("""(?i)microbiology|culture|bacteriology|serology|genexpert|biofire""")
-                    .containsMatchIn(report.title + " " + report.department)
+                    .containsMatchIn(label)
+                val micro = Regex("""(?i)microbiology|culture|bacteriology|serology|genexpert|biofire|gram\s*stain|afb|tb\s*fluorescen""")
+                    .containsMatchIn(label)
+                val bloodBank = Regex("""(?i)blood\s*group|antibody\s*screen|transfusion|immunohaematology|immunohematology|cross\s*match|blood\s*bank|\bbgt\b""")
+                    .containsMatchIn(label)
                 (category == "All" ||
                     category == "Radiology" && radiology ||
                     category == "Microbiology" && micro ||
-                    category == "Other" && !radiology && !micro) &&
+                    category == "Blood bank" && bloodBank ||
+                    category == "Other" && !radiology && !micro && !bloodBank) &&
                     (query.isBlank() || searchable.contains(query, true))
             }
         }
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
                 Text("Source reports", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text(filtered.size.toString() + " reports · each source is linked to its original NIMS report",
+                Text(filtered.size.toString() + " report-index entries · some require source verification",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 OutlinedTextField(value = query, onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
                     placeholder = { Text("Find investigation, accession or date") })
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("All", "Radiology", "Microbiology", "Other").forEach { item ->
+                    listOf("All", "Microbiology", "Blood bank", "Radiology", "Other").forEach { item ->
                         FilterChip(selected = category == item,
                             onClick = { category = item },
                             label = { Text(item, fontSize = 11.sp) })
@@ -2226,7 +2293,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     @Composable
-    private fun TrendsScreen(current: ClinicalBundle) {
+    private fun TrendsScreen(current: ClinicalBundle, scroll: LazyListState) {
         val series = remember(current.results) {
             current.results.filter { ClinicalResultRules.isTrendEligible(it) }
                 .groupBy { ClinicalResultRules.parameterKey(it) }
@@ -2254,7 +2321,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val rows = selected?.second?.filter {
             ClinicalResultRules.inWindow(it.date, latest, period)
         }.orEmpty()
-        LazyColumn(
+        LazyColumn(state = scroll, 
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
@@ -2348,7 +2415,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
 
     @Composable
-    private fun AllResultsScreen(current: ClinicalBundle) {
+    private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2383,7 +2450,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             filtered.groupBy { it.date }.toList()
                 .sortedByDescending { BulkParser.dateKey(it.first) }
         }
-        LazyColumn(modifier = Modifier.fillMaxSize(),
+        var expandedTest by remember(current.patient.crNo) { mutableStateOf("") }
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
@@ -2425,44 +2493,137 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     color = Color(0xFF66788A)) }
             }
             items(byDate, key = { it.first }) { (date, values) ->
-                var expanded by remember(current.patient.crNo, date) { mutableStateOf(false) }
-                val shown = if (expanded) values else values.take(8)
+                var showAllDate by remember(current.patient.crNo, date) { mutableStateOf(false) }
+                val studies = remember(values) {
+                    // Preserve separate source accessions where available.
+                    // An absent accession is never presented as one proven specimen.
+                    values.groupBy { it.test to it.labNumber }.toList()
+                        .sortedBy { it.first.first }
+                }
+                val visibleStudies = if (showAllDate) studies else studies.take(8)
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                        Text(date + " · " + values.size + " values",
+                        Text(date + " · " + studies.size + " investigations · " +
+                            values.size + " fields",
                             fontWeight = FontWeight.Bold, fontSize = 13.sp,
                             color = Color(0xFF102A43))
-                        shown.forEach { value ->
-                            Row(modifier = Modifier.fillMaxWidth()
-                                .clickable {
-                                    if (isMicro(value)) {
-                                        microFilter = "All"
-                                        selectedTab = ResultsTab.MICROBIOLOGY
-                                    } else {
-                                        selectedTab = ResultsTab.LABS
-                                    }
-                                }.padding(vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(value.parameter.ifBlank { value.test },
-                                        fontSize = 12.sp, maxLines = 1,
-                                        fontWeight = FontWeight.SemiBold)
-                                    Text(value.test, fontSize = 10.sp,
-                                        color = Color(0xFF66788A), maxLines = 1)
+                        visibleStudies.forEach { (study, visibleRows) ->
+                            val (test, accession) = study
+                            val key = date + "|" + test + "|" + accession
+                            val expanded = expandedTest == key
+                            val sourceRows = remember(current.results, study, date) {
+                                current.results.filter {
+                                    it.date == date && it.test == test && it.labNumber == accession
                                 }
-                                Spacer(Modifier.width(6.dp))
-                                Text(value.valueText.take(40) +
-                                    if (value.valueText.length > 40) "…" else "",
-                                    fontSize = 12.sp,
-                                    maxLines = 2,
-                                    color = abnormalColor(value.abnormal),
-                                    modifier = Modifier.weight(0.8f))
+                            }
+                            HorizontalDivider()
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    expandedTest = if (expanded) "" else key
+                                }.padding(vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(test.ifBlank { "Unlabelled source investigation" },
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF102A43))
+                                    Text(visibleRows.size.toString() + " fields" +
+                                        if (accession.isNotBlank()) " · accession supplied"
+                                        else " · accession unconfirmed",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                }
+                                Text(if (expanded) "Collapse ↑" else "Expand ↓",
+                                    fontSize = 11.sp, color = Color(0xFF0B5CAB))
+                            }
+                            if (!expanded && visibleRows.isNotEmpty()) {
+                                Text(
+                                    visibleRows.first().valueText
+                                        .replace(Regex("[\\r\\n]+"), " ").take(115) +
+                                        if (visibleRows.first().valueText.length > 115) "…" else "",
+                                    fontSize = 11.sp, maxLines = 2,
+                                    color = Color(0xFF486581))
+                            }
+                            if (expanded) {
+                                val sourceLink = ReportLinkResolver.candidates(
+                                    sourceRows, current.reports, current.patient.crNo)
+                                val interpreted = ClinicalReportRenderer.preferredRows(sourceRows)
+                                if (sourceRows.size > interpreted.size) {
+                                    Text(sourceRows.size.toString() + " source fields; " +
+                                        (sourceRows.size - interpreted.size) +
+                                        " technical/unmapped fields retained in Raw",
+                                        fontSize = 10.sp, color = Color(0xFF875B22))
+                                }
+                                if (accession.isNotBlank()) {
+                                    Text("NIMS lab/study no.: " + accession, fontSize = 11.sp,
+                                        color = Color(0xFF486581))
+                                } else {
+                                    Text("Accession not supplied; same-day entries may include " +
+                                        "more than one specimen.", fontSize = 10.sp,
+                                        color = Color(0xFF875B22))
+                                }
+                                sourceRows.firstOrNull { it.orderDate.isNotBlank() }?.let {
+                                    Text("Ordered: " + it.orderDate, fontSize = 10.sp)
+                                }
+                                sourceRows.firstOrNull { it.reportedDate.isNotBlank() }?.let {
+                                    Text("Reported: " + it.reportedDate, fontSize = 10.sp)
+                                }
+                                if (ClinicalPresentation.isCulture(test)) {
+                                    val narrative = interpreted.joinToString("\n") { it.valueText }
+                                    val parts = CultureNarrative.parse(narrative)
+                                    Text("Source culture narrative", fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold)
+                                    Text(narrative.ifBlank { "No source narrative supplied" },
+                                        fontSize = 12.sp, color = Color(0xFF243B53))
+                                    if (parts.susceptible.isNotBlank() ||
+                                        parts.resistant.isNotBlank() ||
+                                        parts.intermediate.isNotBlank()) {
+                                        Text("AST section headings are transcribed from NIMS; " +
+                                            "verify S/I/R and MICs against signed source.",
+                                            fontSize = 10.sp, color = Color(0xFF875B22))
+                                    }
+                                } else {
+                                    interpreted.forEach { row ->
+                                        Text(row.parameter.ifBlank { "Result" } +
+                                            if (row.unit.isNotBlank()) " (" + row.unit + ")" else "",
+                                            fontWeight = FontWeight.SemiBold, fontSize = 11.sp,
+                                            color = Color(0xFF486581))
+                                        Text(row.valueText, fontSize = 12.sp,
+                                            color = abnormalColor(row.abnormal))
+                                        if (row.refRange.isNotBlank()) {
+                                            Text("Reference: " + row.refRange,
+                                                fontSize = 10.sp, color = Color(0xFF66788A))
+                                        }
+                                    }
+                                    if (interpreted.isEmpty()) Text(
+                                        "Only opaque/placeholder fields are available; " +
+                                            "verify the signed source PDF.", fontSize = 11.sp,
+                                        color = Color(0xFF875B22))
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    if (sourceLink.verified != null) {
+                                        TextButton(onClick = {
+                                            openReport(sourceLink.verified.url)
+                                        }) { Text("Open matched PDF", fontSize = 11.sp) }
+                                    } else {
+                                        TextButton(onClick = {
+                                            browseSourceReports(test)
+                                        }) { Text("Browse source PDFs", fontSize = 11.sp) }
+                                    }
+                                    TextButton(onClick = {
+                                        copyReportDiagnostics(test, sourceRows, current.reports,
+                                            current.patient.crNo)
+                                    }) { Text("Copy diagnostics", fontSize = 11.sp) }
+                                }
+                                TextButton(onClick = { expandedTest = "" }) {
+                                    Text("Collapse report ↑", fontSize = 11.sp)
+                                }
                             }
                         }
-                        if (values.size > 8) {
-                            TextButton(onClick = { expanded = !expanded }) {
-                                Text(if (expanded) "Collapse date" else "View all " +
-                                    values.size + " values for " + date)
+                        if (studies.size > 8) {
+                            TextButton(onClick = { showAllDate = !showAllDate }) {
+                                Text(if (showAllDate) "Show first 8 investigations"
+                                    else "Show all " + studies.size + " investigations")
                             }
                         }
                     }
