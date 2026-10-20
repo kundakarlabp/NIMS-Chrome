@@ -50,6 +50,7 @@ class ReportActivity : Activity() {
     private lateinit var readTextButton: Button
     private lateinit var tableButton: Button
     private var cachedExtractedText = ""
+    private var cachedGeometryText = ""
     private var renderingGeneration = 0
     @Volatile private var closing = false
 
