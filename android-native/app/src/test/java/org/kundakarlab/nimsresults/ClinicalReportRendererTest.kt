@@ -38,6 +38,8 @@ class ClinicalReportRendererTest {
         assertTrue(ClinicalReportRenderer.isUninterpretedCode(
             row("COMPLETE URINE EXAMINATION", "Negative(Result)", "1", 1.0)))
         assertTrue(ClinicalReportRenderer.isUninterpretedCode(
+            row("COMPLETE URINE EXAMINATION", "/HPF(Result)", "1-2")))
+        assertTrue(ClinicalReportRenderer.isUninterpretedCode(
             row("Biofire Joint Infection Panel", "com4", "3", 3.0)))
         assertFalse(ClinicalReportRenderer.isUninterpretedCode(
             row("Dengue IgM ELFA", "Result", "Negative - IV: 0.23 (IV <1.00 - Negative)")))
