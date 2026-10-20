@@ -309,6 +309,40 @@ class ReportActivity : Activity() {
     // already-rendered Bitmap; zoom/navigation no longer blocks gestures.
     private fun openOnWorker(file: File) {
         try {
+            // Parse the report's own CR and headings before displaying it.
+            // Failure to extract text does not prevent a user visually
+            // inspecting an image-based source PDF.
+            if (file.length() <= 8L * 1024 * 1024) {
+                val sourceText = runCatching {
+                    PDFBoxResourceLoader.init(applicationContext)
+                    PDDocument.load(file).use { doc ->
+                        PDFTextStripper().apply {
+                            startPage = 1
+                            endPage = minOf(doc.numberOfPages, 2)
+                            sortByPosition = true
+                        }.getText(doc).take(12000)
+                    }
+                }.getOrNull().orEmpty()
+                val header = PdfDocumentHeaders.parse(sourceText)
+                if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
+                    header.crNo != expectedCr) {
+                    runOnUiThread {
+                        status.text = "Wrong patient CR in PDF — blocked"
+                        progress.visibility = View.GONE
+                        AlertDialog.Builder(this)
+                            .setTitle("Report identity mismatch")
+                            .setMessage("This PDF does not belong to the selected CR. Do not use this report.")
+                            .setPositiveButton("Close") { _, _ -> finish() }
+                            .show()
+                    }
+                    return
+                }
+                if (sourceText.isNotBlank() &&
+                    (expectedCr.isBlank() || expectedCr == header.crNo)) {
+                    cachedExtractedText = sourceText
+                    ReportTitleCache.learn(sourceUrl, sourceText, expectedCr)
+                }
+            }
             descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             renderer = PdfRenderer(descriptor!!)
             if ((renderer?.pageCount ?: 0) == 0) {

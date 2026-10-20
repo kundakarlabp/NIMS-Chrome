@@ -180,7 +180,8 @@ class ReportRepository(
                 url = previous.url.ifBlank { report.url },
                 sentDate = previous.sentDate.ifBlank { report.sentDate },
                 reportedDate = previous.reportedDate.ifBlank { report.reportedDate },
-                labNumber = previous.labNumber.ifBlank { report.labNumber }
+                labNumber = previous.labNumber.ifBlank { report.labNumber },
+                orderDate = previous.orderDate.ifBlank { report.orderDate }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -196,7 +197,8 @@ object ReportPayloadParser {
     private val crKeys = listOf("crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no")
     private val titleKeys = listOf("reportName","report_name","investigationName","investigation_name","testName","test_name","investigation","test","name")
     private val dateKeys = listOf("dateSent","date_sent","sampleDate","sample_date","requisitionDate","requisition_date","reportDate","report_date","date")
-    private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent","requisitionDate","requisition_date")
+    private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent")
+    private val orderKeys = listOf("requisitionDate","requisition_date","orderDate","order_date","orderedDate","ordered_date")
     private val reportedKeys = listOf("reportingDate","reporting_date","reportedDate","reported_date","reportDate","report_date","validationDate","validation_date")
     private val labKeys = listOf("labStudyNo","labStudyNumber","labNo","lab_no","labNumber","lab_number","accessionNo","accession_no")
     private val departmentKeys = listOf("department","dept","lab","laboratory","section")
@@ -229,7 +231,9 @@ object ReportPayloadParser {
             val title = first(row, titleKeys).ifBlank { "Investigation report" }
             val sentDate = first(row, sentKeys)
             val reportedDate = first(row, reportedKeys)
-            val date = sentDate.ifBlank { first(row, dateKeys) }
+            val orderedDate = first(row, orderKeys)
+            // Keep the source-listed index date in its original meaning.
+            val date = first(row, dateKeys)
             val labNumber = first(row, labKeys)
             val department = first(row, departmentKeys)
             val direct = safeReportUrl(first(row, urlKeys))
@@ -238,7 +242,7 @@ object ReportPayloadParser {
             val url = direct.ifBlank { reportUrlForToken(token) }
             val id = first(row, idKeys).ifBlank { token }.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             if (title.isBlank() && url.isBlank()) null else ReportRef(
-                id, title, date, department, url, sentDate, reportedDate, labNumber
+                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate
             )
         }
     }
@@ -265,6 +269,8 @@ object ReportPayloadParser {
             val id = token.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             // The HTML index may contain only one unlabeled date.
             // Do not mislabel it as specimen collection or report validation.
+            // Ignore decorative "View Report" rows without a usable source PDF.
+            if (url.isBlank()) return@forEachIndexed
             reports += ReportRef(id, title, date, department, url,
                 labNumber = cells.firstOrNull { OpaqueReportTitles.isCode(it) }.orEmpty()
             )
@@ -360,7 +366,7 @@ object ReportPayloadParser {
                 !Regex("""(?i)^(clinical|microbiology|biochemistry|laboratory|pathology)\s*(?:lab)?$""").matches(it)
             }
             ?: candidates.firstOrNull { OpaqueReportTitles.isCode(it) }
-            ?: rowText.take(100)
+            ?: "Investigation title unavailable"
     }
 
     private fun compact(value: String) = value.replace(Regex("\\s+"), " ").trim()
@@ -385,6 +391,9 @@ object OpaqueReportTitles {
             """(?i)\b(?:aerobic|blood|fungal|urine)\s+culture\b""" to "Microbiology culture report",
             """(?i)\bc[- ]?reactive\s+protein\b""" to "C-reactive protein",
             """(?i)\b(?:complete\s+blood\s+count|cbc\s*[\(+])\b""" to "Complete blood count",
+            """(?i)\bgrouping\s+and\s+(?:antibody\s+)?screening\b|\bblood\s+grouping\s+and\s+antibody\s+screening\b""" to "Blood grouping and antibody screening",
+            """(?i)\b(?:biofire|filmarray)\s+(?:joint\s+infection|meningitis|respiratory|gastrointestinal)\s+panel\b""" to "BioFire molecular panel",
+            """(?i)\bf\s*-?\s*18\s+fdg\b.*?\bpet\s*-?\s*ct\b""" to "F-18 FDG PET-CT",
             """(?im)^\s*esr\s*$""" to "Erythrocyte sedimentation rate"
         )
         return patterns.firstOrNull { Regex(it.first).containsMatchIn(text) }?.second
@@ -396,7 +405,8 @@ data class PdfDocumentHeader(
     val crNo: String = "",
     val labNumber: String = "",
     val collectionDate: String = "",
-    val reportedDate: String = ""
+    val reportedDate: String = "",
+    val orderDate: String = ""
 )
 
 object PdfDocumentHeaders {
@@ -408,7 +418,8 @@ object PdfDocumentHeaders {
             crNo = field("""(?i)\bCR\s*No\.?\s*:\s*(\d{15})\b"""),
             labNumber = field("""(?i)\bLab/Study\s*No\.?\s*:\s*([A-Za-z0-9/_-]+)"""),
             collectionDate = field("(?i)\\bColl/Study\\s*Date\\s*:\\s*" + date),
-            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date)
+            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date),
+            orderDate = field("(?i)\\bRequisition\\s*Date\\s*:\\s*" + date)
         )
     }
 }
@@ -420,8 +431,7 @@ object ReportTitleCache {
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean {
         val header = PdfDocumentHeaders.parse(extracted)
         // Wrong-patient source PDFs must never enrich the clinical dashboard.
-        if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
-            header.crNo != expectedCr) return false
+        if (expectedCr.isNotBlank() && header.crNo != expectedCr) return false
         OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
         // Volatile, on-device only; no persistent source text or external upload.
         extractedByUrl[url] = extracted.take(12000)

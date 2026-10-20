@@ -13,6 +13,7 @@ on:
       - fix/android-v108-provenance-report-fidelity
       - fix/android-v109-patient-shelf-pdf-tables
       - fix/android-v110-clinical-report-renderers
+      - fix/android-v111-source-provenance-routing
   pull_request:
     branches:
       - release/android-native-rebuild-base

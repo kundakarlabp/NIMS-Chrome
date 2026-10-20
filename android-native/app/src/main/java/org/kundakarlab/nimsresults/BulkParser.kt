@@ -50,8 +50,10 @@ object BulkParser {
                 // itself is not necessarily the actual collection date.
                 val sent = metadata(row, group,
                     "collectionDate", "collection_date", "sampleCollectionDate",
-                    "sampleDate", "sample_date", "dateSent", "date_sent",
-                    "requisitionDate", "requisition_date")
+                    "sampleDate", "sample_date", "dateSent", "date_sent")
+                val ordered = metadata(row, group,
+                    "requisitionDate", "requisition_date", "orderDate", "order_date",
+                    "orderedDate", "ordered_date")
                 val reported = metadata(row, group,
                     "reportingDate", "reporting_date", "reportedDate", "reported_date",
                     "validationDate", "validation_date")
@@ -83,7 +85,8 @@ object BulkParser {
                         sourceKey = sourceKey(test, parameter, date, unit, valueText),
                         sentDate = sent,
                         reportedDate = reported,
-                        labNumber = lab
+                        labNumber = lab,
+                        orderDate = ordered
                     )
                 }
             }
