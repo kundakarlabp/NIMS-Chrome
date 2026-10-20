@@ -64,7 +64,7 @@ object BulkParser {
                 val keys = values.keys()
                 while (keys.hasNext()) {
                     val rawDate = keys.next()
-                    val valueText = cleanValue(values.opt(rawDate)?.toString())
+                    val valueText = cleanValue(ResultTableFormats.format(values.opt(rawDate)?.toString().orEmpty()))
                     if (valueText.isBlank()) continue
                     val date = isoDate(rawDate)
                     val abnormal = clean(flags?.opt(rawDate)?.toString())
