@@ -1233,7 +1233,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             rows.joinToString(" ") { it.parameter + " " + it.valueText })
                             .contains(query, ignoreCase = true))
                 }
-                .sortedByDescending { BulkParser.dateKey(it.first.second) }
+                .sortedByDescending { (key, values) ->
+                    BulkParser.dateKey(BulkParser.isoDate(
+                        ClinicalPresentation.sentDate(values).ifBlank { key.second }))
+                }
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -1271,18 +1274,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     })
                 var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showMetadata by remember(current.patient.crNo, key) { mutableStateOf(false) }
-                val exact = current.reports.firstOrNull { report ->
-                    BulkParser.isoDate(report.date) == date &&
-                        normalizeKey(report.title) == normalizeKey(test) &&
-                        report.url.isNotBlank()
-                }
+                var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
+                val isCulture = ClinicalPresentation.isCulture(test)
+                val exact = ClinicalPresentation.reportIdentity(rows, current.reports)
+                val accession = ClinicalPresentation.accession(rows)
+                val sentDate = ClinicalPresentation.sentDate(rows)
+                val reportedDate = ClinicalPresentation.reportedDate(rows)
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
                             fontSize = 15.sp)
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(date, color = Color(0xFF829AB1), fontSize = 11.sp)
+                            Text(if (sentDate.isBlank()) "Result date: " + date
+                                 else "Sent: " + sentDate,
+                                color = Color(0xFF829AB1), fontSize = 11.sp)
                             val classification = CultureReview.status(rows)
                             val color = when (classification) {
                                 CultureStatus.POSITIVE -> Color(0xFFB3261E)
@@ -1290,9 +1296,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 CultureStatus.PENDING -> Color(0xFF996100)
                                 CultureStatus.OTHER -> Color(0xFF66788A)
                             }
-                            Text(classification.name, fontWeight = FontWeight.Bold,
+                            if (isCulture) Text(classification.name, fontWeight = FontWeight.Bold,
                                 fontSize = 10.sp, color = color)
                         }
+                        if (reportedDate.isNotBlank()) {
+                            Text("Reported: " + reportedDate, color = Color(0xFF66788A), fontSize = 11.sp)
+                        } else {
+                            Text("Collection/reporting timestamps not separately available",
+                                fontSize = 10.sp, color = Color(0xFF829AB1))
+                        }
+                        Text("Lab accession: " + (accession.ifBlank {
+                            exact?.labNumber?.takeIf(String::isNotBlank)
+                        } ?: "not provided in structured feed"),
+                            fontSize = 11.sp, color = Color(0xFF486581))
                         val reportRows = clinical.filter { row ->
                             row.parameter.equals("Result", true) ||
                             row.valueText.contains("CULTURE REPORT", true) ||
@@ -1301,7 +1317,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         val narrative = reportRows.joinToString("\n") { it.valueText }
                         val parts = CultureNarrative.parse(narrative)
                         if (parts.culture.isNotBlank()) {
-                            Text("Culture finding", color = Color(0xFF486581),
+                            Text(if (isCulture) "Culture finding" else "Laboratory finding",
+                                color = Color(0xFF486581),
                                 fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Text(parts.culture, fontSize = 13.sp,
                                 maxLines = if (expanded) Int.MAX_VALUE else 5)
@@ -1333,14 +1350,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text(row.valueText, fontSize = 13.sp,
                                 maxLines = if (expanded) Int.MAX_VALUE else 5)
                         }
-                        if (narrative.isNotBlank() || clinical.any { it.valueText.length > 120 }) {
+                        if (clinical.any { it.valueText.length > 120 }) {
                             TextButton(onClick = { expanded = !expanded }) {
-                                Text(if (expanded) "Hide original narrative" else "Full culture / AST details")
+                                Text(if (expanded) "Condense details" else "Expand clinical details")
                             }
-                            if (expanded && narrative.isNotBlank()) {
-                                Text("Original result text", fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp, color = Color(0xFF486581))
-                                Text(narrative, fontSize = 12.sp)
+                        }
+                        // Original prose stays available for audit, but is not
+                        // redundantly displayed under every parsed finding.
+                        if (narrative.isNotBlank() && (parts.susceptible.isNotBlank() ||
+                                parts.resistant.isNotBlank() || parts.advice.isNotBlank())) {
+                            TextButton(onClick = { showOriginal = !showOriginal }) {
+                                Text(if (showOriginal) "Hide original wording" else "Verify original wording")
+                            }
+                            if (showOriginal) {
+                                Text(narrative, fontSize = 11.sp, color = Color(0xFF486581))
                             }
                         }
                         if (rows.size > clinical.size) {
@@ -1357,15 +1380,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                         if (exact != null) {
                             OutlinedButton(onClick = { openReport(exact.url) }) {
-                                Text("Source PDF / susceptibility")
+                                Text("Verified accession-linked PDF")
                             }
                         } else if (current.reports.isNotEmpty()) {
+                            Text("Direct PDF link withheld: specimen/accession cannot be matched uniquely.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = {
                                 reportQueryPrefill = date
                                 selectedTab = ResultsTab.REPORTS
-                            }) { Text("Browse source PDFs for this date") }
+                            }) { Text("Review source reports (verify lab number)") }
                         }
-                        if (clinical.none { row ->
+                        if (isCulture && clinical.none { row ->
                                 Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
                                     .containsMatchIn(row.parameter + " " + row.valueText)
                             }) {
