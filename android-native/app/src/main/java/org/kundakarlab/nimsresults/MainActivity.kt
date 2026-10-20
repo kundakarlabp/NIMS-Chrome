@@ -1001,10 +1001,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val demographics = listOf(current.patient.age,
                         current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
                         .filter { it.isNotBlank() }.joinToString(" · ")
-                    Text(listOf(demographics,
-                        current.results.size.toString() + " source values",
-                        current.reports.size.toString() + " reports")
-                        .filter { it.isNotBlank() }.joinToString(" · "),
+                    Text(demographics,
                         color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f))
@@ -1105,9 +1102,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Clinical review", fontWeight = FontWeight.Bold,
                     fontSize = 17.sp, color = Color(0xFF102A43))
-                Text("Latest available report: " + latestDate +
-                    " · values may have different collection dates",
+                Text("Latest structured result: " + latestDate +
+                    " · " + current.results.size + " source fields · " +
+                    current.reports.size + " report-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
+                Text("Source fields are not the same as verified clinical parameters; " +
+                    "use original PDFs for categorical and narrative reports.",
+                    fontSize = 10.sp, color = Color(0xFF829AB1))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(modifier = Modifier.weight(1f),
@@ -1249,8 +1250,42 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         fontSize = 10.sp, color = Color(0xFF875B22))
                 }
                 if (layout == ClinicalLayout.SOURCE_CODED) {
-                    Text("Targets or blood-group values cannot be decoded from NIMS control codes. Use the signed source report.",
+                    Text("Opaque HIS control codes are not diagnostic results. " +
+                        "The signed source report is authoritative.",
                         fontSize = 11.sp, color = Color(0xFF875B22))
+                    if (Regex("""(?i)blood\s*group|antibody\s*screen""").containsMatchIn(test)) {
+                        // Only display a conclusion extracted from the actual
+                        // CR-matched PDF. It is a source-document summary,
+                        // NOT a value assigned to an unlinked bulk result date.
+                        val verifiedGroups = inventory.mapNotNull { report ->
+                            val header = ReportTitleCache.header(report.url)
+                            if (header?.crNo != patientCr) null
+                            else PdfClinicalSummaries.bloodGrouping(
+                                ReportTitleCache.extracted(report.url).orEmpty()
+                            )?.let { report to it }
+                        }.distinctBy { it.first.url }
+                        if (verifiedGroups.isNotEmpty()) {
+                            Text("Blood group conclusions from opened, CR-checked source PDFs",
+                                fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF102A43))
+                            verifiedGroups.take(5).forEach { (report, group) ->
+                                Text("ABO/Rh: " + group.group +
+                                    if (group.antibodyScreen.isNotBlank())
+                                        " · Antibody screen: " + group.antibodyScreen else "",
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text("Verify source PDF · " +
+                                        report.date.ifBlank { "date not supplied" })
+                                }
+                            }
+                            Text("Verify against the original signed report before transfusion.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                        } else {
+                            Text("Open the blood-bank source PDF to read the signed ABO/Rh " +
+                                "conclusion; only CR-matched extracted text is displayed here.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
+                        }
+                    }
                 }
                 datesToShow.forEach { (date, dateRows) ->
                     var showFullText by remember(patientCr, test, date) {
