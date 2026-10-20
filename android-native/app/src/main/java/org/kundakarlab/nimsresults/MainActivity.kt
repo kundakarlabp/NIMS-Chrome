@@ -1282,9 +1282,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
                 val exact = ClinicalPresentation.reportIdentity(rows, current.reports)
+                val cacheVersion = reportTitleEpoch
+                val verifiedPdf = if (cacheVersion >= 0) exact?.let {
+                    ReportTitleCache.header(it.url)
+                } else null
                 val accession = ClinicalPresentation.accession(rows)
+                    .ifBlank { verifiedPdf?.labNumber.orEmpty() }
                 val sentDate = ClinicalPresentation.sentDate(rows)
+                    .ifBlank { verifiedPdf?.collectionDate.orEmpty() }
                 val reportedDate = ClinicalPresentation.reportedDate(rows)
+                    .ifBlank { verifiedPdf?.reportedDate.orEmpty() }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
