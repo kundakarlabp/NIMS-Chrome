@@ -203,4 +203,13 @@ class BulkParserTest {
         assertTrue(!ClinicalResultRules.isAdministrativeParameter("Serum Creatinine"))
     }
 
+
+    @Test
+    fun malformedEncodedDetectionLimitIsPreserved() {
+        val raw = """{"status":1,"crNo":"123456789012345","groups":[{"testName":"Serology","rows":[{"parameterName":"Index","valuesByDate":{"18-Oct-2026":"IV lt;1.00 - Negative"}}]}]}"""
+        val result = BulkParser.parse(raw, "123456789012345", PatientInfo(crNo = "123456789012345"), emptyList()).results.single()
+        assertEquals("IV <1.00 - Negative", result.valueText)
+        assertEquals(null, result.numericValue)
+    }
+
 }
