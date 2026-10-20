@@ -146,14 +146,22 @@ object BulkParser {
     private fun canonical(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
     private fun clean(value: String?): String = value.orEmpty().replace(Regex("\\s+"), " ").trim()
 
-    // Preserve susceptibility table layout instead of merging all its rows.
+    // HTML entities are decoded, but clinical comparison signs like <1.0,
+    // <=0.5 and < 6 must remain literal. Only known markup tags are removed.
+    // NEVER feed values through a generic HTML sanitizer that eats "<" notes.
     private fun cleanValue(value: String?): String {
-        val withBreaks = value.orEmpty()
-            .replace(Regex("(?i)<br\\s*/?>"), "\n")
-            .replace(Regex("(?i)</(?:p|div|tr|li)>"), "\n")
-            .replace(Regex("(?i)<td[^>]*>"), " | ")
-            .replace(Regex("(?i)</?[a-z][^>]*>"), " ")
-        return Parser.unescapeEntities(withBreaks, false)
+        val raw = value.orEmpty()
+            .replace(Regex("""(?i)<br\s*/?>"""), "\n")
+            .replace(Regex("""(?i)</(?:p|div|tr|li|table|ul|ol)>"""), "\n")
+            .replace(Regex("""(?i)<(?:td|th)[^>]*>"""), " | ")
+            .replace(Regex("""(?i)</(?:td|th)>"""), " ")
+            .replace(Regex("""(?i)</?(?:b|strong|i|em|span|p|div|tr|table|ul|ol|li)(?:\s+[^>]*)?>"""), " ")
+        return Parser.unescapeEntities(raw, false)
+            // Some HIS output has malformed literal 'lt;1.0' or double-encoded
+            // '&amp;lt;1.0' instead of a proper less-than character.
+            .replace(Regex("(?i)&lt;(?=[=\\d])"), "<")
+            .replace(Regex("(?i)(?<![a-z0-9&])lt;\\s*(?=[=\\d])"), "<")
+            .replace('\u00a0', ' ')
             .replace("\r\n", "\n")
             .split("\n")
             .joinToString("\n") { line -> line.replace(Regex("[ \\t]+"), " ").trim() }
@@ -185,6 +193,22 @@ object ClinicalResultRules {
         "neutrophilpercentage", "lymphocytepercentage", "mcv", "mch", "mchc",
         "rbc", "redbloodcellcount", "hematocrit", "haematocrit", "pcv"
     )
+    // Technical source codes can look numerical; never treat them as labs.
+    fun isAdministrativeParameter(parameter: String): Boolean =
+        Regex(
+            """(?i)^(?:sample\s*processed|test\s*done\s*by|machine\s*(?:id|no)|processed\s*by|technician)\s*:?$"""
+        ).matches(parameter.trim())
+
+    fun isNarrativeOrQualitative(row: LabResult): Boolean =
+        row.numericValue == null || isAdministrativeParameter(row.parameter)
+
+    fun isSerology(row: LabResult): Boolean {
+        val test = (row.test + " " + row.parameter).lowercase(Locale.US)
+        return Regex(
+            """serology|dengue|ns1|igm|igg|hiv|hbsag|hepatitis|anti.hcv|scrub\s*typhus|leptospir|widal|brucella|rpr|vdrl|elisa|immunoassay|antibody|antigen"""
+        ).containsMatchIn(test)
+    }
+
     fun isTrendEligible(row: LabResult): Boolean {
         val param = key(row.parameter)
         return param in allowed && row.numericValue?.isFinite() == true &&

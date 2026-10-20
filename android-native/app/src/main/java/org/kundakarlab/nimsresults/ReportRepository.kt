@@ -11,6 +11,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class ReportRepository(
@@ -328,14 +329,59 @@ object ReportPayloadParser {
     }
 
     private fun guessTitle(cells: List<String>, rowText: String): String {
-        val candidates = cells.filter { it.isNotBlank() && !it.contains("View Report", true) && !dateRegex.containsMatchIn(it) }
-        return candidates.firstOrNull {
-            Regex("""(?i)cbc|blood|renal|rft|liver|lft|culture|electrolyte|coag|crp|procalcitonin|urine|sputum|creatinine|hemoglobin|platelet""").containsMatchIn(it)
-        } ?: candidates.getOrNull(minOf(2, maxOf(candidates.size - 1, 0)))
-        ?: candidates.lastOrNull()
-        ?: rowText.take(100)
+        // Prefer a genuine investigation name, not the accession prefix.
+        // If the source exposes only an identifier, keep it as metadata,
+        // never invent a culture or serology label.
+        val candidates = cells.filter {
+            it.isNotBlank() && !it.contains("View Report", true) &&
+                !dateRegex.containsMatchIn(it)
+        }
+        val clinical = Regex(
+            """(?i)\b(cbc|peripheral\s*smear|esr|dengue|serolog|malaria|blood\s*culture|aerobic\s*culture|fungal|k[o0]h|crp|c[- ]?reactive|electrolytes|creatinine|urea|liver\s*function|voriconazole|galactomannan|procalcitonin|urine\s*culture|afb|hiv|hbsag|hepatitis|pathology|cytology)\b"""
+        )
+        return candidates.firstOrNull { clinical.containsMatchIn(it) && !OpaqueReportTitles.isCode(it) }
+            ?: candidates.firstOrNull { it.length >= 9 && it.count(Char::isLetter) >= 6 &&
+                !OpaqueReportTitles.isCode(it) &&
+                !Regex("""(?i)^(clinical|microbiology|biochemistry|laboratory|pathology)\s*(?:lab)?$""").matches(it)
+            }
+            ?: candidates.firstOrNull { OpaqueReportTitles.isCode(it) }
+            ?: rowText.take(100)
     }
 
     private fun compact(value: String) = value.replace(Regex("\\s+"), " ").trim()
     private fun canonical(value: String) = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
+}
+
+
+/** Only name reports after their own PDF text is locally extracted. */
+object OpaqueReportTitles {
+    fun isCode(value: String): Boolean {
+        val text = value.trim()
+        return text.length in 4..64 && !text.contains(' ') &&
+            text.any(Char::isDigit) && text.any(Char::isLetter) &&
+            Regex("""(?i)^[a-z0-9/_-]+$""").matches(text)
+    }
+    fun titleFromExtractedText(text: String): String? {
+        val patterns = listOf(
+            """(?i)\bperipheral\s+smear\s+examination\b""" to "Peripheral smear examination",
+            """(?i)\bvoriconazole\s+report\b|\bserum\s+voriconazole\s+levels\b""" to "Voriconazole therapeutic drug monitoring",
+            """(?i)\bdengue\s+virus\s+ns1\b""" to "Dengue serology (NS1 / antibodies)",
+            """(?i)\bstrip\s+test\s+for\s+malaria\b|\bsmear\s+for\s+mp\b""" to "Malaria diagnostics",
+            """(?i)\b(?:aerobic|blood|fungal|urine)\s+culture\b""" to "Microbiology culture report",
+            """(?i)\bc[- ]?reactive\s+protein\b""" to "C-reactive protein",
+            """(?i)\b(?:complete\s+blood\s+count|cbc\s*[\(+])\b""" to "Complete blood count",
+            """(?im)^\s*esr\s*$""" to "Erythrocyte sedimentation rate"
+        )
+        return patterns.firstOrNull { Regex(it.first).containsMatchIn(text) }?.second
+    }
+}
+
+/** In-memory only, intentionally not persisted as PHI-bearing metadata. */
+object ReportTitleCache {
+    private val recognized = ConcurrentHashMap<String, String>()
+    fun learn(url: String, extracted: String) {
+        OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
+    }
+    fun get(url: String): String? = recognized[url]
+    fun clear() = recognized.clear()
 }

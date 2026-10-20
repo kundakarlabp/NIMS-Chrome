@@ -106,4 +106,41 @@ class ReportPayloadParserTest {
         assertTrue(ReportPayloadParser.parseRest(payload, "123456789012345").isEmpty())
     }
 
+    @Test
+    fun sourceReportCodeIsNotInventedAsTestName() {
+        assertTrue(OpaqueReportTitles.isCode("IP621/26CP220229"))
+        assertTrue(OpaqueReportTitles.isCode("MB053/VL1856"))
+        assertEquals(
+            "Peripheral smear examination",
+            OpaqueReportTitles.titleFromExtractedText(
+                "Department of Pathology\nPERIPHERAL SMEAR EXAMINATION\nRBC's: Normocytic"
+            )
+        )
+        assertEquals(
+            "Dengue serology (NS1 / antibodies)",
+            OpaqueReportTitles.titleFromExtractedText(
+                "Department of Microbiology\nDengue virus NS1 Ag (ELFA) Negative - IV: 0.73"
+            )
+        )
+        assertEquals(
+            "Voriconazole therapeutic drug monitoring",
+            OpaqueReportTitles.titleFromExtractedText(
+                "Voriconazole Report\nSerum Voriconazole Levels 1.9 µg/mL"
+            )
+        )
+        assertEquals(null, OpaqueReportTitles.titleFromExtractedText("Report E8515; interpretation pending"))
+    }
+
+    @Test
+    fun reportNameCacheIsEphemeralAndSourceLinked() {
+        val a = "https://www.nimsts.edu.in/safe-pdf-a"
+        val b = "https://www.nimsts.edu.in/safe-pdf-b"
+        ReportTitleCache.clear()
+        ReportTitleCache.learn(a, "PERIPHERAL SMEAR EXAMINATION")
+        assertEquals("Peripheral smear examination", ReportTitleCache.get(a))
+        assertEquals(null, ReportTitleCache.get(b))
+        ReportTitleCache.clear()
+        assertEquals(null, ReportTitleCache.get(a))
+    }
+
 }

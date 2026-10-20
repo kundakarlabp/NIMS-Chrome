@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var reportTitleEpoch by mutableStateOf(0)
     private var microFilter by mutableStateOf("All")
     private var crInput by mutableStateOf("")
     private var appLockEnabled by mutableStateOf(false)
@@ -203,6 +204,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         deviceUnlockLauncher.launch(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Refresh source-confirmed titles after a PDF is read locally.
+        reportTitleEpoch++
+    }
+
     override fun onStop() {
         if (appLockEnabled && appUnlocked && !unlockPromptActive) {
             leftAt = SystemClock.elapsedRealtime()
@@ -284,9 +291,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if (state == SessionState.CONNECTED) {
                                 startStructuredFetch(cr, requestId)
                             } else if (verifiedRestReports.isNotEmpty()) {
-                                loadStage = LoadStage.READY
-                                pendingCrAfterLogin = cr
-                                statusText = "REST API reports available. NIMS login is required only for full lab values."
+                                // A successfully authenticated REST response can precede
+                                // WebView frameset detection. Attempt Custom Sheet once,
+                                // without opening another hospital login window.
+                                statusText = "REST authorized; attempting structured NIMS API…"
+                                startStructuredFetch(cr, requestId)
                             } else {
                                 loadStage = LoadStage.IDLE
                                 pendingCrAfterLogin = cr
@@ -338,6 +347,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }?.forEach { it.delete() }
         bundle = null
         verifiedRestReports = emptyList()
+        ReportTitleCache.clear()
         apiReportCount = 0
         apiStage = "not_checked"
         activeRequestId = ""
@@ -779,32 +789,38 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
         Surface(color = Color(0xFFEFF6FF)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(current.patient.name.ifBlank { "Current patient" },
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp,
-                        color = Color(0xFF102A43), maxLines = 1)
-                    val sex = current.patient.sex
-                        .replace(Regex("(?i)age\\s*:.*"), "").trim()
-                    Text(
-                        listOf(
-                            "CR " + current.patient.crNo,
-                            current.patient.age,
-                            sex,
-                            current.results.size.toString() + " results",
-                            current.reports.size.toString() + " source reports"
-                        ).filter { it.isNotBlank() }.joinToString(" · "),
-                        color = Color(0xFF486581), fontSize = 10.sp, maxLines = 2
-                    )
+            Column(modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(current.patient.name.ifBlank { "Patient · identity pending" },
+                        modifier = Modifier.weight(1f),
+                        fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        color = Color(0xFF102A43), maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("CR " + current.patient.crNo, fontSize = 10.sp,
+                        color = Color(0xFF486581), maxLines = 1)
                 }
-                TextButton(onClick = { refreshCurrent() }) {
-                    Text("↻", fontSize = 21.sp)
-                }
-                TextButton(onClick = onToggleTools) {
-                    Text("CR ▾", fontSize = 12.sp)
+                Row(modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    val demographics = listOf(current.patient.age,
+                        current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
+                        .filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(listOf(demographics,
+                        current.results.size.toString() + " labs",
+                        current.reports.size.toString() + " reports")
+                        .filter { it.isNotBlank() }.joinToString(" · "),
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = { refreshCurrent() },
+                        contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) {
+                        Text("↻", fontSize = 19.sp)
+                    }
+                    TextButton(onClick = onToggleTools,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                        Text("CR ▾", fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -998,9 +1014,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun LabsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
+        var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var period by remember(current.patient.crNo) { mutableStateOf("90D") }
         var columns by remember(current.patient.crNo) { mutableStateOf("4") }
         val nonMicro = remember(current.results) { current.results.filterNot { isMicro(it) } }
+        val clinicalRows = remember(nonMicro, kind) {
+            nonMicro.filter { row ->
+                when (kind) {
+                    "Serology" -> ClinicalResultRules.isSerology(row)
+                    "Narrative" -> ClinicalResultRules.isNarrativeOrQualitative(row) &&
+                        !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                    "Raw" -> true
+                    else -> !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                }
+            }
+        }
         val latest = remember(nonMicro) {
             nonMicro.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
         }
@@ -1011,14 +1039,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             "1Y" -> 365L
             else -> null
         }
-        val options = remember(nonMicro) {
-            nonMicro.filter { it.parameter.isNotBlank() }
+        val options = remember(clinicalRows) {
+            clinicalRows.filter { it.parameter.isNotBlank() }
                 .groupingBy { it.parameter }.eachCount()
                 .entries.sortedByDescending { it.value }
                 .take(20).map { it.key }
         }
-        val filtered = remember(nonMicro, query, parameter, period, latest) {
-            nonMicro.filter { row ->
+        val filtered = remember(clinicalRows, query, parameter, period, latest) {
+            clinicalRows.filter { row ->
                 (parameter == "All" || row.parameter == parameter) &&
                     ClinicalResultRules.inWindow(row.date, latest, periodDays) &&
                     (query.isBlank() || (row.test + " " + row.parameter + " " + row.date)
@@ -1041,6 +1069,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
                     placeholder = { Text("Search investigation or parameter") }
                 )
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("Clinical", "Serology", "Narrative", "Raw").forEach { category ->
+                        FilterChip(selected = kind == category,
+                            onClick = { kind = category; parameter = "All" },
+                            label = { Text(category, fontSize = 11.sp) })
+                    }
+                }
                 Text("Parameter", fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1336,8 +1372,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun ReportsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
+        val revision = reportTitleEpoch
         val filtered = current.reports.filter {
-            query.isBlank() || (it.title + " " + it.date + " " +
+            val learnedTitle = if (revision >= 0) ReportTitleCache.get(it.url).orEmpty() else ""
+            query.isBlank() || (it.title + " " + learnedTitle + " " + it.date + " " +
                 BulkParser.isoDate(it.date) + " " + it.department).contains(query, true)
         }
         LazyColumn(
@@ -1359,12 +1397,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (filtered.isEmpty()) {
                 item { Text("No source reports were mapped for this retrieval.", color = Color(0xFF66788A)) }
             } else {
-                items(filtered, key = { it.id + it.date }) { report ->
+                items(filtered.indices.toList(), key = { "report-" + it }) { index ->
+                    val report = filtered[index]
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(report.title, fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
-                                Text(listOf(report.date, report.department).filter { it.isNotBlank() }.joinToString(" · "), color = Color(0xFF66788A), fontSize = 12.sp)
+                                val learned = ReportTitleCache.get(report.url)
+                                val isAccession = OpaqueReportTitles.isCode(report.title)
+                                Text(
+                                    learned ?: if (isAccession) "Source report · test not identified" else report.title,
+                                    fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
+                                    maxLines = 2
+                                )
+                                if (isAccession) {
+                                    Text("Source ID: " + report.title,
+                                        color = Color(0xFF486581), fontSize = 11.sp)
+                                }
+                                Text(listOf(report.date, report.department).filter { it.isNotBlank() }
+                                    .joinToString(" · "), color = Color(0xFF66788A), fontSize = 11.sp)
+                                if (isAccession && learned == null) {
+                                    Text("Open PDF → Text to identify investigation",
+                                        color = Color(0xFF66788A), fontSize = 10.sp)
+                                }
                             }
                             if (report.url.isNotBlank()) {
                                 Button(onClick = { openReport(report.url) }) { Text("Open PDF") }
