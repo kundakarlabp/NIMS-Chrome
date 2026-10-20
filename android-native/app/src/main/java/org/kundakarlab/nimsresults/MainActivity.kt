@@ -2135,9 +2135,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun isMicro(row: LabResult): Boolean {
         // Source narrative may mention earlier cultures/PCR in radiology or
         // pathology history. Classify by investigation identity, not prose.
-        return Regex(
-            """(?i)\b(?:culture|sensitivity|susceptibility|genexpert|gene\s*xpert|cbnaat|afb\s*smear|mycobacterial\s*pcr|blood\s*culture)\b"""
-        ).containsMatchIn(row.test)
+        return ClinicalReportRenderer.isMicrobiologyInvestigation(row.test)
     }
 
     private fun normalizeKey(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
