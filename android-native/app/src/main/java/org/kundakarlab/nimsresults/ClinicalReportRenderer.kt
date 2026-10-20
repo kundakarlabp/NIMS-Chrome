@@ -27,7 +27,7 @@ object ClinicalReportRenderer {
 
     fun isMicrobiologyInvestigation(test: String): Boolean =
         Regex(
-            """(?i)\b(?:culture|sensitivity|susceptibility|genexpert|gene\s*xpert|cbnaat|afb\s*smear|mycobacterial\s*pcr|blood\s*culture)\b"""
+            """(?i)\b(?:culture|sensitivity|susceptibility|antibiogram|gram(?:s)?[\s-]*stain(?:ing)?|gram[\s-]*smear|genexpert|gene\s*xpert|cbnaat|afb[\s-]*(?:smear|stain)|acid[\s-]*fast[\s-]*(?:bacilli|stain)|mycobacterial[\s-]*pcr|calcofluor|koh[\s-]*(?:mount|preparation|prep)|fungal[\s-]*(?:smear|stain)|biofire|filmarray|bacteriology|meningitis[\s/-]*encephalitis[\s-]*panel|respiratory[\s-]*pathogen[\s-]*panel)\b"""
         ).containsMatchIn(test)
 
     fun isPlaceholder(row: LabResult): Boolean =
