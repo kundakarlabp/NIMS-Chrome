@@ -67,7 +67,15 @@ object ClinicalReportRenderer {
         value.length >= 8 || Regex("""(?i)\b(?:detected|not detected|positive|negative|reactive|nonreactive|nil)\b""")
             .containsMatchIn(value)
 
+    fun isUrineRoutine(test: String): Boolean =
+        Regex("""(?i)(?:complete\s+urine\s+examination|\bcue\b|urine\s+(?:routine|analysis|examination)(?:\s*\(|\b))""")
+            .containsMatchIn(test)
+
     fun layout(test: String, rows: List<LabResult>): ClinicalLayout {
+        // Urine microscopy has valid qualitative entries and interval values
+        // (e.g. 10-12 /HPF). Numeric-only heuristics must not force this
+        // investigation into dated narrative cards.
+        if (isUrineRoutine(test)) return ClinicalLayout.SERIES
         if (narrativeTest.containsMatchIn(test)) return ClinicalLayout.NARRATIVE
         if (Regex("""(?i)biofire|filmarray|ana\s*(?:profile|blot|panel)|blood\s+group|antibody\s+screen""")
                 .containsMatchIn(test)) return ClinicalLayout.SOURCE_CODED
