@@ -2,7 +2,7 @@ package org.kundakarlab.nimsresults
 
 /** Presentation-only column layout for selectable PDF text, not interpretation. */
 object ReportTableReader {
-    private val columns = Regex("""[ \\t]{2,}""")
+    private val columns = Regex("""[ \t]{2,}""")
     fun splitColumns(line: String): List<String> {
         val cells = line.trim().split(columns).map { it.trim() }.filter { it.isNotBlank() }
         return if (cells.size in 2..5) cells else emptyList()
