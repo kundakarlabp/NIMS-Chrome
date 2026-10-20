@@ -1432,8 +1432,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 val parameters = remember(rows) {
                     rows.groupBy { it.parameter.ifBlank { it.test } }.toList()
                 }
-                var selectedValue by remember(current.patient.crNo, test) {
-                    mutableStateOf<LabResult?>(null)
+                var selectedValues by remember(current.patient.crNo, test) {
+                    mutableStateOf<List<LabResult>>(emptyList())
                 }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.padding(10.dp)) {
@@ -1478,11 +1478,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.height(27.dp))
                                         parameters.forEach { (_, values) ->
-                                            val value = values.firstOrNull { it.date == date }
+                                            val matches = values.filter { it.date == date }
+                                            val value = matches.singleOrNull()
                                             Box(
                                                 modifier = Modifier.height(44.dp).fillMaxWidth()
-                                                    .clickable(enabled = value != null) {
-                                                        selectedValue = value
+                                                    .clickable(enabled = matches.isNotEmpty()) {
+                                                        selectedValues = matches
                                                     }.padding(end = 6.dp)
                                             ) {
                                                 val flag = value?.abnormal?.lowercase().orEmpty()
@@ -1493,7 +1494,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     color = if (flagged) Color(0xFFFFF0E9) else Color.Transparent,
                                                     shape = RoundedCornerShape(4.dp)
                                                 ) {
-                                                    Text(value?.let(ClinicalPresentation::displayValue) ?: "—",
+                                                    Text(when {
+                                                        matches.size > 1 -> "${matches.size} results"
+                                                        value != null -> ClinicalPresentation.displayValue(value)
+                                                        else -> "—"
+                                                    },
                                                         modifier = Modifier.padding(horizontal = 2.dp),
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.SemiBold,
@@ -1507,17 +1512,34 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        selectedValue?.let { detail ->
+                        if (selectedValues.isNotEmpty()) {
                             HorizontalDivider()
-                            Text(detail.parameter + " · " + detail.date,
+                            Text(selectedValues.first().parameter + " · " +
+                                selectedValues.first().date +
+                                if (selectedValues.size > 1) " · ${selectedValues.size} source entries" else "",
                                 fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            Text(ClinicalPresentation.displayValue(detail) + (if (detail.unit.isBlank()) ""
-                                else " " + detail.unit), fontSize = 13.sp)
-                            if (detail.refRange.isNotBlank()) {
-                                Text("Reference: " + detail.refRange, fontSize = 11.sp,
-                                    color = Color(0xFF66788A))
+                            selectedValues.forEach { detail ->
+                                Text(ClinicalPresentation.displayValue(detail) +
+                                    (if (detail.unit.isBlank()) "" else " " + detail.unit),
+                                    fontSize = 13.sp)
+                                if (detail.sentDate.isNotBlank()) {
+                                    Text("Collected: " + detail.sentDate, fontSize = 10.sp,
+                                        color = Color(0xFF66788A))
+                                }
+                                if (detail.reportedDate.isNotBlank()) {
+                                    Text("Reported: " + detail.reportedDate, fontSize = 10.sp,
+                                        color = Color(0xFF66788A))
+                                }
+                                if (detail.labNumber.isNotBlank()) {
+                                    Text("Lab accession: " + detail.labNumber, fontSize = 10.sp,
+                                        color = Color(0xFF486581))
+                                }
+                                if (detail.refRange.isNotBlank()) {
+                                    Text("Reference: " + detail.refRange, fontSize = 11.sp,
+                                        color = Color(0xFF66788A))
+                                }
                             }
-                            TextButton(onClick = { selectedValue = null }) { Text("Close detail") }
+                            TextButton(onClick = { selectedValues = emptyList() }) { Text("Close detail") }
                         }
                     }
                 }
