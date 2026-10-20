@@ -180,7 +180,8 @@ class ReportRepository(
                 url = previous.url.ifBlank { report.url },
                 sentDate = previous.sentDate.ifBlank { report.sentDate },
                 reportedDate = previous.reportedDate.ifBlank { report.reportedDate },
-                labNumber = previous.labNumber.ifBlank { report.labNumber }
+                labNumber = previous.labNumber.ifBlank { report.labNumber },
+                orderDate = previous.orderDate.ifBlank { report.orderDate }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -196,7 +197,8 @@ object ReportPayloadParser {
     private val crKeys = listOf("crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no")
     private val titleKeys = listOf("reportName","report_name","investigationName","investigation_name","testName","test_name","investigation","test","name")
     private val dateKeys = listOf("dateSent","date_sent","sampleDate","sample_date","requisitionDate","requisition_date","reportDate","report_date","date")
-    private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent","requisitionDate","requisition_date")
+    private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent")
+    private val orderKeys = listOf("requisitionDate","requisition_date","orderDate","order_date","orderedDate","ordered_date")
     private val reportedKeys = listOf("reportingDate","reporting_date","reportedDate","reported_date","reportDate","report_date","validationDate","validation_date")
     private val labKeys = listOf("labStudyNo","labStudyNumber","labNo","lab_no","labNumber","lab_number","accessionNo","accession_no")
     private val departmentKeys = listOf("department","dept","lab","laboratory","section")
@@ -229,7 +231,9 @@ object ReportPayloadParser {
             val title = first(row, titleKeys).ifBlank { "Investigation report" }
             val sentDate = first(row, sentKeys)
             val reportedDate = first(row, reportedKeys)
-            val date = sentDate.ifBlank { first(row, dateKeys) }
+            val orderedDate = first(row, orderKeys)
+            // Keep the source-listed index date in its original meaning.
+            val date = first(row, dateKeys)
             val labNumber = first(row, labKeys)
             val department = first(row, departmentKeys)
             val direct = safeReportUrl(first(row, urlKeys))
@@ -238,7 +242,7 @@ object ReportPayloadParser {
             val url = direct.ifBlank { reportUrlForToken(token) }
             val id = first(row, idKeys).ifBlank { token }.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             if (title.isBlank() && url.isBlank()) null else ReportRef(
-                id, title, date, department, url, sentDate, reportedDate, labNumber
+                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate
             )
         }
     }
