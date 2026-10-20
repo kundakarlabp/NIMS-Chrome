@@ -1412,58 +1412,116 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun ReportsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo, reportQueryPrefill) { mutableStateOf(reportQueryPrefill) }
+        var category by remember(current.patient.crNo) { mutableStateOf("All") }
         val revision = reportTitleEpoch
-        val filtered = current.reports.filter {
-            val learnedTitle = if (revision >= 0) ReportTitleCache.get(it.url).orEmpty() else ""
-            query.isBlank() || (it.title + " " + learnedTitle + " " + it.date + " " +
-                BulkParser.isoDate(it.date) + " " + it.department).contains(query, true)
+        val filtered = remember(current.reports, query, category, revision) {
+            current.reports.filter { report ->
+                val searchable = (report.title + " " + ReportTitleCache.get(report.url).orEmpty() +
+                    " " + report.date + " " + report.sentDate + " " +
+                    report.reportedDate + " " + report.department + " " + report.labNumber)
+                val radiology = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
+                    .containsMatchIn(report.title + " " + report.department)
+                val micro = Regex("""(?i)microbiology|culture|bacteriology|serology|genexpert|biofire""")
+                    .containsMatchIn(report.title + " " + report.department)
+                (category == "All" ||
+                    category == "Radiology" && radiology ||
+                    category == "Microbiology" && micro ||
+                    category == "Other" && !radiology && !micro) &&
+                    (query.isBlank() || searchable.contains(query, true))
+            }
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
-                Text("Source reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Find test or date") },
-                    singleLine = true
-                )
+                Text("Source reports", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Text(filtered.size.toString() + " reports · each source is linked to its original NIMS report",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                OutlinedTextField(value = query, onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Find investigation, accession or date") })
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("All", "Radiology", "Microbiology", "Other").forEach { item ->
+                        FilterChip(selected = category == item,
+                            onClick = { category = item },
+                            label = { Text(item, fontSize = 11.sp) })
+                    }
+                }
             }
             if (filtered.isEmpty()) {
-                item { Text("No source reports were mapped for this retrieval.", color = Color(0xFF66788A)) }
+                item { Text("No matching reports. Try All and remove the search.", color = Color(0xFF66788A)) }
             } else {
                 items(filtered.indices.toList(), key = { "report-" + it }) { index ->
                     val report = filtered[index]
+                    val learned = ReportTitleCache.get(report.url)
+                    val opaque = OpaqueReportTitles.isCode(report.title)
+                    val extracted = ReportTitleCache.extracted(report.url)
+                    val rad = Regex("""(?i)radiology|ct\s*scan|mri|ultrasound|x[- ]?ray|usg""")
+                        .containsMatchIn(report.title + " " + report.department)
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                val learned = ReportTitleCache.get(report.url)
-                                val isAccession = OpaqueReportTitles.isCode(report.title)
-                                Text(
-                                    learned ?: if (isAccession) "Source report · test not identified" else report.title,
-                                    fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
-                                    maxLines = 2
-                                )
-                                if (isAccession) {
-                                    Text("Source ID: " + report.title,
-                                        color = Color(0xFF486581), fontSize = 11.sp)
+                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(learned ?: if (opaque) "Investigation not identified" else report.title,
+                                        fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                        color = Color(0xFF102A43), maxLines = 2)
+                                    if (opaque) {
+                                        Text("Source accession: " + report.title,
+                                            color = Color(0xFF486581), fontSize = 10.sp)
+                                    }
+                                    if (report.labNumber.isNotBlank()) {
+                                        Text("Lab/study no: " + report.labNumber,
+                                            color = Color(0xFF486581), fontSize = 10.sp)
+                                    }
                                 }
-                                Text(listOf(report.date, report.department).filter { it.isNotBlank() }
-                                    .joinToString(" · "), color = Color(0xFF66788A), fontSize = 11.sp)
-                                if (isAccession && learned == null) {
-                                    Text("Open PDF → Text to identify investigation",
-                                        color = Color(0xFF66788A), fontSize = 10.sp)
+                                if (report.url.isNotBlank()) {
+                                    Button(onClick = { openReport(report.url) },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)) {
+                                        Text("PDF", fontSize = 12.sp)
+                                    }
                                 }
                             }
-                            if (report.url.isNotBlank()) {
-                                Button(onClick = { openReport(report.url) }) { Text("Open PDF") }
+                            if (report.sentDate.isNotBlank()) {
+                                Text("Specimen sent: " + report.sentDate, fontSize = 11.sp,
+                                    color = Color(0xFF486581))
                             } else {
-                                Text("Link unavailable", color = Color(0xFF829AB1), fontSize = 11.sp)
+                                Text("Listed result date: " + report.date +
+                                    " · specimen collection date unconfirmed",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                            }
+                            if (report.reportedDate.isNotBlank()) {
+                                Text("Reported: " + report.reportedDate, fontSize = 11.sp,
+                                    color = Color(0xFF486581))
+                            }
+                            if (report.department.isNotBlank()) {
+                                Text(report.department, fontSize = 10.sp,
+                                    color = Color(0xFF66788A))
+                            }
+                            if (rad && extracted != null) {
+                                val sections = RadiologyNarrative.parse(extracted)
+                                if (sections.impression.isNotBlank()) {
+                                    Text("Source impression", fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
+                                    Text(sections.impression, fontSize = 12.sp, maxLines = 6)
+                                }
+                                if (sections.findings.isNotBlank()) {
+                                    var showFindings by remember(report.url) { mutableStateOf(false) }
+                                    TextButton(onClick = { showFindings = !showFindings }) {
+                                        Text(if (showFindings) "Hide findings" else "Findings / technique")
+                                    }
+                                    if (showFindings) {
+                                        if (sections.technique.isNotBlank()) Text(sections.technique, fontSize = 11.sp)
+                                        Text(sections.findings, fontSize = 11.sp)
+                                    }
+                                }
+                                Text("Extracted text is a convenience view; verify the full source PDF.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                            } else if (rad) {
+                                Text("Open PDF → Text to extract headings, findings and impression locally.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                         }
                     }
@@ -1471,7 +1529,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
         }
     }
-
 
     @Composable
     private fun TrendsScreen(current: ClinicalBundle) {
