@@ -69,3 +69,17 @@ test('unique title-and-date fallback retains existing report linkage', () => {
   ] });
   assert.equal(bundle.results[0].pdfUrl, a.url);
 });
+
+test('a known unmatched accession does not fall back to a potentially wrong same-name PDF', () => {
+  const bundle = context.bundleFromParsedReports('000000000000001', {
+    patient: { crNo: '000000000000001' }, reports: [a]
+  }, { parsedReports: [
+    { report_id: 'another-accession', report_name: a.title, date_sent: a.date, parameters: [{ name: 'Result', value: 'synthetic' }] }
+  ] });
+  assert.equal(bundle.results[0].pdfUrl, '');
+});
+
+test('reused identifier with different source test title cannot collapse reports', () => {
+  const records = context.mergeReportInventories([a], [{ ...a, title: 'Urine culture' }]);
+  assert.equal(records.length, 2);
+});
