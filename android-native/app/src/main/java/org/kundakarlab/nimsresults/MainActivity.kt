@@ -779,32 +779,38 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
         Surface(color = Color(0xFFEFF6FF)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(current.patient.name.ifBlank { "Current patient" },
-                        fontWeight = FontWeight.Bold, fontSize = 15.sp,
-                        color = Color(0xFF102A43), maxLines = 1)
-                    val sex = current.patient.sex
-                        .replace(Regex("(?i)age\\s*:.*"), "").trim()
-                    Text(
-                        listOf(
-                            "CR " + current.patient.crNo,
-                            current.patient.age,
-                            sex,
-                            current.results.size.toString() + " results",
-                            current.reports.size.toString() + " source reports"
-                        ).filter { it.isNotBlank() }.joinToString(" · "),
-                        color = Color(0xFF486581), fontSize = 10.sp, maxLines = 2
-                    )
+            Column(modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(current.patient.name.ifBlank { "Patient · identity pending" },
+                        modifier = Modifier.weight(1f),
+                        fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        color = Color(0xFF102A43), maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("CR " + current.patient.crNo, fontSize = 10.sp,
+                        color = Color(0xFF486581), maxLines = 1)
                 }
-                TextButton(onClick = { refreshCurrent() }) {
-                    Text("↻", fontSize = 21.sp)
-                }
-                TextButton(onClick = onToggleTools) {
-                    Text("CR ▾", fontSize = 12.sp)
+                Row(modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    val demographics = listOf(current.patient.age,
+                        current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
+                        .filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(listOf(demographics,
+                        current.results.size.toString() + " labs",
+                        current.reports.size.toString() + " reports")
+                        .filter { it.isNotBlank() }.joinToString(" · "),
+                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    TextButton(onClick = { refreshCurrent() },
+                        contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) {
+                        Text("↻", fontSize = 19.sp)
+                    }
+                    TextButton(onClick = onToggleTools,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                        Text("CR ▾", fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -998,9 +1004,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun LabsScreen(current: ClinicalBundle) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
+        var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var period by remember(current.patient.crNo) { mutableStateOf("90D") }
         var columns by remember(current.patient.crNo) { mutableStateOf("4") }
         val nonMicro = remember(current.results) { current.results.filterNot { isMicro(it) } }
+        val clinicalRows = remember(nonMicro, kind) {
+            nonMicro.filter { row ->
+                when (kind) {
+                    "Serology" -> ClinicalResultRules.isSerology(row)
+                    "Narrative" -> ClinicalResultRules.isNarrativeOrQualitative(row) &&
+                        !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                    "Raw" -> true
+                    else -> !ClinicalResultRules.isAdministrativeParameter(row.parameter)
+                }
+            }
+        }
         val latest = remember(nonMicro) {
             nonMicro.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
         }
@@ -1011,14 +1029,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             "1Y" -> 365L
             else -> null
         }
-        val options = remember(nonMicro) {
-            nonMicro.filter { it.parameter.isNotBlank() }
+        val options = remember(clinicalRows) {
+            clinicalRows.filter { it.parameter.isNotBlank() }
                 .groupingBy { it.parameter }.eachCount()
                 .entries.sortedByDescending { it.value }
                 .take(20).map { it.key }
         }
-        val filtered = remember(nonMicro, query, parameter, period, latest) {
-            nonMicro.filter { row ->
+        val filtered = remember(clinicalRows, query, parameter, period, latest) {
+            clinicalRows.filter { row ->
                 (parameter == "All" || row.parameter == parameter) &&
                     ClinicalResultRules.inWindow(row.date, latest, periodDays) &&
                     (query.isBlank() || (row.test + " " + row.parameter + " " + row.date)
@@ -1041,6 +1059,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
                     placeholder = { Text("Search investigation or parameter") }
                 )
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("Clinical", "Serology", "Narrative", "Raw").forEach { category ->
+                        FilterChip(selected = kind == category,
+                            onClick = { kind = category; parameter = "All" },
+                            label = { Text(category, fontSize = 11.sp) })
+                    }
+                }
                 Text("Parameter", fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
