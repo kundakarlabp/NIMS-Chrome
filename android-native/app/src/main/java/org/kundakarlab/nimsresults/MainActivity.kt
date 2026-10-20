@@ -1608,7 +1608,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var showMetadata by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
-                val exact = ClinicalPresentation.reportIdentity(rows, current.reports)
+                val mapping = ReportLinkResolver.candidates(
+                    rows, current.reports, current.patient.crNo)
+                val exact = mapping.verified
+                var chooseSource by remember(current.patient.crNo, key) {
+                    mutableStateOf(false)
+                }
                 val cacheVersion = reportTitleEpoch
                 val verifiedPdf = if (cacheVersion >= 0) exact?.let {
                     ReportTitleCache.header(it.url)
@@ -1724,12 +1729,54 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Verified accession-linked PDF")
                             }
                         } else if (current.reports.isNotEmpty()) {
-                            Text("Direct PDF link withheld: specimen/accession cannot be matched uniquely.",
+                            Text("Source PDF identity is not unique; choose using the original lab/study number.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
-                            TextButton(onClick = {
-                                reportQueryPrefill = date
-                                selectedTab = ResultsTab.REPORTS
-                            }) { Text("Review source reports (verify lab number)") }
+                            TextButton(onClick = { chooseSource = true }) {
+                                Text("Choose related source PDFs (" +
+                                    mapping.candidates.size + ")")
+                            }
+                        }
+                        if (chooseSource) {
+                            AlertDialog(
+                                onDismissRequest = { chooseSource = false },
+                                title = { Text("Match source PDF to specimen") },
+                                text = {
+                                    Column {
+                                        Text(test + " · result date " + date +
+                                            " · accession " + accession.ifBlank { "unknown" },
+                                            fontSize = 12.sp)
+                                        Text("Candidate reports are not automatically verified. Confirm the lab/study number in the source PDF before using clinical findings.",
+                                            fontSize = 11.sp, color = Color(0xFF875B22))
+                                        LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                                            items(mapping.candidates, key = { it.url }) { report ->
+                                                Column {
+                                                    TextButton(onClick = {
+                                                        chooseSource = false
+                                                        openReport(report.url)
+                                                    }) {
+                                                        Text(report.title + " · " +
+                                                            report.date.ifBlank { "date unavailable" } +
+                                                            if (report.labNumber.isNotBlank())
+                                                                " · " + report.labNumber else "",
+                                                            fontSize = 12.sp)
+                                                    }
+                                                    HorizontalDivider()
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        chooseSource = false
+                                        reportQueryPrefill = ""
+                                        selectedTab = ResultsTab.REPORTS
+                                    }) { Text("All source reports") }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { chooseSource = false }) { Text("Close") }
+                                }
+                            )
                         }
                         if (isCulture && clinical.none { row ->
                                 Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
