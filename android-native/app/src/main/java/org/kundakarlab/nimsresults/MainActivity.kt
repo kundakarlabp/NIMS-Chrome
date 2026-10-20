@@ -584,6 +584,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         Toast.makeText(this, "Safe diagnostics copied", Toast.LENGTH_SHORT).show()
     }
 
+    private fun copyReportDiagnostics(test: String, rows: List<LabResult>,
+                                      reports: List<ReportRef>, cr: String) {
+        val report = ReportDiagnostics.describe(test, rows, reports, cr)
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS report diagnostics", report))
+        Toast.makeText(this, "Redacted report diagnostics copied", Toast.LENGTH_SHORT).show()
+    }
+
     private fun openReport(url: String) {
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) return
         startActivity(Intent(this, ReportActivity::class.java)
@@ -1439,6 +1447,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else "Show all " + byDate.size + " dates")
                     }
                 }
+                TextButton(onClick = {
+                    copyReportDiagnostics(test, rows, inventory, patientCr)
+                }) { Text("Copy report diagnostics (redacted)", fontSize = 11.sp) }
                 Text("Original report identity must match the source accession.",
                     color = Color(0xFF66788A), fontSize = 10.sp)
             }
@@ -2047,6 +2058,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             )
                         }
+                        TextButton(onClick = {
+                            copyReportDiagnostics(test, rows, current.reports,
+                                current.patient.crNo)
+                        }) { Text("Copy report diagnostics", fontSize = 11.sp) }
                         if (isCulture && clinical.none { row ->
                                 Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
                                     .containsMatchIn(row.parameter + " " + row.valueText)
