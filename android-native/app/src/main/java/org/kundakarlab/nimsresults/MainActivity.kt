@@ -1214,7 +1214,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun ClinicalNarrativeCard(test: String, rows: List<LabResult>,
-                                      layout: ClinicalLayout, patientCr: String) {
+                                      layout: ClinicalLayout, patientCr: String,
+                                      inventory: List<ReportRef>) {
         val byDate = remember(rows) {
             rows.groupBy { it.date }.toList()
                 .sortedByDescending { BulkParser.dateKey(it.first) }
@@ -1251,6 +1252,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     var showFullText by remember(patientCr, test, date) {
                         mutableStateOf(false)
                     }
+                    var showSources by remember(patientCr, test, date) {
+                        mutableStateOf(false)
+                    }
+                    val sourceLinks = ReportLinkResolver.candidates(dateRows, inventory, patientCr)
                     HorizontalDivider()
                     Text("Result date: " + date, fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold, color = Color(0xFF486581))
@@ -1308,6 +1313,51 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text("Collapse report")
                         }
                     }
+                    if (sourceLinks.verified != null) {
+                        TextButton(onClick = {
+                            openReport(sourceLinks.verified.url)
+                        }) { Text("Open uniquely matched source PDF") }
+                    } else if (inventory.isNotEmpty()) {
+                        TextButton(onClick = { showSources = true }) {
+                            Text("Choose source PDF (" + sourceLinks.candidates.size + " candidates)")
+                        }
+                    }
+                    if (showSources) {
+                        AlertDialog(
+                            onDismissRequest = { showSources = false },
+                            title = { Text("Find matching source report") },
+                            text = {
+                                Column {
+                                    Text("Select using the laboratory accession. Date/title alone do not verify the specimen.",
+                                        color = Color(0xFF875B22), fontSize = 11.sp)
+                                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                                        items(sourceLinks.candidates, key = { it.url }) { report ->
+                                            TextButton(onClick = {
+                                                showSources = false
+                                                openReport(report.url)
+                                            }) {
+                                                Text(report.title + " · " + report.date +
+                                                    if (report.labNumber.isNotBlank())
+                                                        " · " + report.labNumber else "",
+                                                    fontSize = 11.sp)
+                                            }
+                                            HorizontalDivider()
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showSources = false
+                                    reportQueryPrefill = ""
+                                    selectedTab = ResultsTab.REPORTS
+                                }) { Text("All reports") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showSources = false }) { Text("Close") }
+                            }
+                        )
+                    }
                 }
                 if (byDate.size > 4) {
                     TextButton(onClick = { showAll = !showAll }) {
@@ -1315,12 +1365,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else "Show all " + byDate.size + " dates")
                     }
                 }
-                TextButton(onClick = {
-                    reportQueryPrefill = ""
-                    selectedTab = ResultsTab.REPORTS
-                }) {
-                    Text("Browse original NIMS source reports", fontSize = 12.sp)
-                }
+                Text("Original report identity must match the source accession.",
+                    color = Color(0xFF66788A), fontSize = 10.sp)
             }
         }
     }
@@ -1431,7 +1477,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             items(groups, key = { it.first }) { (test, sourceRows) ->
                 val selectedLayout = ClinicalReportRenderer.layout(test, sourceRows)
                 if (selectedLayout != ClinicalLayout.SERIES && kind != "Raw") {
-                    ClinicalNarrativeCard(test, sourceRows, selectedLayout, current.patient.crNo)
+                    ClinicalNarrativeCard(test, sourceRows, selectedLayout,
+                        current.patient.crNo, current.reports)
                 } else {
                 val rows = if (kind == "Raw") sourceRows else sourceRows.filter {
                     !ClinicalReportRenderer.isUninterpretedCode(it) &&
