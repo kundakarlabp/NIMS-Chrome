@@ -107,6 +107,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var bundle by mutableStateOf<ClinicalBundle?>(null)
     private var selectedTab by mutableStateOf(ResultsTab.OVERVIEW)
     private var reportQueryPrefill by mutableStateOf("")
+    private var allResultsSourceMode by mutableStateOf(false)
+    private var allResultsSourceFilter by mutableStateOf("All")
     private var reportCategoryPrefill by mutableStateOf("All")
     private var reportTitleEpoch by mutableStateOf(0)
     private var microFilter by mutableStateOf("All")
@@ -339,7 +341,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         reports = inventory.reports,
                         source = "nims_rest_report_list"
                     )
-                    selectedTab = ResultsTab.REPORTS
+                    allResultsSourceMode = true
+                    selectedTab = ResultsTab.ALL
                     statusText = "REST verified · " + inventory.reports.size +
                         " source reports · loading structured labs…"
                 } else if (restAttempt.exceptionOrNull() is IdentityMismatchException) {
@@ -502,6 +505,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     apiStage = "structured_verified"
                     crInput = cr
                     selectedTab = ResultsTab.OVERVIEW
+                    allResultsSourceMode = false
                     reportQueryPrefill = ""
                     loadStage = LoadStage.READY
                     statusText = initial.results.size.toString() + " results · loading report links…"
@@ -609,13 +613,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // NIMS often uses accession or generic department titles in its index.
         // Do not apply an exact-name search that hides the actual source PDF.
         reportQueryPrefill = ""
+        allResultsSourceMode = true
         reportCategoryPrefill = when {
             Regex("""(?i)blood\s*group|antibody\s*screen|transfusion|cross\s*match""")
                 .containsMatchIn(test) -> "Blood bank"
             ClinicalReportRenderer.isMicrobiologyInvestigation(test) -> "Microbiology"
             else -> "All"
         }
-        selectedTab = ResultsTab.REPORTS
+        allResultsSourceFilter = reportCategoryPrefill
+        selectedTab = ResultsTab.ALL
     }
 
     private fun openReport(url: String) {
@@ -716,7 +722,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 ResultsTab.ID -> IdFocusScreen(current, scrollByTab.getValue(ResultsTab.ID))
                                 ResultsTab.LABS -> LabsScreen(current, scrollByTab.getValue(ResultsTab.LABS))
                                 ResultsTab.MICROBIOLOGY -> MicroScreen(current, scrollByTab.getValue(ResultsTab.MICROBIOLOGY))
-                                ResultsTab.REPORTS -> ReportsScreen(current, scrollByTab.getValue(ResultsTab.REPORTS))
                                 ResultsTab.TRENDS -> TrendsScreen(current, scrollByTab.getValue(ResultsTab.TRENDS))
                                 ResultsTab.ALL -> AllResultsScreen(current, scrollByTab.getValue(ResultsTab.ALL))
                             }
@@ -1589,7 +1594,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 TextButton(onClick = {
                                     showSources = false
                                     reportQueryPrefill = ""
-                                    selectedTab = ResultsTab.REPORTS
+                                    allResultsSourceMode = true
+                    selectedTab = ResultsTab.ALL
                                 }) { Text("All reports") }
                             },
                             dismissButton = {
@@ -2209,7 +2215,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     TextButton(onClick = {
                                         chooseSource = false
                                         reportQueryPrefill = ""
-                                        selectedTab = ResultsTab.REPORTS
+                                        allResultsSourceMode = true
+                    selectedTab = ResultsTab.ALL
                                     }) { Text("All source reports") }
                                 },
                                 dismissButton = {
@@ -2622,7 +2629,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                OutlinedButton(onClick = { selectedTab = ResultsTab.REPORTS },
+                OutlinedButton(onClick = { allResultsSourceMode = true
+                    selectedTab = ResultsTab.ALL },
                     modifier = Modifier.fillMaxWidth()) {
                     Text("Browse source reports (" + current.reports.size + ")",
                         fontSize = 12.sp)
@@ -2800,7 +2808,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ResultsTab.ID -> "ID focus"
         ResultsTab.LABS -> "Labs"
         ResultsTab.MICROBIOLOGY -> "Microbiology"
-        ResultsTab.REPORTS -> "Reports"
         ResultsTab.TRENDS -> "Trends"
         ResultsTab.ALL -> "All results"
     }
