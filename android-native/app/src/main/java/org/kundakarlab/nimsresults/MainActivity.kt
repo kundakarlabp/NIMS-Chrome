@@ -2037,7 +2037,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val cacheVersion = reportTitleEpoch
                 val verifiedPdf = if (cacheVersion >= 0) exact?.let {
-                    ReportTitleCache.header(it.url)
+                    ReportTitleCache.header(it.url)?.takeIf { head ->
+                        head.crNo == current.patient.crNo
+                    }
                 } else null
                 val accession = ClinicalPresentation.accession(rows)
                     .ifBlank { verifiedPdf?.labNumber.orEmpty() }
@@ -2049,37 +2051,25 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(test, fontWeight = FontWeight.Bold, color = Color(0xFF102A43),
                             fontSize = 15.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(if (sentDate.isBlank()) "Result date: " + date
-                                 else "Sent: " + sentDate,
-                                color = Color(0xFF829AB1), fontSize = 11.sp)
-                            val classification = CultureReview.status(rows)
-                            val color = when (classification) {
-                                CultureStatus.POSITIVE -> Color(0xFFB3261E)
-                                CultureStatus.NEGATIVE -> Color(0xFF28744A)
-                                CultureStatus.PENDING -> Color(0xFF996100)
-                                CultureStatus.OTHER -> Color(0xFF66788A)
-                            }
-                            if (isCulture) Text(classification.name, fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp, color = color)
+                        val status = CultureReview.status(rows)
+                        val statusColor = when(status) {
+                            CultureStatus.POSITIVE -> Color(0xFFB3261E)
+                            CultureStatus.NEGATIVE -> Color(0xFF28744A)
+                            CultureStatus.PENDING -> Color(0xFF996100)
+                            else -> Color(0xFF66788A)
                         }
-                        if (reportedDate.isNotBlank()) {
-                            Text("Reported: " + reportedDate, color = Color(0xFF66788A),
-                                fontSize = 11.sp)
-                        }
-                        val orderedDate = rows.firstOrNull { it.orderDate.isNotBlank() }
-                            ?.orderDate.orEmpty().ifBlank { verifiedPdf?.orderDate.orEmpty() }
-                        if (orderedDate.isNotBlank()) {
-                            Text("Ordered: " + orderedDate, color = Color(0xFF66788A),
-                                fontSize = 11.sp)
-                        }
-                        val sourceAccession = accession.ifBlank {
-                            exact?.labNumber.orEmpty()
-                        }
-                        Text("Lab accession: " + sourceAccession.ifBlank {
-                            "Not supplied by NIMS structured feed"
-                        }, fontSize = 11.sp, color = Color(0xFF486581))
+                        if (isCulture) Text(status.name,
+                            color = statusColor, fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold)
+                        Text("Lab/study number: " +
+                            accession.ifBlank { "Not available in structured results" },
+                            fontSize = 11.sp, color = Color(0xFF486581))
+                        Text("Sent/collection date: " +
+                            sentDate.ifBlank { "Not available" },
+                            fontSize = 11.sp, color = Color(0xFF486581))
+                        Text("Reported date: " +
+                            reportedDate.ifBlank { "Not available (result date: " + date + ")" },
+                            fontSize = 11.sp, color = Color(0xFF486581))
                         val reportRows = clinical.filter { row ->
                             row.parameter.equals("Result", true) ||
                             row.valueText.contains("CULTURE REPORT", true) ||
@@ -2212,41 +2202,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
             }
-            if (sourceMicro.isNotEmpty()) {
-                item {
-                    TextButton(onClick = { showSourceInventory = !showSourceInventory }) {
-                        Text(if (showSourceInventory) "Hide source microbiology PDFs (" +
-                            sourceMicro.size + ")" else "Show all source microbiology PDFs (" +
-                            sourceMicro.size + ")")
-                    }
-                    Text("Includes original source reports regardless of whether NIMS supplied structured rows. " +
-                        "This is an inventory, not an assertion that every PDF has been parsed.",
-                        fontSize = 10.sp, color = Color(0xFF66788A))
-                }
-                if (showSourceInventory) {
-                    items(sourceMicro, key = { "micro-source-" + it.id + "|" + it.url }) { report ->
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                            Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                                Text(ReportTitleCache.get(report.url) ?: report.title,
-                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                if (report.date.isNotBlank()) Text("Index date: " + report.date,
-                                    fontSize = 10.sp, color = Color(0xFF66788A))
-                                if (report.labNumber.isNotBlank()) Text(
-                                    "Lab/study: " + report.labNumber,
-                                    fontSize = 10.sp, color = Color(0xFF486581))
-                                if (report.url.isNotBlank()) {
-                                    TextButton(onClick = { openReport(report.url) }) {
-                                        Text("Open original PDF")
-                                    }
-                                } else {
-                                    Text("PDF link not supplied", fontSize = 10.sp,
-                                        color = Color(0xFF875B22))
-                                }
-                            }
-                        }
-                    }
-                }
+            if (sourceMicro.isNotEmpty()) item {
+                TextButton(onClick = {
+                    allResultsSourceFilter = "Microbiology"
+                    allResultsSourceMode = true
+                    selectedTab = ResultsTab.ALL
+                }) { Text("View " + sourceMicro.size + " original microbiology PDFs in All results") }
             }
+
         }
     }
 
