@@ -2,6 +2,7 @@ package org.kundakarlab.nimsresults
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -16,50 +17,48 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 /**
- * Android Compose has no built-in draggable LazyColumn scrollbar.
- * A narrow touch rail maps thumb position to LazyListState item index.
- * Natural fling/regular finger scrolling remains unchanged.
- * Approximate positioning is intentional for variable-height result cards.
+ * Manual drag scrollbar for variable-height LazyColumn cards, including
+ * a single long investigation (item count alone is not a scroll indicator).
+ * Uses a measured-height estimate; clinical content is never truncated.
  */
 @Composable
 fun DraggableResultsScrollbar(state: LazyListState, modifier: Modifier = Modifier) {
-    val count = state.layoutInfo.totalItemsCount
-    val visible = state.layoutInfo.visibleItemsInfo.size
-    if (count <= 8 || visible <= 0 || count <= visible) return
+    val info = state.layoutInfo
+    val entries = info.visibleItemsInfo
+    val count = info.totalItemsCount
+    val canScroll = state.canScrollForward || state.canScrollBackward
+    if (!canScroll || entries.isEmpty()) return
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    BoxWithConstraints(modifier.width(24.dp).fillMaxHeight()) {
-        val thumbHeight = (maxHeight * (visible.toFloat() / count))
-            .coerceAtLeast(48.dp).coerceAtMost(maxHeight)
-        val travel = (maxHeight - thumbHeight).coerceAtLeast(0.dp)
-        val maxIndex = (count - visible).coerceAtLeast(1)
-        val fraction = (state.firstVisibleItemIndex.toFloat() / maxIndex)
-            .coerceIn(0f, 1f)
-        val travelPx = with(density) { travel.toPx() }
+    val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
+    val averageItem = entries.map { it.size }.average().coerceAtLeast(1.0)
+    val estimateTotal = (averageItem * count).coerceAtLeast(viewport.toDouble() + 1.0)
+    val scrollablePixels = (estimateTotal - viewport).coerceAtLeast(1.0)
+    val currentPixels = (state.firstVisibleItemIndex * averageItem +
+        state.firstVisibleItemScrollOffset).coerceAtLeast(0.0)
+    val fraction = (currentPixels / scrollablePixels).toFloat().coerceIn(0f, 1f)
 
-        fun goTo(pointerY: Float) {
-            if (travelPx <= 0f) return
-            val thumbPx = with(density) { thumbHeight.toPx() }
-            val newFraction = ((pointerY - thumbPx / 2f) / travelPx).coerceIn(0f, 1f)
-            val target = (newFraction * maxIndex).toInt().coerceIn(0, count - 1)
-            scope.launch { state.scrollToItem(target) }
-        }
+    BoxWithConstraints(modifier.width(24.dp).fillMaxHeight()) {
+        val thumbHeight = (maxHeight * (viewport / estimateTotal).toFloat())
+            .coerceAtLeast(46.dp).coerceAtMost(maxHeight)
+        val travel = (maxHeight - thumbHeight).coerceAtLeast(0.dp)
+        val trackPixels = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
 
         Box(
             modifier = Modifier.fillMaxSize()
                 .pointerInput(count, maxHeight) {
                     detectDragGestures(
-                        onDragStart = { goTo(it.y) },
-                        onDrag = { change, _ ->
+                        onDrag = { change, delta ->
                             change.consume()
-                            goTo(change.position.y)
+                            val distance = (delta.y / trackPixels *
+                                scrollablePixels).toFloat()
+                            scope.launch { state.scrollBy(distance) }
                         }
                     )
                 },
@@ -72,7 +71,7 @@ fun DraggableResultsScrollbar(state: LazyListState, modifier: Modifier = Modifie
             Box(
                 Modifier.offset(y = travel * fraction)
                     .width(9.dp).height(thumbHeight)
-                    .background(Color(0xFF537B9A).copy(alpha = 0.88f),
+                    .background(Color(0xFF537B9A).copy(alpha = 0.9f),
                         RoundedCornerShape(8.dp))
             )
         }
