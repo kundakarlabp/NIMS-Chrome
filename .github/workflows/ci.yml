@@ -17,6 +17,7 @@ on:
       - fix/android-v112-report-completeness
       - fix/android-v113-inline-review-diagnostics
       - fix/android-v114-global-diagnostics-recent-scroll
+      - fix/android-v115-integrated-results-pdf-evidence
   pull_request:
     branches:
       - release/android-native-rebuild-base
