@@ -2145,9 +2145,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Review " + mapping.candidates.size + " related source PDFs")
                             }
                         } else if (current.reports.isNotEmpty()) {
-                            TextButton(onClick = {
-                                browseSourceReports(test)
-                            }) { Text("Browse source reports · no verified PDF match") }
+                            TextButton(onClick = { browseSourceReports(test) }) {
+                                Text("Find original PDF in All results")
+                            }
                         }
                         if (chooseSource) {
                             AlertDialog(
@@ -2545,6 +2545,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val (test, accession) = study
                             val key = date + "|" + test + "|" + accession
                             val expanded = expandedTest == key
+                            var showPdfOptions by remember(current.patient.crNo, key) {
+                                mutableStateOf(false)
+                            }
                             val sourceRows = remember(current.results, study, date) {
                                 current.results.filter {
                                     it.date == date && it.test == test && it.labNumber == accession
@@ -2622,16 +2625,38 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             "verify the signed source PDF.", fontSize = 11.sp,
                                         color = Color(0xFF875B22))
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    if (sourceLink.verified != null) {
+                                when {
+                                    sourceLink.verified != null ->
                                         TextButton(onClick = {
                                             openReport(sourceLink.verified.url)
-                                        }) { Text("Open matched PDF", fontSize = 11.sp) }
-                                    } else {
+                                        }) { Text("Open accession-matched PDF") }
+                                    sourceLink.candidates.size == 1 ->
                                         TextButton(onClick = {
-                                            browseSourceReports(test)
-                                        }) { Text("Browse source PDFs", fontSize = 11.sp) }
+                                            openReport(sourceLink.candidates.single().url)
+                                        }) { Text("Open related PDF · verify report identity") }
+                                    sourceLink.candidates.isNotEmpty() -> {
+                                        TextButton(onClick = {
+                                            showPdfOptions = !showPdfOptions
+                                        }) {
+                                            Text(if (showPdfOptions) "Hide PDF options" else
+                                                "Review " + sourceLink.candidates.size + " source PDFs")
+                                        }
+                                        if (showPdfOptions) {
+                                            Text("Candidates only: confirm original laboratory number, " +
+                                                "specimen and date before using.",
+                                                fontSize = 10.sp, color = Color(0xFF875B22))
+                                            sourceLink.candidates.forEach { report ->
+                                                TextButton(onClick = { openReport(report.url) }) {
+                                                    Text("PDF · " + report.title + " · " +
+                                                        report.date.ifBlank { "date unavailable" },
+                                                        fontSize = 11.sp)
+                                                }
+                                            }
+                                        }
                                     }
+                                }
+                                TextButton(onClick = { browseSourceReports(test) }) {
+                                    Text("Browse all original PDFs", fontSize = 11.sp)
                                 }
                                 TextButton(onClick = { expandedTest = "" }) {
                                     Text("Collapse report ↑", fontSize = 11.sp)
