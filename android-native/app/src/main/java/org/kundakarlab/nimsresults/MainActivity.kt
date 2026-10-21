@@ -501,6 +501,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 val inventory = try {
                     reportRepository.load(cr, restSeed)
                 } catch (mismatch: IdentityMismatchException) {
+                    DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                     runOnUiThread {
                         if (requestId == activeRequestId) {
                             statusText = "Report identity mismatch. PDF links withheld."
@@ -508,6 +509,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     return@execute
                 } catch (_: Throwable) {
+                    DiagnosticEvents.record("REPORT_INDEX_FAILED")
                     null
                 }
                 runOnUiThread {
@@ -520,6 +522,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         apiReportCount + " source reports"
                 }
             } catch (error: Throwable) {
+                DiagnosticEvents.record("STRUCTURED_FAILURE")
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     loadStage = LoadStage.ERROR
@@ -534,6 +537,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         runOnUiThread {
             val authLike = Regex("(?i)auth|login|session").containsMatchIn(message)
+            DiagnosticEvents.record(if (authLike) "AUTH_REQUIRED" else "STRUCTURED_FAILURE")
             if (verifiedRestReports.isNotEmpty()) {
                 loadStage = LoadStage.READY
                 if (authLike) pendingCrAfterLogin = activeCr
@@ -561,11 +565,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun diagnosticsText(): String {
         val current = bundle
         return buildString {
-            appendLine("NIMS Results diagnostics")
+            appendLine("NIMS Results diagnostics · entire app")
+            appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
-            appendLine("app.status=" + statusText.replace(Regex("""\b\d{15}\b"""), "[CR redacted]"))
             appendLine("app.crInputLength=${crInput.length}")
             appendLine("app.activeCrPresent=${activeCr.isNotBlank()}")
             appendLine("app.pendingCrAfterLogin=${pendingCrAfterLogin.isNotBlank()}")
@@ -575,14 +579,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.stage=$apiStage")
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
-            append(engine.safeDiagnostics())
+            appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
+            if (::engine.isInitialized) {
+                // Engine details are restricted to boolean lifecycle evidence.
+                val safe = engine.safeDiagnostics().lineSequence()
+                    .filterNot { it.startsWith("engine.currentPath=") }
+                    .joinToString("\n")
+                appendLine(safe)
+            }
+            append(AppDiagnostics.summarize(current))
         }
     }
 
     private fun copyDiagnostics() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("NIMS diagnostics", diagnosticsText()))
-        Toast.makeText(this, "Safe diagnostics copied", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "App-wide diagnostics copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun browseSourceReports(test: String) {
@@ -596,14 +608,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             else -> "All"
         }
         selectedTab = ResultsTab.REPORTS
-    }
-
-    private fun copyReportDiagnostics(test: String, rows: List<LabResult>,
-                                      reports: List<ReportRef>, cr: String) {
-        val report = ReportDiagnostics.describe(test, rows, reports, cr)
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS report diagnostics", report))
-        Toast.makeText(this, "Redacted report diagnostics copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun openReport(url: String) {
@@ -809,7 +813,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(if (appLockEnabled) "Lock On" else "Device lock", fontSize = 12.sp)
                 }
                 TextButton(onClick = { copyDiagnostics() }) {
-                    Text("Diagnostics", fontSize = 12.sp)
+                    Text("Copy app diagnostics", fontSize = 12.sp)
                 }
             }
         }
@@ -1067,6 +1071,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     TextButton(onClick = { shelfOpen = true },
                         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
                         Text("Patients", fontSize = 11.sp)
+                    }
+                    TextButton(onClick = { copyDiagnostics() },
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                        Text("Diagnostics", fontSize = 10.sp)
                     }
                     TextButton(onClick = { refreshCurrent() },
                         contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) {
@@ -1460,9 +1468,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else "Show all " + byDate.size + " dates")
                     }
                 }
-                TextButton(onClick = {
-                    copyReportDiagnostics(test, rows, inventory, patientCr)
-                }) { Text("Copy report diagnostics (redacted)", fontSize = 11.sp) }
                 Text("Original report identity must match the source accession.",
                     color = Color(0xFF66788A), fontSize = 10.sp)
             }
@@ -2076,10 +2081,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             )
                         }
-                        TextButton(onClick = {
-                            copyReportDiagnostics(test, rows, current.reports,
-                                current.patient.crNo)
-                        }) { Text("Copy report diagnostics", fontSize = 11.sp) }
                         if (isCulture && clinical.none { row ->
                                 Regex("(?i)sensitivity|susceptib|antibiogram|\\bmic\\b|resistan")
                                     .containsMatchIn(row.parameter + " " + row.valueText)
@@ -2610,10 +2611,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             browseSourceReports(test)
                                         }) { Text("Browse source PDFs", fontSize = 11.sp) }
                                     }
-                                    TextButton(onClick = {
-                                        copyReportDiagnostics(test, sourceRows, current.reports,
-                                            current.patient.crNo)
-                                    }) { Text("Copy diagnostics", fontSize = 11.sp) }
                                 }
                                 TextButton(onClick = { expandedTest = "" }) {
                                     Text("Collapse report ↑", fontSize = 11.sp)
