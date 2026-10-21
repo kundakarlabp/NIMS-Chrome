@@ -1308,8 +1308,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     " · " + current.results.size + " source fields · " +
                     current.reports.size + " report-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
-                Text("Source fields are not the same as verified clinical parameters; " +
-                    "use original PDFs for categorical and narrative reports.",
+                Text("Original signed PDFs are accessible through All results.",
                     fontSize = 10.sp, color = Color(0xFF829AB1))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()) {
@@ -1997,8 +1996,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             item {
                 Text("Microbiology reports", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("Structured groups: " + grouped.size + " · source microbiology PDFs: " +
-                    sourceMicro.size + ". Reports without structured values remain accessible.",
+                Text(grouped.size.toString() + " investigations · " +
+                    sourceMicro.size + " original microbiology PDFs available in All results.",
                     color = Color(0xFF66788A), fontSize = 11.sp)
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2043,6 +2042,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 } else null
                 val accession = ClinicalPresentation.accession(rows)
                     .ifBlank { verifiedPdf?.labNumber.orEmpty() }
+                val related = if (exact == null) mapping.candidates.singleOrNull()
+                    else null
+                val relatedHeader = related?.let {
+                    ReportTitleCache.header(it.url)?.takeIf { header ->
+                        header.crNo == current.patient.crNo
+                    }
+                }
                 val sentDate = ClinicalPresentation.sentDate(rows)
                     .ifBlank { verifiedPdf?.collectionDate.orEmpty() }
                 val reportedDate = ClinicalPresentation.reportedDate(rows)
@@ -2070,6 +2076,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("Reported date: " +
                             reportedDate.ifBlank { "Not available (result date: " + date + ")" },
                             fontSize = 11.sp, color = Color(0xFF486581))
+                        if (relatedHeader != null) {
+                            val possible = listOfNotNull(
+                                relatedHeader.labNumber.takeIf(String::isNotBlank)
+                                    ?.let { "Lab " + it },
+                                relatedHeader.collectionDate.takeIf(String::isNotBlank)
+                                    ?.let { "sent " + it },
+                                relatedHeader.reportedDate.takeIf(String::isNotBlank)
+                                    ?.let { "reported " + it }
+                            )
+                            if (possible.isNotEmpty()) Text(
+                                "Related source PDF (not specimen-verified): " +
+                                    possible.joinToString(" · "),
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                        }
                         val reportRows = clinical.filter { row ->
                             row.parameter.equals("Result", true) ||
                             row.valueText.contains("CULTURE REPORT", true) ||
@@ -2138,11 +2158,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             OutlinedButton(onClick = { openReport(exact.url) }) {
                                 Text("Verified accession-linked PDF")
                             }
+                        } else if (mapping.candidates.size == 1) {
+                            TextButton(onClick = {
+                                openReport(mapping.candidates.single().url)
+                            }) { Text("Open related PDF · confirm identity") }
                         } else if (mapping.candidates.isNotEmpty()) {
-                            Text("These PDFs are related by test and date, not verified to this specimen.",
-                                fontSize = 10.sp, color = Color(0xFF875B22))
                             TextButton(onClick = { chooseSource = true }) {
-                                Text("Review " + mapping.candidates.size + " related source PDFs")
+                                Text("Review " + mapping.candidates.size +
+                                    " related source PDFs")
                             }
                         } else if (current.reports.isNotEmpty()) {
                             TextButton(onClick = { browseSourceReports(test) }) {
@@ -2213,9 +2236,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
-    private fun isMicroTechnicalField(parameter: String): Boolean =
-        Regex("(?i)^(test\\s*done\\s*by|sample\\s*processed|processed\\s*by|entered\\s*by|verified\\s*by|machine\\s*(?:id|no)|lab\\s*id|technician)$")
-            .matches(parameter.trim().trimEnd(':').trim())
 
     @Composable
     private fun TrendsScreen(current: ClinicalBundle, scroll: LazyListState) {
