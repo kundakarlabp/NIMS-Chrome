@@ -2573,10 +2573,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     "low" in flag || "critical" in flag
                 val meaningful = !ClinicalReportRenderer.isPlaceholder(row) &&
                     !ClinicalReportRenderer.isUninterpretedCode(row)
+                val section = ResultSections.of(row.test)
                 (category == "Raw" ||
                     category == "Clinical" && meaningful ||
-                    category == "Labs" && !isCulture && meaningful ||
-                    category == "Culture" && isCulture && meaningful ||
+                    category == "Labs" && section != ResultSection.MICROBIOLOGY && meaningful ||
+                    category == "Microbiology" && section == ResultSection.MICROBIOLOGY && meaningful ||
+                    category == "Metabolic" && section == ResultSection.METABOLIC && meaningful ||
+                    category == "Pathology" && section == ResultSection.PATHOLOGY && meaningful ||
                     category == "Flagged" && flagged && meaningful) &&
                     ClinicalResultRules.inWindow(row.date, latest, days) &&
                     (query.isBlank() || (row.test + " " + row.parameter + " " +
@@ -2605,7 +2608,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 )
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Clinical", "Labs", "Culture", "Flagged", "Raw").forEach { name ->
+                    listOf("Clinical", "Microbiology", "Metabolic", "Pathology", "Labs", "Flagged", "Raw").forEach { name ->
                         FilterChip(selected = category == name,
                             onClick = { category = name },
                             label = { Text(name, fontSize = 11.sp) })
