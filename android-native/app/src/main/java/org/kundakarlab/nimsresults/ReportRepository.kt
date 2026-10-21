@@ -388,6 +388,8 @@ object OpaqueReportTitles {
             """(?i)\bvoriconazole\s+report\b|\bserum\s+voriconazole\s+levels\b""" to "Voriconazole therapeutic drug monitoring",
             """(?i)\bdengue\s+virus\s+ns1\b""" to "Dengue serology (NS1 / antibodies)",
             """(?i)\bstrip\s+test\s+for\s+malaria\b|\bsmear\s+for\s+mp\b""" to "Malaria diagnostics",
+            """(?i)\bgram(?:s|['’]s)?\s*(?:stain(?:ing)?|smear)\b""" to "Gram stain",
+            """(?i)\b(?:afb|acid\s*fast)\s*smear\b|\btb\s*fluorescence\s*stain(?:ing)?\b""" to "AFB smear",
             """(?i)\b(?:aerobic|blood|fungal|urine)\s+culture\b""" to "Microbiology culture report",
             """(?i)\bc[- ]?reactive\s+protein\b""" to "C-reactive protein",
             """(?i)\b(?:complete\s+blood\s+count|cbc\s*[\(+])\b""" to "Complete blood count",
@@ -411,15 +413,17 @@ data class PdfDocumentHeader(
 
 object PdfDocumentHeaders {
     fun parse(text: String): PdfDocumentHeader {
-        // Header extraction is best-effort: do not infer dates from free text.
-        fun field(pattern: String) = Regex(pattern).find(text)?.groupValues?.getOrNull(1).orEmpty()
-        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{4}(?:\s+\d{1,2}:\d{2})?)"""
+        // Only explicitly labelled header fields count. The original PDF is
+        // authoritative; names/dates alone cannot link a specimen.
+        fun field(pattern: String): String = Regex(pattern, RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{4}(?:\s+\d{1,2}:\d{2})?|\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)"""
         return PdfDocumentHeader(
-            crNo = field("""(?i)\bCR\s*No\.?\s*:\s*(\d{15})\b"""),
-            labNumber = field("""(?i)\bLab/Study\s*No\.?\s*:\s*([A-Za-z0-9/_-]+)"""),
-            collectionDate = field("(?i)\\bColl/Study\\s*Date\\s*:\\s*" + date),
-            reportedDate = field("(?i)\\bReporting\\s*Date\\s*:\\s*" + date),
-            orderDate = field("(?i)\\bRequisition\\s*Date\\s*:\\s*" + date)
+            crNo = field("""\bCR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b"""),
+            labNumber = field("""\b(?:Lab\s*/\s*Study|Lab\s*Number|Lab\s*No|Accession(?:\s*Number|\s*No)?|Study\s*No)\.?\s*(?:No\.?)?\s*[:#\-]\s*([A-Za-z0-9/_-]+)"""),
+            collectionDate = field("""\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date),
+            reportedDate = field("""\b(?:Reporting|Reported|Report\s*Issued|Validation)\s*Date\s*[:#\-]\s*""" + date),
+            orderDate = field("""\b(?:Requisition|Ordered|Order)\s*Date\s*[:#\-]\s*""" + date)
         )
     }
 }
