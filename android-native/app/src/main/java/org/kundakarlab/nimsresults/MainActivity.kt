@@ -64,7 +64,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,7 +79,6 @@ import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var root: FrameLayout
@@ -649,7 +647,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val scrollByTab = remember(current?.patient?.crNo) {
             ResultsTab.entries.associateWith { LazyListState() }
         }
-        val scrollScope = rememberCoroutineScope()
         MaterialTheme(colorScheme = colors) {
             Scaffold(
                 topBar = { AppHeader() },
@@ -712,28 +709,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 ResultsTab.TRENDS -> TrendsScreen(current, scrollByTab.getValue(ResultsTab.TRENDS))
                                 ResultsTab.ALL -> AllResultsScreen(current, scrollByTab.getValue(ResultsTab.ALL))
                             }
-                            // Works across all long result tabs, without changing
-                            // the selected clinical report or switching tabs.
-                            val activeScroll = scrollByTab.getValue(selectedTab)
-                            if (activeScroll.layoutInfo.totalItemsCount > 8) {
-                                Column(
-                                    modifier = Modifier.align(Alignment.BottomEnd)
-                                        .padding(end = 7.dp, bottom = 10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { scrollScope.launch { activeScroll.animateScrollToItem(0) } },
-                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                                    ) { Text("↑ Top", fontSize = 11.sp) }
-                                    OutlinedButton(
-                                        onClick = { scrollScope.launch {
-                                            activeScroll.animateScrollToItem(
-                                                (activeScroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
-                                        } },
-                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                                    ) { Text("↓ End", fontSize = 11.sp) }
-                                }
-                            }
+                            DraggableResultsScrollbar(
+                                scrollByTab.getValue(selectedTab),
+                                Modifier.align(Alignment.CenterEnd)
+                            )
                         }
                     }
                 }
