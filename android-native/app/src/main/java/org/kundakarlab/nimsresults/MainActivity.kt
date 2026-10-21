@@ -61,6 +61,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -2598,44 +2599,149 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .sortedByDescending { BulkParser.dateKey(it.first) }
         }
         var expandedTest by remember(current.patient.crNo) { mutableStateOf("") }
+        var pdfQuery by remember(current.patient.crNo) { mutableStateOf("") }
+        var expandedSource by remember(current.patient.crNo) { mutableStateOf("") }
+        val sourceIndex = remember(current.reports, pdfQuery, allResultsSourceFilter, reportTitleEpoch) {
+            current.reports.filter { report ->
+                val name = listOf(report.title, report.department,
+                    ReportTitleCache.get(report.url).orEmpty(),
+                    report.date, report.sentDate, report.reportedDate,
+                    report.labNumber).joinToString(" ")
+                val group = when(allResultsSourceFilter) {
+                    "All" -> true
+                    "Blood bank" -> Regex("""(?i)blood\\s*group|antibody\\s*screen|transfusion|immunoh[ae]matology|blood\\s*bank|cross\\s*match|\\bbgt\\b""").containsMatchIn(name)
+                    "Microbiology" -> ClinicalReportRenderer.isMicrobiologyInvestigation(name) ||
+                        report.department.contains("microbiology", true)
+                    "Pathology" -> ResultSections.of(name) == ResultSection.PATHOLOGY
+                    "Metabolic" -> ResultSections.of(name) == ResultSection.METABOLIC
+                    else -> true
+                }
+                group && (pdfQuery.isBlank() || name.contains(pdfQuery, ignoreCase = true))
+            }.sortedByDescending {
+                RecentReportDates.dateFor(it).first ?: LocalDate.MIN
+            }
+        }
+        LaunchedEffect(allResultsSourceMode) {
+            scroll.scrollToItem(0)
+        }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
-                Text("Results explorer", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text(filtered.size.toString() + " matching values · " +
-                    byDate.size + " result dates · " + current.reports.size +
-                    " source PDFs", fontSize = 11.sp, color = Color(0xFF66788A))
+                Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    FilterChip(selected = !allResultsSourceMode,
+                        onClick = { allResultsSourceMode = false },
+                        label = { Text("Clinical results", fontSize = 12.sp) })
+                    FilterChip(selected = allResultsSourceMode,
+                        onClick = { allResultsSourceMode = true },
+                        label = { Text("Original PDFs (" + current.reports.size + ")",
+                            fontSize = 12.sp) })
+                }
+                Text(if (allResultsSourceMode)
+                    sourceIndex.size.toString() + " source reports · original NIMS PDF links"
+                    else filtered.size.toString() + " result fields · " +
+                        byDate.size + " result dates",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
                 Spacer(Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Find organism, test, value or date") },
-                    singleLine = true
-                )
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Clinical", "Microbiology", "Metabolic", "Pathology", "Labs", "Flagged", "Raw").forEach { name ->
-                        FilterChip(selected = category == name,
-                            onClick = { category = name },
-                            label = { Text(name, fontSize = 11.sp) })
+                if (allResultsSourceMode) {
+                    OutlinedTextField(value = pdfQuery, onValueChange = { pdfQuery = it },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        placeholder = { Text("Search PDF title, laboratory number or date") })
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        listOf("All", "Microbiology", "Blood bank", "Pathology", "Metabolic")
+                            .forEach { choice ->
+                                FilterChip(selected = allResultsSourceFilter == choice,
+                                    onClick = { allResultsSourceFilter = choice },
+                                    label = { Text(choice, fontSize = 11.sp) })
+                            }
                     }
-                }
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("7D", "30D", "90D", "All").forEach { value ->
-                        FilterChip(selected = range == value,
-                            onClick = { range = value },
-                            label = { Text(value, fontSize = 11.sp) })
+                } else {
+                    OutlinedTextField(value = query, onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        placeholder = { Text("Find organism, test, value or date") })
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        listOf("Clinical", "Microbiology", "Metabolic", "Pathology",
+                            "Labs", "Flagged", "Raw").forEach { name ->
+                            FilterChip(selected = category == name,
+                                onClick = { category = name },
+                                label = { Text(name, fontSize = 11.sp) })
+                        }
                     }
-                }
-                OutlinedButton(onClick = { allResultsSourceMode = true
-                    selectedTab = ResultsTab.ALL },
-                    modifier = Modifier.fillMaxWidth()) {
-                    Text("Browse source reports (" + current.reports.size + ")",
-                        fontSize = 12.sp)
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        listOf("7D", "30D", "90D", "All").forEach { value ->
+                            FilterChip(selected = range == value,
+                                onClick = { range = value },
+                                label = { Text(value, fontSize = 11.sp) })
+                        }
+                    }
                 }
             }
+            if (allResultsSourceMode) {
+                if (sourceIndex.isEmpty()) item {
+                    Text("No source PDFs found. Switch to All or clear search.",
+                        color = Color(0xFF66788A))
+                }
+                items(sourceIndex, key = { "source|" + it.id + "|" + it.url }) { report ->
+                    val learned = ReportTitleCache.get(report.url)
+                    val header = ReportTitleCache.header(report.url)
+                        ?.takeIf { it.crNo == current.patient.crNo }
+                    val expanded = expandedSource == report.url
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                            Row(Modifier.fillMaxWidth().clickable {
+                                expandedSource = if (expanded) "" else report.url
+                            }, verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(learned ?: report.title, fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF102A43))
+                                    if (learned != null && learned != report.title)
+                                        Text("NIMS index: " + report.title,
+                                            fontSize = 10.sp, color = Color(0xFF66788A))
+                                    val timestamp = header?.reportedDate.orEmpty()
+                                        .ifBlank { report.reportedDate }
+                                        .ifBlank { report.date }
+                                    if (timestamp.isNotBlank()) Text(timestamp,
+                                        fontSize = 11.sp, color = Color(0xFF66788A))
+                                }
+                                Text(if (expanded) "−" else "+", fontSize = 18.sp,
+                                    color = Color(0xFF0B5CAB))
+                            }
+                            if (expanded) {
+                                val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
+                                val sent = header?.collectionDate.orEmpty().ifBlank { report.sentDate }
+                                val reported = header?.reportedDate.orEmpty().ifBlank { report.reportedDate }
+                                if (lab.isNotBlank()) Text("Lab/study no.: " + lab, fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text("Collected/sent: " + sent,
+                                    fontSize = 11.sp)
+                                if (reported.isNotBlank()) Text("Reported: " + reported,
+                                    fontSize = 11.sp)
+                                if (lab.isBlank() && header == null) Text(
+                                    "Source identification requires inspection of the PDF header.",
+                                    fontSize = 10.sp, color = Color(0xFF875B22))
+                                val extracted = ReportTitleCache.extracted(report.url).orEmpty()
+                                if (header != null) {
+                                    val grouping = PdfClinicalSummaries.bloodGrouping(extracted)
+                                    if (grouping != null) Text(
+                                        "ABO/Rh: " + grouping.group +
+                                            if (grouping.antibodyScreen.isNotBlank())
+                                                " · antibody screen: " + grouping.antibodyScreen else "",
+                                        fontSize = 12.sp)
+                                }
+                            }
+                            if (report.url.isNotBlank()) {
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text("Open original NIMS PDF")
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
             if (byDate.isEmpty()) {
                 item { Text("No results match these filters.",
                     color = Color(0xFF66788A)) }
@@ -2772,6 +2878,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         }
                     }
                 }
+            }
             }
         }
     }
