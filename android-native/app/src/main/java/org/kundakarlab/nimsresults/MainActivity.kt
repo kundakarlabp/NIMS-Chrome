@@ -78,7 +78,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import java.util.UUID
+import java.time.LocalDate
 import java.util.concurrent.Executors
+
+private data class RecentEntry(
+    val key: String,
+    val title: String,
+    val date: LocalDate,
+    val dateLabel: String,
+    val report: ReportRef? = null,
+    val rows: List<LabResult> = emptyList()
+)
 
 class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var root: FrameLayout
@@ -702,6 +712,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (selectedTab) {
                                 ResultsTab.OVERVIEW -> OverviewScreen(current, scrollByTab.getValue(ResultsTab.OVERVIEW))
+                                ResultsTab.RECENT -> RecentScreen(current, scrollByTab.getValue(ResultsTab.RECENT))
                                 ResultsTab.ID -> IdFocusScreen(current, scrollByTab.getValue(ResultsTab.ID))
                                 ResultsTab.LABS -> LabsScreen(current, scrollByTab.getValue(ResultsTab.LABS))
                                 ResultsTab.MICROBIOLOGY -> MicroScreen(current, scrollByTab.getValue(ResultsTab.MICROBIOLOGY))
@@ -1087,6 +1098,152 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+
+    @Composable
+    private fun RecentScreen(current: ClinicalBundle, scroll: LazyListState) {
+        // Clock is device-local. Do not use fetch date in place of laboratory date.
+        val today = LocalDate.now()
+        var filter by remember(current.patient.crNo) { mutableStateOf("All") }
+        var expandedKey by remember(current.patient.crNo) { mutableStateOf("") }
+        val recent = remember(current.results, current.reports, today, reportTitleEpoch) {
+            val group = current.results.groupBy {
+                Triple(it.test, it.date, it.labNumber)
+            }
+            val covered = mutableSetOf<String>()
+            val structured = group.mapNotNull { (identity, rows) ->
+                val (date, type) = RecentReportDates.dateFor(rows)
+                if (!RecentReportDates.isLastWeek(date, today)) null
+                else {
+                    val exact = ReportLinkResolver.candidates(rows,
+                        current.reports, current.patient.crNo).verified
+                    if (exact != null) covered.add(exact.url)
+                    RecentEntry(
+                        key = "structured|" + identity.toString(),
+                        title = identity.first.ifBlank { "Unlabelled investigation" },
+                        date = date!!,
+                        dateLabel = type,
+                        report = exact,
+                        rows = rows
+                    )
+                }
+            }
+            val inventory = current.reports.mapNotNull { report ->
+                val (date, type) = RecentReportDates.dateFor(report)
+                if (!RecentReportDates.isLastWeek(date, today) ||
+                    report.url in covered) null
+                else RecentEntry(
+                    key = "source|" + report.id + "|" + report.url,
+                    title = ReportTitleCache.get(report.url) ?: report.title,
+                    date = date!!,
+                    dateLabel = type,
+                    report = report
+                )
+            }
+            (structured + inventory).sortedWith(
+                compareByDescending<RecentEntry> { it.date }
+                    .thenBy { it.title }
+            )
+        }
+        val shown = remember(recent, filter) {
+            recent.filter {
+                when(filter) {
+                    "Source PDFs" -> it.rows.isEmpty()
+                    "Results" -> it.rows.isNotEmpty()
+                    "Microbiology" ->
+                        ResultSections.of(it.title) == ResultSection.MICROBIOLOGY
+                    else -> true
+                }
+            }
+        }
+        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                Text("Reports · last 7 days", fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp, color = Color(0xFF102A43))
+                Text(today.minusDays(6).toString() + " to " + today.toString() +
+                    " (device-local dates, inclusive)",
+                    fontSize = 11.sp, color = Color(0xFF66788A))
+                Text("Based on lab reported date when supplied; otherwise the " +
+                    "source-index/result date is explicitly labelled. " +
+                    "Opening or fetching an older report does not make it recent.",
+                    fontSize = 10.sp, color = Color(0xFF66788A))
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("All", "Source PDFs", "Results", "Microbiology").forEach { name ->
+                        FilterChip(selected = filter == name,
+                            onClick = { filter = name },
+                            label = { Text(name, fontSize = 11.sp) })
+                    }
+                }
+                Text(shown.size.toString() + " entries · " +
+                    recent.count { it.rows.isNotEmpty() } + " structured groups · " +
+                    recent.count { it.rows.isEmpty() } + " additional source-index entries",
+                    fontSize = 11.sp, color = Color(0xFF486581))
+            }
+            if (shown.isEmpty()) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Text("No investigations dated within the last seven calendar days " +
+                            "match this filter. Older reports remain available in Reports " +
+                            "and All results.",
+                            modifier = Modifier.padding(14.dp),
+                            color = Color(0xFF66788A), fontSize = 13.sp)
+                    }
+                }
+            }
+            items(shown, key = { it.key }) { entry ->
+                val expanded = expandedKey == entry.key
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(11.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                expandedKey = if (expanded) "" else entry.key
+                            }) {
+                            Column(Modifier.weight(1f)) {
+                                Text(entry.title, fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp, color = Color(0xFF102A43))
+                                Text(entry.dateLabel + ": " + entry.date.toString() +
+                                    " · " + if (entry.rows.isNotEmpty())
+                                        "Structured result" else "Source report index",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                            }
+                            Text(if (expanded) "Collapse ↑" else "Expand ↓",
+                                fontSize = 11.sp, color = Color(0xFF0B5CAB))
+                        }
+                        if (expanded) {
+                            if (entry.rows.isNotEmpty()) {
+                                val display = ClinicalReportRenderer.preferredRows(entry.rows)
+                                if (display.isEmpty()) Text(
+                                    "Only unclassified or technical source fields; verify original PDF.",
+                                    fontSize = 11.sp, color = Color(0xFF875B22))
+                                display.forEach { row ->
+                                    Text(row.parameter.ifBlank { "Result" },
+                                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(row.valueText +
+                                        if (row.unit.isNotBlank()) " " + row.unit else "",
+                                        fontSize = 12.sp)
+                                }
+                            } else Text("Report-index entry; open the source PDF to " +
+                                "read its complete signed content.", fontSize = 11.sp)
+                            entry.report?.let { source ->
+                                if (source.url.isNotBlank()) {
+                                    TextButton(onClick = { openReport(source.url) }) {
+                                        Text("Open source PDF", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                            if (entry.report == null) {
+                                TextButton(onClick = { browseSourceReports(entry.title) }) {
+                                    Text("Browse NIMS source index", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     @Composable
     private fun OverviewScreen(current: ClinicalBundle, scroll: LazyListState) {
@@ -2636,6 +2793,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun tabLabel(tab: ResultsTab): String = when (tab) {
         ResultsTab.OVERVIEW -> "Overview"
+        ResultsTab.RECENT -> "Last 7 days"
         ResultsTab.ID -> "ID focus"
         ResultsTab.LABS -> "Labs"
         ResultsTab.MICROBIOLOGY -> "Microbiology"
