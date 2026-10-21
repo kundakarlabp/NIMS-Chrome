@@ -17,7 +17,7 @@ object ResultSections {
         if (Regex("""(?i)\b(?:histo\s*pathology|histopathology|biopsy|cytology|cytopathology|fine[\s-]*needle|fnac|peripheral[\s-]*smear|bone[\s-]*marrow|pathology[\s-]*specimen|immunohistochemistry|dic[\s-]*profile)\b""")
                 .containsMatchIn(test)) return ResultSection.PATHOLOGY
         if (ClinicalReportRenderer.isMicrobiologyInvestigation(test)) return ResultSection.MICROBIOLOGY
-        if (Regex("""(?i)\b(?:electrolyte|sodium|potassium|chloride|renal[\s-]*function|kidney[\s-]*function|liver[\s-]*function|hepatic[\s-]*function|creatinine|urea|uric[\s-]*acid|glucose|blood[\s-]*sugar|hba1c|glycated|albumin|bilirubin|transaminase|sgot|sgpt|alkaline[\s-]*phosphatase|total[\s-]*protein|complete[\s-]*urine[\s-]*examination|urine[\s-]*routine|urinalysis|metabolic|lipid[\s-]*profile|calcium|magnesium|phosphate|phosphorus|lactate|rft|lft|kft|bmp|cmp)\b""")
+        if (Regex("""(?i)\b(?:electrolytes?|sodium|potassium|chloride|renal[\s-]*function|kidney[\s-]*function|liver[\s-]*function|hepatic[\s-]*function|creatinine|urea|uric[\s-]*acid|glucose|blood[\s-]*sugar|hba1c|glycated|albumin|bilirubin|transaminase|sgot|sgpt|alkaline[\s-]*phosphatase|total[\s-]*protein|complete[\s-]*urine[\s-]*examination|urine[\s-]*routine|urinalysis|metabolic|lipid[\s-]*profile|calcium|magnesium|phosphate|phosphorus|lactate|rft|lft|kft|bmp|cmp)\b""")
                 .containsMatchIn(test)) return ResultSection.METABOLIC
         return ResultSection.OTHER
     }
