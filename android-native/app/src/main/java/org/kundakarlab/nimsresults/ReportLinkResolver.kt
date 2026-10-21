@@ -84,9 +84,13 @@ object ReportLinkResolver {
 
             // When NIMS lists only a generic Microbiology PDF title, surface
             // nearby dates as candidates; never make those automatic links.
-            val isMicroIndex = report.department.contains("microbiology", true) ||
-                Regex("""(?i)^(?:microbiology|bacteriology|microscopy)$""")
-                    .matches(report.title.trim())
+            val genericIndexTitle = Regex(
+                """(?i)^(?:microbiology|bacteriology|microscopy|investigation report|lab report|laboratory report|result|report)$"""
+            ).matches(report.title.trim())
+            val isMicroIndex = genericIndexTitle &&
+                (report.department.contains("microbiology", true) ||
+                    Regex("""(?i)^(?:microbiology|bacteriology|microscopy)$""")
+                        .matches(report.title.trim()))
             val genericMicro = micro && isMicroIndex && delta <= 2
             if (!sameTest && !genericMicro) return@mapNotNull null
             val rank = (if (sameTest) 100 else 0) + (7 - delta.toInt()) +
