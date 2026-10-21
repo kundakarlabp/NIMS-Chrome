@@ -277,6 +277,10 @@ class ReportActivity : Activity() {
                     }
                 }
             } catch (error: Throwable) {
+                DiagnosticEvents.record(
+                    if (error.message?.contains("PDF", true) == true) "PDF_NOT_VALID"
+                    else "PDF_HTTP_FAILED"
+                )
                 runOnUiThread {
                     progress.visibility = View.GONE
                     status.text = error.message ?: "Could not open NIMS report."
@@ -323,9 +327,11 @@ class ReportActivity : Activity() {
                         }.getText(doc).take(12000)
                     }
                 }.getOrNull().orEmpty()
+                if (sourceText.isBlank()) DiagnosticEvents.record("PDF_TEXT_MISSING")
                 val header = PdfDocumentHeaders.parse(sourceText)
                 if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
                     header.crNo != expectedCr) {
+                    DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                     runOnUiThread {
                         status.text = "Wrong patient CR in PDF — blocked"
                         progress.visibility = View.GONE
@@ -357,11 +363,13 @@ class ReportActivity : Activity() {
                 render(0)
             }
         } catch (_: Exception) {
+            DiagnosticEvents.record("PDF_RENDER_FAILED")
             runOnUiThread { if (!closing) {
                 progress.visibility = View.GONE
                 status.text = "PDF cannot be displayed. Try another source report."
             } }
         } catch (_: OutOfMemoryError) {
+            DiagnosticEvents.record("PDF_RENDER_FAILED")
             runOnUiThread { if (!closing) {
                 progress.visibility = View.GONE
                 status.text = "Not enough memory to display this PDF."
