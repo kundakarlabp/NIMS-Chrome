@@ -75,5 +75,6 @@ test('failed structured API exposes reason without removing fallback stages', ()
   assert.match(bg, /reason: bulk\.ok \? "" : \(bulk\.reason/);
   assert.match(bg, /reason: rest\.ok \? "" : \(rest\.reason/);
   assert.match(bg, /reason: item\.reason \|\| ""/);
-  assert.ok(bg.indexOf('tryBulkApiForDashboard(workerTabId, crNo)') < bg.indexOf('tryRestApiForDashboard(crNo)'));
+  const flow = bg.slice(bg.indexOf('async function fetchCrForDashboard(rawCrNo, sender, rawRequestId)'));
+  assert.ok(flow.indexOf('tryBulkApiForDashboard(workerTabId, crNo)') < flow.indexOf('tryRestApiForDashboard(crNo)'));
 });
