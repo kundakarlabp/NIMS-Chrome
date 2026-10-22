@@ -26,6 +26,7 @@ test('session rediscovery uses full authenticated NIMS allow-list', async () => 
     NIMS_URL_FILTERS: allowed,
     chrome: { tabs: { query: async opts => { queried = opts.url; return [{ id: 42 }]; } } },
     probeNimsTab: async () => ({ authenticated: true }),
+    finishDashboardLogin: async () => {},
     dashboardWorkerTabId: null,
     dashboardLastAuthenticated: null,
   });
