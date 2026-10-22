@@ -1839,6 +1839,7 @@ async function fetchCrForDashboard(rawCrNo, sender, rawRequestId) {
       source: "nims_bulk_api",
       ok: Boolean(bulk.ok),
       code: bulk.ok ? "" : (bulk.code || "NIMS_BULK_FAILED"),
+      reason: bulk.ok ? "" : (bulk.reason || "The structured NIMS API did not return usable results."),
       durationMs: Date.now() - bulkStarted,
       diagnostics: bulk.diagnostics || {}
     });
@@ -1861,6 +1862,7 @@ async function fetchCrForDashboard(rawCrNo, sender, rawRequestId) {
         source: "nims_rest_api",
         ok: Boolean(rest.ok),
         code: rest.ok ? "" : (rest.code || "NIMS_REST_UNAVAILABLE"),
+        reason: rest.ok ? "" : (rest.reason || "The report-list REST fallback did not return usable reports."),
         durationMs: Date.now() - restStarted,
         diagnostics: rest.diagnostics || {}
       });
@@ -1908,6 +1910,7 @@ async function fetchCrForDashboard(rawCrNo, sender, rawRequestId) {
         source: item.source,
         ok: item.ok,
         code: item.code,
+        reason: item.reason || "",
         durationMs: item.durationMs,
         diagnostics: item.diagnostics
       }))
