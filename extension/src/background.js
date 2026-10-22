@@ -1053,6 +1053,65 @@ async function pushDashboardEvent(eventType, payload) {
     : Promise.resolve()));
 }
 
+// chrome.storage.session survives MV3 service-worker suspension during manual CAPTCHA.
+const DASHBOARD_PENDING_LOGIN_KEY = "nimsDashboardPendingLogin";
+let dashboardLoginClosing = false;
+
+async function readPendingDashboardLogin() {
+  try {
+    const stored = (await chrome.storage.session.get(DASHBOARD_PENDING_LOGIN_KEY))[DASHBOARD_PENDING_LOGIN_KEY];
+    if (stored && Number.isInteger(stored.popupWindowId)) return stored;
+  } catch {}
+  return Number.isInteger(dashboardLoginWindowId)
+    ? { popupWindowId: dashboardLoginWindowId, hostWindowId: dashboardHostWindowId }
+    : null;
+}
+
+async function savePendingDashboardLogin(popupWindowId, hostWindowId) {
+  dashboardLoginWindowId = popupWindowId;
+  dashboardHostWindowId = hostWindowId;
+  try {
+    await chrome.storage.session.set({
+      [DASHBOARD_PENDING_LOGIN_KEY]: { popupWindowId, hostWindowId }
+    });
+  } catch {}
+}
+
+async function clearPendingDashboardLogin() {
+  dashboardLoginWindowId = null;
+  dashboardHostWindowId = null;
+  try { await chrome.storage.session.remove(DASHBOARD_PENDING_LOGIN_KEY); } catch {}
+}
+
+async function finishDashboardLogin(tab) {
+  if (dashboardLoginClosing || !tab || !tab.id) return;
+  const pending = await readPendingDashboardLogin();
+  if (!pending || tab.windowId !== pending.popupWindowId) return;
+  const hostWindowId = pending.hostWindowId;
+  if (!Number.isInteger(hostWindowId) || hostWindowId === pending.popupWindowId) return;
+  dashboardLoginClosing = true;
+  try {
+    // Keep the authenticated NIMS tab for subsequent API calls. Move it before
+    // closing ONLY the popup created by this connector, never a user-owned tab.
+    await chrome.tabs.move(tab.id, { windowId: hostWindowId, index: -1 });
+    dashboardWorkerTabId = tab.id;
+    try {
+      const dashboardTabs = await chrome.tabs.query({
+        windowId: hostWindowId, url: [DASHBOARD_URL_PATTERN]
+      });
+      const dashboardTab = dashboardTabs.find(item => item.id);
+      if (dashboardTab) await chrome.tabs.update(dashboardTab.id, { active: true });
+    } catch {}
+    try { await chrome.windows.remove(pending.popupWindowId); } catch {}
+    try { await chrome.windows.update(hostWindowId, { focused: true }); } catch {}
+    await clearPendingDashboardLogin();
+  } catch {
+    // If the authenticated tab could not be preserved, keep its login window open.
+  } finally {
+    dashboardLoginClosing = false;
+  }
+}
+
 async function handleDashboardSessionState(state, sender) {
   const tab = sender && sender.tab;
   if (!tab || !tab.id) return;
@@ -1064,14 +1123,7 @@ async function handleDashboardSessionState(state, sender) {
       patient: state.patient || {},
       updatedAt: Date.now()
     };
-    if (dashboardLoginWindowId && tab.windowId === dashboardLoginWindowId && dashboardHostWindowId) {
-      try {
-        await chrome.tabs.move(tab.id, { windowId: dashboardHostWindowId, index: -1 });
-        await chrome.tabs.update(tab.id, { active: false });
-      } catch {}
-      try { await chrome.windows.remove(dashboardLoginWindowId); } catch {}
-      dashboardLoginWindowId = null;
-    }
+    await finishDashboardLogin(tab);
     await pushDashboardEvent("KBP_NIMS_STATUS", { ok: true, loggedIn: true, state: "logged_in" });
   }
 }
@@ -1107,8 +1159,8 @@ async function probeNimsTab(tabId) {
 }
 
 async function getDashboardSessionStatus() {
-  // Manual login can finish in any protected NIMS module. Keep session
-  // rediscovery aligned with the same allow-list used by the content bridge.
+  // Reconfirm authentication from an actual protected NIMS frame; a login URL
+  // or a stale popup ID is never evidence of a valid session.
   const tabs = await chrome.tabs.query({ url: NIMS_URL_FILTERS }).catch(() => []);
   for (const tab of tabs) {
     if (!tab.id) continue;
@@ -1116,23 +1168,37 @@ async function getDashboardSessionStatus() {
     if (probe.authenticated) {
       dashboardWorkerTabId = tab.id;
       dashboardLastAuthenticated = { tabId: tab.id, frameId: 0, updatedAt: Date.now() };
+      await finishDashboardLogin(tab);
       return { ok: true, loggedIn: true, state: "logged_in" };
     }
   }
-  return { ok: true, loggedIn: false, state: dashboardLoginWindowId ? "signing_in" : "logged_out" };
+  const pending = await readPendingDashboardLogin();
+  if (!pending) return { ok: true, loggedIn: false, state: "logged_out" };
+  try {
+    await chrome.windows.get(pending.popupWindowId);
+    return { ok: true, loggedIn: false, state: "signing_in" };
+  } catch {
+    await clearPendingDashboardLogin();
+    return { ok: true, loggedIn: false, state: "logged_out" };
+  }
 }
 
 async function openDashboardLogin(sender) {
   const current = await getDashboardSessionStatus();
   if (current.loggedIn) return current;
-  dashboardHostWindowId = sender && sender.tab ? sender.tab.windowId : null;
-  if (dashboardLoginWindowId) {
+  const pending = await readPendingDashboardLogin();
+  if (pending) {
     try {
-      await chrome.windows.update(dashboardLoginWindowId, { focused: true });
+      await chrome.windows.update(pending.popupWindowId, { focused: true });
       return { ok: true, loggedIn: false, state: "signing_in" };
-    } catch {
-      dashboardLoginWindowId = null;
-    }
+    } catch { await clearPendingDashboardLogin(); }
+  }
+  const dashboardTabs = await chrome.tabs.query({ url: [DASHBOARD_URL_PATTERN] }).catch(() => []);
+  const hostWindowId = sender && sender.tab && Number.isInteger(sender.tab.windowId)
+    ? sender.tab.windowId
+    : (dashboardTabs[0] && dashboardTabs[0].windowId);
+  if (!Number.isInteger(hostWindowId)) {
+    return { ok: false, loggedIn: false, state: "error", error: "Dashboard window was not found. Refresh the dashboard and retry." };
   }
   const created = await chrome.windows.create({
     url: NIMS_LOGIN_URL_DASHBOARD,
@@ -1141,7 +1207,10 @@ async function openDashboardLogin(sender) {
     height: 820,
     focused: true
   });
-  dashboardLoginWindowId = created.id || null;
+  if (!Number.isInteger(created.id)) {
+    return { ok: false, loggedIn: false, state: "error", error: "Unable to open the NIMS login window." };
+  }
+  await savePendingDashboardLogin(created.id, hostWindowId);
   await pushDashboardEvent("KBP_NIMS_STATUS", { ok: true, loggedIn: false, state: "signing_in" });
   return { ok: true, loggedIn: false, state: "signing_in" };
 }
