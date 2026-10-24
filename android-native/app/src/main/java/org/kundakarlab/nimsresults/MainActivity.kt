@@ -100,6 +100,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
     private val worker = Executors.newSingleThreadExecutor()
+    private val pdfWorker = Executors.newSingleThreadExecutor()
+    @Volatile private var pdfIndexSelection = ""
+    private var pdfInspectedCount by mutableStateOf(0)
+    private var pdfConfirmedCount by mutableStateOf(0)
+    private var pdfTotalCount by mutableStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -308,7 +313,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             return
         }
         cancelTimeout()
-        if (bundle?.patient?.crNo != cr) bundle = null
+        pdfIndexSelection = ""
+        pdfInspectedCount = 0
+        pdfConfirmedCount = 0
+        pdfTotalCount = 0
+        if (bundle?.patient?.crNo != cr) {
+            // Cached source metadata is patient-specific, even when the HIS
+            // uses the same PRINTREPORT URL across different sessions.
+            ReportTitleCache.clear()
+            bundle = null
+        }
         activeCr = cr
         rememberCrLocally(cr)
         shelfOpen = false
@@ -419,6 +433,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun logout() {
         cancelTimeout()
         vault.clear()
+        pdfIndexSelection = ""
         cacheDir.listFiles { file ->
             file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
         }?.forEach { it.delete() }
@@ -532,6 +547,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     apiReportCount = (inventory?.reports ?: restSeed).size
                     statusText = initial.results.size.toString() + " structured values · " +
                         apiReportCount + " source reports"
+                    // All reports are inspected independently; a multi-study
+                    // PDF is one physical download with several accession parts.
+                    startPdfIndex(requestId, cr, inventory?.reports ?: restSeed)
                 }
             } catch (error: Throwable) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
@@ -622,6 +640,38 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         allResultsSourceFilter = reportCategoryPrefill
         selectedTab = ResultsTab.ALL
+    }
+
+    private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
+        val unique = reports.filter { it.url.isNotBlank() }.distinctBy { it.url }
+        pdfIndexSelection = requestId
+        pdfInspectedCount = 0
+        pdfConfirmedCount = 0
+        pdfTotalCount = unique.size
+        if (unique.isEmpty()) return
+        pdfWorker.execute {
+            val inspector = PdfSourceEnricher(applicationContext)
+            var confirmed = 0
+            unique.forEachIndexed { index, report ->
+                if (pdfIndexSelection != requestId || activeRequestId != requestId ||
+                    Thread.currentThread().isInterrupted) return@execute
+                val read = inspector.inspect(report, cr) {
+                    pdfIndexSelection == requestId && activeRequestId == requestId
+                }
+                if (read) confirmed++
+                if (index % 4 == 3 || index == unique.lastIndex) {
+                    val done = index + 1
+                    val success = confirmed
+                    runOnUiThread {
+                        if (pdfIndexSelection == requestId && activeRequestId == requestId) {
+                            pdfInspectedCount = done
+                            pdfConfirmedCount = success
+                            reportTitleEpoch++
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun openReport(url: String) {
@@ -2392,6 +2442,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 Text("$studyCount investigations · $sourceCount original PDFs · one integrated timeline",
                     fontSize = 11.sp, color = Color(0xFF66788A))
+                if (pdfTotalCount > 0) Text(
+                    "Source inspection: $pdfInspectedCount/$pdfTotalCount PDFs attempted · " +
+                        "$pdfConfirmedCount verified readable by patient CR",
+                    fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -2700,6 +2754,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         handler.removeCallbacksAndMessages(null)
         worker.shutdownNow()
+        pdfIndexSelection = ""
+        pdfWorker.shutdownNow()
         engine.destroy()
         super.onDestroy()
     }
