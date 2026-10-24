@@ -432,24 +432,37 @@ object ReportTitleCache {
     private val recognized = ConcurrentHashMap<String, String>()
     private val extractedByUrl = ConcurrentHashMap<String, String>()
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
-    fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean {
-        val header = PdfDocumentHeaders.parse(extracted)
-        // Wrong-patient source PDFs must never enrich the clinical dashboard.
-        if (expectedCr.isNotBlank() && header.crNo != expectedCr) return false
-        OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
-        // Volatile, on-device only; no persistent source text or external upload.
-        extractedByUrl[url] = extracted.take(12000)
-        if (header.crNo.isNotBlank() && expectedCr.isNotBlank() && header.crNo == expectedCr) {
-            headers[url] = header
+    private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
+
+    fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
+        learnPages(url, listOf(extracted), expectedCr)
+
+    /** Index all pages, not just page 1-2. Explicit CR proof is required to
+     * associate PDF contents with the selected patient's investigations. */
+    fun learnPages(url: String, pages: List<String>, expectedCr: String = ""): Boolean {
+        val crs = PdfSourceEvidence.patientCrs(pages)
+        if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
+        val full = pages.joinToString("\n\n") { it.take(40000) }
+        OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
+        extractedByUrl[url] = full.take(160000)
+        if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
+            val sections = PdfSourceEvidence.parts(pages, expectedCr)
+            sectionsByUrl[url] = sections
+            headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
+                ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
         }
         return true
     }
     fun get(url: String): String? = recognized[url]
     fun extracted(url: String): String? = extractedByUrl[url]
     fun header(url: String): PdfDocumentHeader? = headers[url]
+    fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
+    fun accessions(url: String): Set<String> = sections(url)
+        .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
     fun clear() {
         recognized.clear()
         extractedByUrl.clear()
         headers.clear()
+        sectionsByUrl.clear()
     }
 }
