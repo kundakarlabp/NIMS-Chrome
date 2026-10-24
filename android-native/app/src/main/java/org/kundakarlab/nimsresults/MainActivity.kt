@@ -644,6 +644,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
         val unique = reports.filter { it.url.isNotBlank() }.distinctBy { it.url }
+        // A CR can have hundreds of PDFs. Avoid downloading the entire
+        // archive at login; inspect recent documents first. Older originals
+        // are available in All Results and indexed when directly opened.
+        val priority = unique.sortedByDescending {
+            RecentReportDates.dateFor(it).first ?: LocalDate.MIN
+        }.take(32)
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
@@ -652,14 +658,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         pdfWorker.execute {
             val inspector = PdfSourceEnricher(applicationContext)
             var confirmed = 0
-            unique.forEachIndexed { index, report ->
+            priority.forEachIndexed { index, report ->
                 if (pdfIndexSelection != requestId || activeRequestId != requestId ||
                     Thread.currentThread().isInterrupted) return@execute
                 val read = inspector.inspect(report, cr) {
                     pdfIndexSelection == requestId && activeRequestId == requestId
                 }
                 if (read) confirmed++
-                if (index % 4 == 3 || index == unique.lastIndex) {
+                if (index % 4 == 3 || index == priority.lastIndex) {
                     val done = index + 1
                     val success = confirmed
                     runOnUiThread {
@@ -2293,7 +2299,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .groupBy { ClinicalResultRules.parameterKey(it) }
                 .mapValues { (_, values) ->
                     values.sortedByDescending { BulkParser.dateKey(it.date) }
-                        .distinctBy { it.date }.sortedBy { BulkParser.dateKey(it.date) }
+                        .distinctBy { listOf(it.date, it.reportedDate, it.sentDate,
+                            it.labNumber, it.valueText, it.sourceKey) }
+                        .sortedWith(compareBy<LabResult> { BulkParser.dateKey(it.date) }
+                            .thenBy { it.reportedDate }
+                            .thenBy { it.sentDate })
                 }
                 .filterValues { it.size >= 2 }
                 .toList().sortedByDescending { it.second.size }
@@ -2315,9 +2325,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val rows = selected?.second?.filter {
             ClinicalResultRules.inWindow(it.date, latest, period)
         }.orEmpty()
-        LazyColumn(state = scroll, 
+        LazyColumn(state = scroll,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(10.dp),
+            contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
+                end = 28.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
@@ -2379,7 +2390,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 java.time.LocalDate.parse(row.date).toEpochDay().toDouble()
             }.getOrNull()
             val value = row.numericValue
-            if (day != null && value != null) day to value else null
+            // Use source-supplied clock time when available. Do not invent
+            // times for repeated samples with only a calendar date.
+            val timestamp = row.reportedDate.ifBlank { row.sentDate }
+            val hhmm = Regex("""(\d{1,2}):(\d{2})""").find(timestamp)
+            val minutes = hhmm?.let {
+                val hour = it.groupValues[1].toIntOrNull()
+                val minute = it.groupValues[2].toIntOrNull()
+                if (hour != null && minute != null &&
+                    hour in 0..23 && minute in 0..59) hour * 60 + minute else null
+            }
+            if (day != null && value != null)
+                (day + (minutes?.div(1440.0) ?: 0.0)) to value else null
         }
         if (points.size < 2) return
         val values = points.map { it.second }
@@ -2436,15 +2458,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(10.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
+                end = 27.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigations · $sourceCount original PDFs · one integrated timeline",
+                Text("$studyCount investigations · $sourceCount unlinked original PDFs · one timeline",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 if (pdfTotalCount > 0) Text(
-                    "Source inspection: $pdfInspectedCount/$pdfTotalCount PDFs attempted · " +
-                        "$pdfConfirmedCount verified readable by patient CR",
+                    "Recent PDFs inspected: $pdfInspectedCount of $pdfTotalCount total · " +
+                        "$pdfConfirmedCount CR-verified; open older PDFs to inspect",
                     fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
                     value = query,
@@ -2533,18 +2556,25 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (summary.length > 155) "…" else "",
                                 fontSize = 11.sp, maxLines = 2,
                                 color = Color(0xFF486581))
-                            Text("Lab/study no.: " +
-                                accession.ifBlank { "Not provided in structured feed" },
-                                fontSize = 11.sp, color = Color(0xFF486581))
                             val collected = ClinicalPresentation.sentDate(rows)
                                 .ifBlank { linkedPart?.header?.collectionDate.orEmpty() }
                             val reported = ClinicalPresentation.reportedDate(rows)
                                 .ifBlank { linkedPart?.header?.reportedDate.orEmpty() }
-                            Text("Sample collection/sent: " +
-                                collected.ifBlank { "Not provided" }, fontSize = 11.sp)
-                            Text("Reported: " +
-                                reported.ifBlank { "Not provided (result date is not assumed)" },
-                                fontSize = 11.sp)
+                            if (!expanded) {
+                                Text(
+                                    "Lab: " + accession.ifBlank { "—" } +
+                                        "  ·  Collected: " + collected.ifBlank { "—" } +
+                                        "  ·  Reported: " + reported.ifBlank { "—" },
+                                    fontSize = 10.sp, color = Color(0xFF486581))
+                            } else {
+                                Text("Lab/study no.: " +
+                                    accession.ifBlank { "Not available in structured feed" },
+                                    fontSize = 11.sp)
+                                Text("Collected/studied: " +
+                                    collected.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                                Text("Reported: " +
+                                    reported.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                            }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
                                     linkedPart?.header?.orderDate.orEmpty()
@@ -2576,8 +2606,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (linkedPart != null) {
                                     Text("Confirmed source section · page " + linkedPart.page,
                                         fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    Text(linkedPart.text,
-                                        fontSize = 11.sp, color = Color(0xFF243B53))
+                                    val extractedValues = PdfClinicalValues.parse(linkedPart.text)
+                                    extractedValues.take(25).forEach { value ->
+                                        Text(value.parameter + ": " + value.value +
+                                            if (value.unit.isNotBlank()) " " + value.unit else "",
+                                            fontSize = 11.sp, color = Color(0xFF243B53))
+                                    }
+                                    Text(if (showEntireSource) linkedPart.text
+                                         else linkedPart.text.take(900) +
+                                            if (linkedPart.text.length > 900) "…" else "",
+                                        fontSize = 11.sp, color = Color(0xFF486581))
+                                    if (linkedPart.text.length > 900) TextButton(onClick = {
+                                        showEntireSource = !showEntireSource
+                                    }) { Text(if (showEntireSource) "Collapse original text"
+                                        else "Read complete PDF-derived narrative") }
                                 }
                             }
                             when {
@@ -2669,6 +2711,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontSize = 10.sp)
                                         if (part.header.reportedDate.isNotBlank()) Text(
                                             "Reported: " + part.header.reportedDate, fontSize = 10.sp)
+                                        val sourceValues = PdfClinicalValues.parse(part.text)
+                                        if (sourceValues.isNotEmpty()) {
+                                            Text(sourceValues.size.toString() +
+                                                " named PDF-derived laboratory values",
+                                                fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                            sourceValues.take(if (showEntireSource) 100 else 8)
+                                                .forEach { value ->
+                                                    Text(value.parameter + ": " + value.value +
+                                                        if (value.unit.isNotBlank()) " " + value.unit else "",
+                                                        fontSize = 11.sp)
+                                                }
+                                        }
                                         Text(if (showEntireSource) part.text
                                             else part.text.take(450) +
                                                 if (part.text.length > 450) "…" else "",

@@ -43,37 +43,74 @@ object ReportLinkResolver {
         return a.isNotEmpty() && b.isNotEmpty() && a.any { it in b }
     }
 
+    /** A study accession may identify a *collection episode*, not one PDF.
+     * For verified source documents, reject a different kind of report even
+     * when accession and specimen are shared (stain vs culture, PT vs LFT). */
+    private fun sourceAgrees(test: String, report: ReportRef): Boolean {
+        val sections = ReportTitleCache.sections(report.url)
+        val target = PdfSourceEvidence.kind(test)
+        if (sections.isEmpty()) {
+            // A patient-checked NIMS index row already identifies this
+            // document's investigation; use its original name where distinct.
+            val listed = PdfSourceEvidence.kind(report.title)
+            return target == PdfStudyKind.OTHER ||
+                listed == PdfStudyKind.OTHER || target == listed
+        }
+        if (target == PdfStudyKind.OTHER) return true
+        val known = sections.map { it.kind }.filter { it != PdfStudyKind.OTHER }.toSet()
+        return known.isEmpty() || target in known
+    }
+
+    private fun inlineCultureAccession(rows: List<LabResult>): String =
+        rows.mapNotNull { row ->
+            // NIMS sometimes prefixes a culture narrative with its lab
+            // number. Accept it only as a hint and require an identical lab
+            // field from a PDF whose patient CR is explicitly verified.
+            val text = row.valueText.trim()
+            if (!text.contains("CULTURE REPORT", true)) return@mapNotNull null
+            Regex("""^([A-Z]{1,3}\d{4,8})\s+(?:CULTURE\s+REPORT\b|FAN\s+BLOOD\s+CULTURE\b)""",
+                RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)
+        }.distinct().singleOrNull().orEmpty()
+
+    private fun candidateDocuments(inventory: List<ReportRef>): List<ReportRef> =
+        inventory.filter { it.url.isNotBlank() }.distinctBy {
+            ReportTitleCache.digest(it.url).takeIf(String::isNotBlank) ?: it.url
+        }
+
     fun candidates(rows: List<LabResult>, inventory: List<ReportRef>,
                    expectedCr: String = ""): ReportCandidates {
-        val relevant = inventory.filter { it.url.isNotBlank() }.distinctBy { it.url }
-            .filter { report ->
-                val header = ReportTitleCache.header(report.url)
-                header == null || expectedCr.isBlank() || header.crNo == expectedCr
-            }
-        val lab = ClinicalPresentation.accession(rows)
+        val relevant = candidateDocuments(inventory).filter { report ->
+            val header = ReportTitleCache.header(report.url)
+            header == null || expectedCr.isBlank() || header.crNo == expectedCr
+        }
+        val test = rows.firstOrNull()?.test.orEmpty()
+        val explicitLab = ClinicalPresentation.accession(rows)
+        val narrativeHint = if (explicitLab.isBlank()) inlineCultureAccession(rows) else ""
+        val lab = explicitLab.ifBlank { narrativeHint }
         if (lab.isNotBlank()) {
             val labMatched = relevant.filter { report ->
                 val header = ReportTitleCache.header(report.url)
-                // The same signed PDF may contain several separate lab
-                // accessions. A match to any CR-verified section links to
-                // the physical PDF without assigning another study's fields.
                 val labs = ReportTitleCache.accessions(report.url) +
                     listOfNotNull(header?.labNumber, report.labNumber)
-                labs.any { uniqueLabMatch(lab, it) }
+                labs.any { uniqueLabMatch(lab, it) } &&
+                    sourceAgrees(test, report) &&
+                    (narrativeHint.isBlank() || header?.crNo == expectedCr &&
+                        expectedCr.isNotBlank())
             }
             if (labMatched.size == 1) return ReportCandidates(labMatched.single(), labMatched)
             if (labMatched.isNotEmpty()) return ReportCandidates(null, labMatched)
         }
 
-        val test = rows.firstOrNull()?.test.orEmpty()
         if (test.isBlank()) return ReportCandidates(null, emptyList())
-        val rowDate = RecentReportDates.dateFor(rows).first ?: return ReportCandidates(null, emptyList())
+        val rowDate = RecentReportDates.dateFor(rows).first
+            ?: return ReportCandidates(null, emptyList())
         val canonical = kind(test)
         val micro = ClinicalReportRenderer.isMicrobiologyInvestigation(test)
         val matching = relevant.mapNotNull { report ->
             val name = ReportTitleCache.get(report.url).orEmpty()
             val reportTest = listOf(name, report.title) +
-                ReportTitleCache.sections(report.url).map { it.title }.filter { it.isNotBlank() }
+                ReportTitleCache.sections(report.url).map { it.title }
+                    .filter(String::isNotBlank)
             val sameTest = reportTest.any { candidate ->
                 val n = kind(candidate)
                 n == canonical || (canonical.length >= 8 && n.length >= 8 &&
@@ -86,9 +123,6 @@ object ReportLinkResolver {
             val delta = dates.minOfOrNull { abs(ChronoUnit.DAYS.between(rowDate, it)) }
                 ?: return@mapNotNull null
             if (delta > 7) return@mapNotNull null
-
-            // When NIMS lists only a generic Microbiology PDF title, surface
-            // nearby dates as candidates; never make those automatic links.
             val genericIndexTitle = Regex(
                 """(?i)^(?:microbiology|bacteriology|microscopy|investigation report|lab report|laboratory report|result|report)$"""
             ).matches(report.title.trim())
@@ -97,12 +131,14 @@ object ReportLinkResolver {
                     Regex("""(?i)^(?:microbiology|bacteriology|microscopy)$""")
                         .matches(report.title.trim()))
             val genericMicro = micro && isMicroIndex && delta <= 2
-            if (!sameTest && !genericMicro) return@mapNotNull null
+            if ((!sameTest && !genericMicro) || !sourceAgrees(test, report))
+                return@mapNotNull null
             val rank = (if (sameTest) 100 else 0) + (7 - delta.toInt()) +
                 (if (header?.crNo == expectedCr && expectedCr.isNotBlank()) 10 else 0)
             report to rank
         }.sortedWith(compareByDescending<Pair<ReportRef, Int>> { it.second }
             .thenByDescending { RecentReportDates.dateFor(it.first).first ?: LocalDate.MIN })
+        // Date/name proximity only yields choices, never a proven link.
         return ReportCandidates(null, matching.map { it.first }.take(8))
     }
 }

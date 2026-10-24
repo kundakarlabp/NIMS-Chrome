@@ -347,7 +347,9 @@ class ReportActivity : Activity() {
                     return
                 }
                 if (pages.any { it.isNotBlank() } &&
-                    ReportTitleCache.learnPages(sourceUrl, pages, expectedCr)) {
+                    ReportTitleCache.learnPages(sourceUrl, pages, expectedCr,
+                        MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+                            .joinToString("") { "%02x".format(it) })) {
                     cachedExtractedText = pages.joinToString("\n\n").take(160000)
                 }
             }

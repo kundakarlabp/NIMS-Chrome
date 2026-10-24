@@ -181,7 +181,8 @@ class ReportRepository(
                 sentDate = previous.sentDate.ifBlank { report.sentDate },
                 reportedDate = previous.reportedDate.ifBlank { report.reportedDate },
                 labNumber = previous.labNumber.ifBlank { report.labNumber },
-                orderDate = previous.orderDate.ifBlank { report.orderDate }
+                orderDate = previous.orderDate.ifBlank { report.orderDate },
+                sampleNumber = previous.sampleNumber.ifBlank { report.sampleNumber }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -200,6 +201,7 @@ object ReportPayloadParser {
     private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent")
     private val orderKeys = listOf("requisitionDate","requisition_date","orderDate","order_date","orderedDate","ordered_date")
     private val reportedKeys = listOf("reportingDate","reporting_date","reportedDate","reported_date","reportDate","report_date","validationDate","validation_date")
+    private val sampleKeys = listOf("sampleNo","sample_no","sampleNumber","sample_number","specimenNo","specimen_no")
     private val labKeys = listOf("labStudyNo","labStudyNumber","labNo","lab_no","labNumber","lab_number","accessionNo","accession_no")
     private val departmentKeys = listOf("department","dept","lab","laboratory","section")
     private val urlKeys = listOf("url","reportUrl","report_url","pdfUrl","pdf_url","href","downloadUrl","download_url")
@@ -235,6 +237,7 @@ object ReportPayloadParser {
             // Keep the source-listed index date in its original meaning.
             val date = first(row, dateKeys)
             val labNumber = first(row, labKeys)
+            val sampleNumber = first(row, sampleKeys)
             val department = first(row, departmentKeys)
             val direct = safeReportUrl(first(row, urlKeys))
             val rawUrl = first(row, urlKeys)
@@ -242,7 +245,7 @@ object ReportPayloadParser {
             val url = direct.ifBlank { reportUrlForToken(token) }
             val id = first(row, idKeys).ifBlank { token }.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             if (title.isBlank() && url.isBlank()) null else ReportRef(
-                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate
+                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate, sampleNumber
             )
         }
     }
@@ -251,31 +254,57 @@ object ReportPayloadParser {
         val document = Jsoup.parse(html, baseUrl)
         verifyCr(document, expectedCr)
         val reports = mutableListOf<ReportRef>()
-
         document.select("tr").forEachIndexed { index, row ->
             val rowText = compact(row.text())
             if (!rowText.contains("View Report", true)) return@forEachIndexed
-            val cells = row.select("th,td").map { compact(it.text()) }.filter { it.isNotBlank() }
+            val cells = row.select("td").map { compact(it.text()) }
+                .filter(String::isNotBlank).ifEmpty {
+                    row.select("th,td").map { compact(it.text()) }
+                        .filter(String::isNotBlank)
+                }
             val onclick = row.select("[onclick]").map { it.attr("onclick") }
                 .firstOrNull { it.contains("printReport", true) }.orEmpty()
             val token = printReportRegex.find(onclick)?.groupValues?.getOrNull(1).orEmpty()
             val href = row.selectFirst("a[href]")?.absUrl("href").orEmpty()
             val url = safeReportUrl(href).ifBlank { reportUrlForToken(token) }
-            val date = cells.firstOrNull { dateRegex.containsMatchIn(it) } ?: dateRegex.find(rowText)?.value.orEmpty()
-            val department = cells.firstOrNull {
-                Regex("""(?i)pathology|microbiology|biochemistry|hematology|radiology""").containsMatchIn(it)
-            }.orEmpty()
-            val title = guessTitle(cells, rowText)
-            val id = token.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
-            // The HTML index may contain only one unlabeled date.
-            // Do not mislabel it as specimen collection or report validation.
-            // Ignore decorative "View Report" rows without a usable source PDF.
             if (url.isBlank()) return@forEachIndexed
-            reports += ReportRef(id, title, date, department, url,
-                labNumber = cells.firstOrNull { OpaqueReportTitles.isCode(it) }.orEmpty()
-            )
+
+            // NIMS "CR No Wise Result Report Printing New" table:
+            // LabName | Test Name | Sample No/Lab No | Collection Date |
+            // Report NO. | Report(View Report).
+            // This source row is already the PDF-to-study association.
+            val knownLayout = cells.size >= 6 &&
+                cells.last().contains("View Report", true) &&
+                dateRegex.containsMatchIn(cells[3])
+            val pair = if (knownLayout) cells[2] else ""
+            val components = pair.split('/').map(String::trim)
+                .filter(String::isNotBlank)
+            val sample = if (components.size >= 2) components.first() else ""
+            val lab = if (components.size >= 2) components.last()
+                else if (knownLayout && OpaqueReportTitles.isCode(pair)) pair else ""
+            val collected = if (knownLayout)
+                dateRegex.find(cells[3])?.value.orEmpty() else ""
+            val date = collected.ifBlank {
+                cells.firstNotNullOfOrNull { c ->
+                    dateRegex.find(c)?.value
+                }.orEmpty()
+            }
+            val dept = if (knownLayout) cells[0] else cells.firstOrNull {
+                Regex("""(?i)pathology|microbiology|biochemistry|hematology|radiology|bacteriology|chemistry""")
+                    .containsMatchIn(it)
+            }.orEmpty()
+            val title = if (knownLayout) cells[1] else guessTitle(cells, rowText)
+            val guessedLab = if (lab.isBlank() && !knownLayout)
+                cells.firstOrNull { OpaqueReportTitles.isCode(it) }.orEmpty() else lab
+            val id = token.ifBlank {
+                Integer.toHexString("$title|$date|$index|$url".hashCode())
+            }
+            reports += ReportRef(id = id, title = title, date = date,
+                department = dept, url = url, sentDate = collected,
+                labNumber = guessedLab, sampleNumber = sample)
         }
-        return reports.distinctBy { canonical(it.title) + "|" + it.date + "|" + it.url }
+        // Keep separate report-stage URLs even when lab accession is shared.
+        return reports.distinctBy { it.url }
     }
 
     fun reportUrlForToken(raw: String): String {
@@ -425,7 +454,7 @@ object PdfDocumentHeaders {
             return "$d $t"
         }
         val collected = field(
-            """\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
+            """\b(?:Coll\s*\.?\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
         )
         val collectedTime = field(
             """\b(?:Collection|Sample\s*Collection|Specimen\s*Collection|Coll\s*/\s*Study|Collected)\s*Time\s*[:#\-]\s*""" + time
@@ -451,19 +480,21 @@ object ReportTitleCache {
     private val extractedByUrl = ConcurrentHashMap<String, String>()
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
+    private val sha256ByUrl = ConcurrentHashMap<String, String>()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
         learnPages(url, listOf(extracted), expectedCr)
 
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
-    fun learnPages(url: String, pages: List<String>, expectedCr: String = ""): Boolean {
+    fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         val full = pages.joinToString("\n\n") { it.take(40000) }
         OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
         extractedByUrl[url] = full.take(160000)
         if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
+            if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
             val sections = PdfSourceEvidence.parts(pages, expectedCr)
             sectionsByUrl[url] = sections
             headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
@@ -475,6 +506,7 @@ object ReportTitleCache {
     fun extracted(url: String): String? = extractedByUrl[url]
     fun header(url: String): PdfDocumentHeader? = headers[url]
     fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
+    fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
     fun clear() {
@@ -482,5 +514,6 @@ object ReportTitleCache {
         extractedByUrl.clear()
         headers.clear()
         sectionsByUrl.clear()
+        sha256ByUrl.clear()
     }
 }
