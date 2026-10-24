@@ -33,7 +33,8 @@ data class ReportRef(
     val sentDate: String = "",
     val reportedDate: String = "",
     val labNumber: String = "",
-    val orderDate: String = ""
+    val orderDate: String = "",
+    val sampleNumber: String = ""
 )
 
 data class ClinicalBundle(
