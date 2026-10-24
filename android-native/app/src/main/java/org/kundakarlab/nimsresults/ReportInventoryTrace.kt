@@ -12,7 +12,9 @@ object ReportInventoryTrace {
         "html_form_found", "html_form_missing", "html_table_rows",
         "html_no_report_rows", "html_verified_rows", "html_auth_required",
         "html_http_error", "html_identity_mismatch", "html_parse_error",
-        "html_response_without_cr", "all_sources_unavailable"
+        "html_response_without_cr", "all_sources_unavailable",
+        "webview_attempt", "webview_unavailable", "webview_verified_rows",
+        "webview_empty", "webview_identity_mismatch", "webview_parse_error"
     )
     fun event(code: String, count: Int = 1) {
         if (code in allowed) counters.merge(code, count.coerceIn(1, 10000), Int::plus)
