@@ -322,6 +322,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // Cached source metadata is patient-specific, even when the HIS
             // uses the same PRINTREPORT URL across different sessions.
             ReportTitleCache.clear()
+            ReportLinkResolver.clear()
             bundle = null
         }
         activeCr = cr
@@ -442,6 +443,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         bundle = null
         verifiedRestReports = emptyList()
         ReportTitleCache.clear()
+        ReportLinkResolver.clear()
         apiReportCount = 0
         apiStage = "not_checked"
         activeRequestId = ""
