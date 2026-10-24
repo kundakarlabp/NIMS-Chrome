@@ -417,7 +417,7 @@ object PdfDocumentHeaders {
         // index/result date as collection or validation time.
         fun field(pattern: String): String = Regex(pattern, RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?"""
+        val date = """((?:\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?)"""
         val time = """(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)"""
         fun combine(d: String, t: String): String {
             if (d.isBlank()) return t
