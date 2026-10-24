@@ -644,6 +644,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
         val unique = reports.filter { it.url.isNotBlank() }.distinctBy { it.url }
+        // A CR can have hundreds of PDFs. Avoid downloading the entire
+        // archive at login; inspect recent documents first. Older originals
+        // are available in All Results and indexed when directly opened.
+        val priority = unique.sortedByDescending {
+            RecentReportDates.dateFor(it).first ?: LocalDate.MIN
+        }.take(32)
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
@@ -652,14 +658,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         pdfWorker.execute {
             val inspector = PdfSourceEnricher(applicationContext)
             var confirmed = 0
-            unique.forEachIndexed { index, report ->
+            priority.forEachIndexed { index, report ->
                 if (pdfIndexSelection != requestId || activeRequestId != requestId ||
                     Thread.currentThread().isInterrupted) return@execute
                 val read = inspector.inspect(report, cr) {
                     pdfIndexSelection == requestId && activeRequestId == requestId
                 }
                 if (read) confirmed++
-                if (index % 4 == 3 || index == unique.lastIndex) {
+                if (index % 4 == 3 || index == priority.lastIndex) {
                     val done = index + 1
                     val success = confirmed
                     runOnUiThread {
@@ -2460,8 +2466,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigations · $sourceCount unlinked original PDFs · one timeline",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 if (pdfTotalCount > 0) Text(
-                    "Source inspection: $pdfInspectedCount/$pdfTotalCount PDFs attempted · " +
-                        "$pdfConfirmedCount verified readable by patient CR",
+                    "Recent PDFs inspected: $pdfInspectedCount of $pdfTotalCount total · " +
+                        "$pdfConfirmedCount CR-verified; open older PDFs to inspect",
                     fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
                     value = query,
