@@ -257,16 +257,31 @@ object ReportPayloadParser {
         document.select("tr").forEachIndexed { index, row ->
             val rowText = compact(row.text())
             if (!rowText.contains("View Report", true)) return@forEachIndexed
+            // Keep empty cells: dropping an empty lab/collection field shifts
+            // NIMS's fixed table columns and corrupts the source relationship.
             val cells = row.select("td").map { compact(it.text()) }
-                .filter(String::isNotBlank).ifEmpty {
-                    row.select("th,td").map { compact(it.text()) }
-                        .filter(String::isNotBlank)
-                }
+                .ifEmpty { row.select("th,td").map { compact(it.text()) } }
             val onclick = row.select("[onclick]").map { it.attr("onclick") }
                 .firstOrNull { it.contains("printReport", true) }.orEmpty()
             val token = printReportRegex.find(onclick)?.groupValues?.getOrNull(1).orEmpty()
-            val href = row.selectFirst("a[href]")?.absUrl("href").orEmpty()
-            val url = safeReportUrl(href).ifBlank { reportUrlForToken(token) }
+            // Prefer a direct, explicitly validated NIMS report URL in the
+            // source row; scripts may store it in href, onclick or a data attr.
+            val directStrings = row.select("a[href], [data-url], [onclick]")
+                .flatMap { el -> listOf(el.absUrl("href"), el.attr("href"),
+                    el.attr("data-url"), el.attr("onclick")) }
+            val embedded = Regex(
+                """https?://[^\s'"]+|/HISInvestigationG5/new_investigation/[^\s'"]+""",
+                RegexOption.IGNORE_CASE
+            )
+            val url = directStrings.firstNotNullOfOrNull { raw ->
+                safeReportUrl(raw).takeIf(String::isNotBlank)
+                    ?: embedded.findAll(raw).mapNotNull { match ->
+                        val text = match.value.replace("&amp;", "&")
+                        val absolute = if (text.startsWith("/")) NimsUrls.WWW_ORIGIN + text
+                            else text
+                        safeReportUrl(absolute).takeIf(String::isNotBlank)
+                    }.firstOrNull()
+            }.orEmpty().ifBlank { reportUrlForToken(token) }
             if (url.isBlank()) return@forEachIndexed
 
             // NIMS "CR No Wise Result Report Printing New" table:
@@ -274,8 +289,7 @@ object ReportPayloadParser {
             // Report NO. | Report(View Report).
             // This source row is already the PDF-to-study association.
             val knownLayout = cells.size >= 6 &&
-                cells.last().contains("View Report", true) &&
-                dateRegex.containsMatchIn(cells[3])
+                cells.last().contains("View Report", true)
             val pair = if (knownLayout) cells[2] else ""
             val components = pair.split('/').map(String::trim)
                 .filter(String::isNotBlank)
