@@ -48,8 +48,14 @@ object ReportLinkResolver {
      * when accession and specimen are shared (stain vs culture, PT vs LFT). */
     private fun sourceAgrees(test: String, report: ReportRef): Boolean {
         val sections = ReportTitleCache.sections(report.url)
-        if (sections.isEmpty()) return true // Legacy index: candidate with no PDF content.
         val target = PdfSourceEvidence.kind(test)
+        if (sections.isEmpty()) {
+            // A patient-checked NIMS index row already identifies this
+            // document's investigation; use its original name where distinct.
+            val listed = PdfSourceEvidence.kind(report.title)
+            return target == PdfStudyKind.OTHER ||
+                listed == PdfStudyKind.OTHER || target == listed
+        }
         if (target == PdfStudyKind.OTHER) return true
         val known = sections.map { it.kind }.filter { it != PdfStudyKind.OTHER }.toSet()
         return known.isEmpty() || target in known
