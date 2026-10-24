@@ -193,6 +193,7 @@ class ReportActivity : Activity() {
 
     private fun download(url: String) {
         executor.execute {
+            val downloadStart = android.os.SystemClock.elapsedRealtime()
             try {
                 val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
                 val cached = pdfCacheFile(url)
@@ -208,6 +209,7 @@ class ReportActivity : Activity() {
                 ) {
                     tempFile = cached
                     cached.setLastModified(System.currentTimeMillis())
+                    PdfPerformanceTrace.record("download_ms", 0)
                     if (!closing) openOnWorker(cached)
                     return@execute
                 }
@@ -270,6 +272,8 @@ class ReportActivity : Activity() {
                         val saved = if (file.renameTo(destination)) destination else file
                         tempFile = saved
                         prunePdfCache()
+                        PdfPerformanceTrace.record("download_ms",
+                            android.os.SystemClock.elapsedRealtime() - downloadStart)
                         if (!closing) openOnWorker(saved)
                     } catch (error: Throwable) {
                         file.delete()
@@ -312,6 +316,7 @@ class ReportActivity : Activity() {
     // PdfRenderer is confined to the one worker. UI thread only receives the
     // already-rendered Bitmap; zoom/navigation no longer blocks gestures.
     private fun openOnWorker(file: File) {
+        val openStart = android.os.SystemClock.elapsedRealtime()
         try {
             // Parse the report's own CR and headings before displaying it.
             // Failure to extract text does not prevent a user visually
@@ -348,11 +353,12 @@ class ReportActivity : Activity() {
                 }
                 if (pages.any { it.isNotBlank() } &&
                     ReportTitleCache.learnPages(sourceUrl, pages, expectedCr,
-                        MessageDigest.getInstance("SHA-256").digest(file.readBytes())
-                            .joinToString("") { "%02x".format(it) })) {
+                        digestFile(file))) {
                     cachedExtractedText = pages.joinToString("\n\n").take(160000)
                 }
             }
+            PdfPerformanceTrace.record("identity_and_extract_ms",
+                android.os.SystemClock.elapsedRealtime() - openStart)
             descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             renderer = PdfRenderer(descriptor!!)
             if ((renderer?.pageCount ?: 0) == 0) {
@@ -388,6 +394,7 @@ class ReportActivity : Activity() {
         next.isEnabled = false
         progress.visibility = View.VISIBLE
         executor.execute {
+            val renderStart = android.os.SystemClock.elapsedRealtime()
             val current = renderer ?: return@execute
             if (closing || generation != renderingGeneration ||
                 index !in 0 until current.pageCount) return@execute
@@ -396,8 +403,8 @@ class ReportActivity : Activity() {
             try {
                 page = current.openPage(index)
                 val desiredWidth = (resources.displayMetrics.widthPixels * currentZoom)
-                    .coerceIn(320f, 1080f).toDouble()
-                val scale = minOf(desiredWidth / page.width, 2000.0 / page.height)
+                    .coerceIn(320f, 900f).toDouble()
+                val scale = minOf(desiredWidth / page.width, 1600.0 / page.height)
                 val width = (page.width * scale).toInt().coerceAtLeast(1)
                 val height = (page.height * scale).toInt().coerceAtLeast(1)
                 result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -425,6 +432,10 @@ class ReportActivity : Activity() {
                     image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
                     image.setImageBitmap(newBitmap)
                     old?.recycle()
+                    PdfPerformanceTrace.record("render_page_ms",
+                        android.os.SystemClock.elapsedRealtime() - renderStart)
+                    if (index == 0) PdfPerformanceTrace.record("full_pdf_open_ms",
+                        android.os.SystemClock.elapsedRealtime() - renderStart)
                     progress.visibility = View.GONE
                     status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
                     previous.isEnabled = index > 0
@@ -564,6 +575,21 @@ class ReportActivity : Activity() {
         }
     }
 
+    // Streaming digest prevents a second multi-megabyte copy of the
+    // PDF in memory while PdfRenderer is opening a page.
+    private fun digestFile(file: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val chunk = ByteArray(8192)
+            while (true) {
+                val read = input.read(chunk)
+                if (read < 0) break
+                md.update(chunk, 0, read)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
     private fun isPdf(bytes: ByteArray): Boolean =
         bytes.size >= 4 &&
             bytes[0] == '%'.code.toByte() &&
@@ -599,8 +625,8 @@ class ReportActivity : Activity() {
         const val EXTRA_EXPECTED_CR = "expected_patient_cr"
         private const val REQUEST_SAVE_PDF = 231
         private const val MAX_PDF_BYTES = 20L * 1024 * 1024
-        private const val MAX_CACHE_FILES = 8
-        private const val CACHE_TTL_MS = 10L * 60L * 1000L
+        private const val MAX_CACHE_FILES = 16
+        private const val CACHE_TTL_MS = 30L * 60L * 1000L
         private val SHARED_CLIENT: OkHttpClient by lazy {
             OkHttpClient.Builder()
                 .connectTimeout(12, TimeUnit.SECONDS)
