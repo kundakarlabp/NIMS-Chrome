@@ -332,6 +332,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         verifiedRestReports = emptyList()
         apiReportCount = 0
         apiStage = "rest_checking"
+        ReportInventoryTrace.reset()
         loadStage = LoadStage.CHECKING_SESSION
         statusText = "API first · checking NIMS REST report index…"
 
@@ -549,7 +550,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         apiReportCount + " source reports"
                     // All reports are inspected independently; a multi-study
                     // PDF is one physical download with several accession parts.
-                    startPdfIndex(requestId, cr, inventory?.reports ?: restSeed)
+                    val sources = inventory?.reports ?: restSeed
+                    if (sources.isEmpty()) {
+                        ReportInventoryTrace.event("webview_attempt")
+                        engine.fetchReportIndexHtml(cr, requestId)
+                    } else {
+                        startPdfIndex(requestId, cr, sources)
+                    }
                 }
             } catch (error: Throwable) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
@@ -558,6 +565,45 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     loadStage = LoadStage.ERROR
                     statusText = error.message ?: "Could not normalize NIMS results."
                 }
+            }
+        }
+    }
+
+    override fun onReportIndexHtml(requestId: String, html: String, code: String) {
+        if (requestId != activeRequestId) return
+        if (code != "ok" || html.isBlank()) {
+            ReportInventoryTrace.event("webview_unavailable")
+            runOnUiThread {
+                if (requestId == activeRequestId) statusText =
+                    "Results ready · original PDF inventory unavailable (" + code + ")"
+            }
+            return
+        }
+        val cr = activeCr
+        worker.execute {
+            val reports = try {
+                ReportPayloadParser.parseHtml(html, NimsUrls.CR_REPORTS, cr)
+            } catch (_: IdentityMismatchException) {
+                ReportInventoryTrace.event("webview_identity_mismatch")
+                emptyList()
+            } catch (_: Exception) {
+                ReportInventoryTrace.event("webview_parse_error")
+                emptyList()
+            }
+            if (reports.isEmpty()) ReportInventoryTrace.event("webview_empty")
+            else ReportInventoryTrace.event("webview_verified_rows", reports.size)
+            runOnUiThread {
+                if (requestId != activeRequestId || bundle?.patient?.crNo != cr)
+                    return@runOnUiThread
+                if (reports.isNotEmpty()) {
+                    val prior = bundle ?: return@runOnUiThread
+                    bundle = prior.copy(reports = reports)
+                    apiReportCount = reports.size
+                    statusText = prior.results.size.toString() +
+                        " structured values · " + reports.size + " NIMS original reports"
+                    startPdfIndex(requestId, cr, reports)
+                } else statusText =
+                    "Results ready · unable to reconcile original PDF inventory"
             }
         }
     }
@@ -609,6 +655,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.stage=$apiStage")
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
+            appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
                 // Engine details are restricted to boolean lifecycle evidence.
