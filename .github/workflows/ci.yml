@@ -19,6 +19,7 @@ on:
       - fix/android-v114-global-diagnostics-recent-scroll
       - fix/android-v115-integrated-results-pdf-evidence
       - fix/android-v116-bundled-pdf-unified-results
+      - fix/android-v117-reconciled-reports
   pull_request:
     branches:
       - release/android-native-rebuild-base
