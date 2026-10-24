@@ -40,16 +40,28 @@ class ReportRepository(
         val fastClient = client.newBuilder()
             .callTimeout(3500, TimeUnit.MILLISECONDS)
             .build()
+        ReportInventoryTrace.event("rest_attempt")
         val reports = loadRest(crNo, fastClient)
-        if (reports.isEmpty()) error("NIMS REST returned no verified report rows.")
+        if (reports.isEmpty()) {
+            ReportInventoryTrace.event("rest_empty")
+            error("NIMS REST returned no verified report rows.")
+        }
+        ReportInventoryTrace.event("rest_nonempty", reports.size)
         return Inventory(reports, "nims_rest_report_list")
     }
 
     fun load(crNo: String, verifiedRest: List<ReportRef> = emptyList()): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
-        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching { loadRest(crNo) }.getOrElse { error ->
+        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching {
+            ReportInventoryTrace.event("rest_attempt")
+            loadRest(crNo)
+        }.getOrElse { error ->
             if (error is IdentityMismatchException) throw error
+            ReportInventoryTrace.event(
+                if (error is AuthenticationRequiredException) "rest_auth_required"
+                else "rest_parse_error"
+            )
             emptyList()
         }
 
@@ -57,12 +69,20 @@ class ReportRepository(
         // prove report-history completeness. Supplement it with NIMS HTML
         // inventory in the background without holding up structured labs.
         val html = runCatching { loadHtml(crNo) }.getOrElse { error ->
-            if (error is IdentityMismatchException) throw error
+            if (error is IdentityMismatchException) {
+                ReportInventoryTrace.event("html_identity_mismatch")
+                throw error
+            }
+            ReportInventoryTrace.event(
+                if (error is AuthenticationRequiredException) "html_auth_required"
+                else "html_parse_error"
+            )
             if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
             emptyList()
         }
 
         val merged = merge(rest, html)
+        if (merged.isEmpty()) ReportInventoryTrace.event("all_sources_unavailable")
         return Inventory(
             reports = merged,
             source = when {
@@ -88,13 +108,17 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val text = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), text)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS report-list returned HTTP ${response.code}.")
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("rest_http_error")
+                error("NIMS report-list returned HTTP ${response.code}.")
+            }
             val payload: Any = if (text.trim().startsWith("[")) JSONArray(text) else JSONObject(text)
             return ReportPayloadParser.parseRest(payload, crNo)
         }
     }
 
     private fun loadHtml(crNo: String): List<ReportRef> {
+        ReportInventoryTrace.event("html_attempt")
         val landing = client.newCall(
             request(NimsUrls.CR_REPORTS)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
@@ -104,12 +128,16 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val body = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), body)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS CR report page returned HTTP ${response.code}.")
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("html_http_error")
+                error("NIMS CR report page returned HTTP ${response.code}.")
+            }
             body
         }
 
         val doc = Jsoup.parse(landing, NimsUrls.CR_REPORTS)
         val form = doc.selectFirst("form[name=viewExternalInvFB], form#viewExternalInvFB, form[action*=viewcrnowisereportprocess]")
+        ReportInventoryTrace.event(if (form == null) "html_form_missing" else "html_form_found")
         val action = form?.absUrl("action")?.takeIf { it.isNotBlank() } ?: NimsUrls.CR_REPORTS
         val body = FormBody.Builder()
         form?.select("input[type=hidden][name]")?.forEach { input ->
@@ -132,8 +160,14 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val html = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), html)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS CR report request returned HTTP ${response.code}.")
-            ReportPayloadParser.parseHtml(html, response.request.url.toString(), crNo)
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("html_http_error")
+                error("NIMS CR report request returned HTTP ${response.code}.")
+            }
+            val reports = ReportPayloadParser.parseHtml(html, response.request.url.toString(), crNo)
+            if (reports.isNotEmpty()) ReportInventoryTrace.event("html_verified_rows", reports.size)
+            else ReportInventoryTrace.event("html_no_report_rows")
+            reports
         }
     }
 
@@ -254,7 +288,9 @@ object ReportPayloadParser {
         val document = Jsoup.parse(html, baseUrl)
         verifyCr(document, expectedCr)
         val reports = mutableListOf<ReportRef>()
-        document.select("tr").forEachIndexed { index, row ->
+        val sourceRows = document.select("tr")
+        if (sourceRows.isNotEmpty()) ReportInventoryTrace.event("html_table_rows", sourceRows.size)
+        sourceRows.forEachIndexed { index, row ->
             val rowText = compact(row.text())
             if (!rowText.contains("View Report", true)) return@forEachIndexed
             // Keep empty cells: dropping an empty lab/collection field shifts
