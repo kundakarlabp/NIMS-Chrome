@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -181,6 +182,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashTrace.install(this)
         vault = SessionVault(this)
         patientShelf = PatientShelf(this)
         shelfEntries = patientShelf.read()
@@ -321,6 +323,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // Cached source metadata is patient-specific, even when the HIS
             // uses the same PRINTREPORT URL across different sessions.
             ReportTitleCache.clear()
+            ReportLinkResolver.clear()
             bundle = null
         }
         activeCr = cr
@@ -332,6 +335,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         verifiedRestReports = emptyList()
         apiReportCount = 0
         apiStage = "rest_checking"
+        ReportInventoryTrace.reset()
         loadStage = LoadStage.CHECKING_SESSION
         statusText = "API first · checking NIMS REST report index…"
 
@@ -440,6 +444,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         bundle = null
         verifiedRestReports = emptyList()
         ReportTitleCache.clear()
+        ReportLinkResolver.clear()
         apiReportCount = 0
         apiStage = "not_checked"
         activeRequestId = ""
@@ -549,7 +554,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         apiReportCount + " source reports"
                     // All reports are inspected independently; a multi-study
                     // PDF is one physical download with several accession parts.
-                    startPdfIndex(requestId, cr, inventory?.reports ?: restSeed)
+                    val sources = inventory?.reports ?: restSeed
+                    if (sources.none { it.url.isNotBlank() }) {
+                        ReportInventoryTrace.event("webview_attempt")
+                        engine.fetchReportIndexHtml(cr, requestId)
+                    } else {
+                        startPdfIndex(requestId, cr, sources)
+                    }
                 }
             } catch (error: Throwable) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
@@ -558,6 +569,50 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     loadStage = LoadStage.ERROR
                     statusText = error.message ?: "Could not normalize NIMS results."
                 }
+            }
+        }
+    }
+
+    override fun onReportIndexHtml(requestId: String, html: String, code: String) {
+        if (requestId != activeRequestId) return
+        if (code != "ok" || html.isBlank()) {
+            ReportInventoryTrace.event("webview_unavailable")
+            runOnUiThread {
+                if (requestId == activeRequestId) statusText =
+                    "Results ready · original PDF inventory unavailable (" + code + ")"
+            }
+            return
+        }
+        val cr = activeCr
+        worker.execute {
+            val reports = try {
+                ReportPayloadParser.parseHtml(html, NimsUrls.CR_REPORTS, cr)
+            } catch (_: IdentityMismatchException) {
+                ReportInventoryTrace.event("webview_identity_mismatch")
+                emptyList()
+            } catch (_: Exception) {
+                ReportInventoryTrace.event("webview_parse_error")
+                emptyList()
+            }
+            if (reports.isEmpty()) ReportInventoryTrace.event("webview_empty")
+            else ReportInventoryTrace.event("webview_verified_rows", reports.size)
+            runOnUiThread {
+                if (requestId != activeRequestId || bundle?.patient?.crNo != cr)
+                    return@runOnUiThread
+                if (reports.isNotEmpty()) {
+                    val prior = bundle ?: return@runOnUiThread
+                    val reconciled = (reports + prior.reports).distinctBy {
+                        if (it.url.isNotBlank()) "pdf|" + it.url
+                        else "index|" + it.id + "|" + it.title + "|" + it.date
+                    }
+                    bundle = prior.copy(reports = reconciled)
+                    apiReportCount = reconciled.size
+                    statusText = prior.results.size.toString() +
+                        " structured values · " + reconciled.count { it.url.isNotBlank() } +
+                        " PDF links (" + reconciled.size + " index entries)"
+                    startPdfIndex(requestId, cr, reconciled)
+                } else statusText =
+                    "Results ready · unable to reconcile original PDF inventory"
             }
         }
     }
@@ -598,6 +653,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("NIMS Results diagnostics · entire app")
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
+            appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
             appendLine("app.crInputLength=${crInput.length}")
@@ -609,6 +665,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.stage=$apiStage")
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
+            appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
+            appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
                 // Engine details are restricted to boolean lifecycle evidence.
@@ -649,7 +707,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // are available in All Results and indexed when directly opened.
         val priority = unique.sortedByDescending {
             RecentReportDates.dateFor(it).first ?: LocalDate.MIN
-        }.take(32)
+        }.take(8)
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
@@ -1351,9 +1409,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }.sortedByDescending { BulkParser.dateKey(it.date) }
                 .distinctBy { normalizeKey(it.parameter) }.take(6)
         }
-        LazyColumn(state = scroll, 
+        LazyColumn(state = scroll,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(10.dp),
+            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, end = 30.dp, bottom = 15.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
@@ -2754,7 +2812,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 7.dp),
+                .padding(end = 20.dp, top = 7.dp, bottom = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -2764,7 +2822,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 if (row.refRange.isNotBlank()) Text("Ref: ${row.refRange}", fontSize = 10.sp, color = Color(0xFF9AA8B5))
             }
-            Column(horizontalAlignment = Alignment.End) {
+            Column(
+                modifier = Modifier.widthIn(max = 118.dp),
+                horizontalAlignment = Alignment.End
+            ) {
                 Text(
                     row.valueText + if (row.unit.isNotBlank()) " ${row.unit}" else "",
                     fontWeight = FontWeight.Bold,

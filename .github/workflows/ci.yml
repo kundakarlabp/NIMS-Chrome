@@ -20,6 +20,7 @@ on:
       - fix/android-v115-integrated-results-pdf-evidence
       - fix/android-v116-bundled-pdf-unified-results
       - fix/android-v117-reconciled-reports
+      - fix/android-v118-report-inventory-performance
   pull_request:
     branches:
       - release/android-native-rebuild-base

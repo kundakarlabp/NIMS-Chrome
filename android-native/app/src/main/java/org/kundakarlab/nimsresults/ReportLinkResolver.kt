@@ -12,6 +12,27 @@ data class ReportCandidates(val verified: ReportRef?, val candidates: List<Repor
  * Only a unique accession (with CR checks) may become a verified direct link.
  */
 object ReportLinkResolver {
+    private data class CacheKey(
+        val patient: String, val inventoryId: Int, val inventorySize: Int,
+        val evidenceRevision: Int, val groupHash: Int
+    )
+    // Bounded in-process cache. Never persisted; clear on patient change.
+    private val memo = object : LinkedHashMap<CacheKey, ReportCandidates>(1024, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CacheKey, ReportCandidates>): Boolean =
+            size > 1000
+    }
+    @Synchronized fun clear() { memo.clear() }
+
+    fun candidates(rows: List<LabResult>, inventory: List<ReportRef>,
+                   expectedCr: String = ""): ReportCandidates {
+        val key = CacheKey(expectedCr, System.identityHashCode(inventory),
+            inventory.size, ReportTitleCache.revision(), rows.hashCode())
+        synchronized(memo) { memo[key]?.let { return it } }
+        val result = computeCandidates(rows, inventory, expectedCr)
+        synchronized(memo) { memo[key] = result }
+        return result
+    }
+
     private fun normalize(s: String): String {
         val cleaned = s.lowercase(Locale.US).replace(Regex("""[^a-z0-9]"""), "")
         // NIMS uses Gram smear, Gram stain, Gram's stain and Grams staining
@@ -77,8 +98,8 @@ object ReportLinkResolver {
             ReportTitleCache.digest(it.url).takeIf(String::isNotBlank) ?: it.url
         }
 
-    fun candidates(rows: List<LabResult>, inventory: List<ReportRef>,
-                   expectedCr: String = ""): ReportCandidates {
+    private fun computeCandidates(rows: List<LabResult>, inventory: List<ReportRef>,
+                   expectedCr: String): ReportCandidates {
         val relevant = candidateDocuments(inventory).filter { report ->
             val header = ReportTitleCache.header(report.url)
             header == null || expectedCr.isBlank() || header.crNo == expectedCr

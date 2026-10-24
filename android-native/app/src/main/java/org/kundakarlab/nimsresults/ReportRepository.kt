@@ -40,16 +40,28 @@ class ReportRepository(
         val fastClient = client.newBuilder()
             .callTimeout(3500, TimeUnit.MILLISECONDS)
             .build()
+        ReportInventoryTrace.event("rest_attempt")
         val reports = loadRest(crNo, fastClient)
-        if (reports.isEmpty()) error("NIMS REST returned no verified report rows.")
+        if (reports.isEmpty()) {
+            ReportInventoryTrace.event("rest_empty")
+            error("NIMS REST returned no verified report rows.")
+        }
+        ReportInventoryTrace.event("rest_nonempty", reports.size)
         return Inventory(reports, "nims_rest_report_list")
     }
 
     fun load(crNo: String, verifiedRest: List<ReportRef> = emptyList()): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
-        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching { loadRest(crNo) }.getOrElse { error ->
+        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching {
+            ReportInventoryTrace.event("rest_attempt")
+            loadRest(crNo)
+        }.getOrElse { error ->
             if (error is IdentityMismatchException) throw error
+            ReportInventoryTrace.event(
+                if (error is AuthenticationRequiredException) "rest_auth_required"
+                else "rest_parse_error"
+            )
             emptyList()
         }
 
@@ -57,12 +69,20 @@ class ReportRepository(
         // prove report-history completeness. Supplement it with NIMS HTML
         // inventory in the background without holding up structured labs.
         val html = runCatching { loadHtml(crNo) }.getOrElse { error ->
-            if (error is IdentityMismatchException) throw error
+            if (error is IdentityMismatchException) {
+                ReportInventoryTrace.event("html_identity_mismatch")
+                throw error
+            }
+            ReportInventoryTrace.event(
+                if (error is AuthenticationRequiredException) "html_auth_required"
+                else "html_parse_error"
+            )
             if (error is AuthenticationRequiredException && rest.isEmpty()) throw error
             emptyList()
         }
 
         val merged = merge(rest, html)
+        if (merged.isEmpty()) ReportInventoryTrace.event("all_sources_unavailable")
         return Inventory(
             reports = merged,
             source = when {
@@ -88,13 +108,17 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val text = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), text)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS report-list returned HTTP ${response.code}.")
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("rest_http_error")
+                error("NIMS report-list returned HTTP ${response.code}.")
+            }
             val payload: Any = if (text.trim().startsWith("[")) JSONArray(text) else JSONObject(text)
             return ReportPayloadParser.parseRest(payload, crNo)
         }
     }
 
     private fun loadHtml(crNo: String): List<ReportRef> {
+        ReportInventoryTrace.event("html_attempt")
         val landing = client.newCall(
             request(NimsUrls.CR_REPORTS)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
@@ -104,12 +128,16 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val body = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), body)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS CR report page returned HTTP ${response.code}.")
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("html_http_error")
+                error("NIMS CR report page returned HTTP ${response.code}.")
+            }
             body
         }
 
         val doc = Jsoup.parse(landing, NimsUrls.CR_REPORTS)
         val form = doc.selectFirst("form[name=viewExternalInvFB], form#viewExternalInvFB, form[action*=viewcrnowisereportprocess]")
+        ReportInventoryTrace.event(if (form == null) "html_form_missing" else "html_form_found")
         val action = form?.absUrl("action")?.takeIf { it.isNotBlank() } ?: NimsUrls.CR_REPORTS
         val body = FormBody.Builder()
         form?.select("input[type=hidden][name]")?.forEach { input ->
@@ -132,8 +160,14 @@ class ReportRepository(
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val html = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), html)) throw AuthenticationRequiredException()
-            if (!response.isSuccessful) error("NIMS CR report request returned HTTP ${response.code}.")
-            ReportPayloadParser.parseHtml(html, response.request.url.toString(), crNo)
+            if (!response.isSuccessful) {
+                ReportInventoryTrace.event("html_http_error")
+                error("NIMS CR report request returned HTTP ${response.code}.")
+            }
+            val reports = ReportPayloadParser.parseHtml(html, response.request.url.toString(), crNo)
+            if (reports.isNotEmpty()) ReportInventoryTrace.event("html_verified_rows", reports.size)
+            else ReportInventoryTrace.event("html_no_report_rows")
+            reports
         }
     }
 
@@ -254,28 +288,45 @@ object ReportPayloadParser {
         val document = Jsoup.parse(html, baseUrl)
         verifyCr(document, expectedCr)
         val reports = mutableListOf<ReportRef>()
-        document.select("tr").forEachIndexed { index, row ->
+        val sourceRows = document.select("tr")
+        if (sourceRows.isNotEmpty()) ReportInventoryTrace.event("html_table_rows", sourceRows.size)
+        sourceRows.forEachIndexed { index, row ->
             val rowText = compact(row.text())
             if (!rowText.contains("View Report", true)) return@forEachIndexed
+            // Keep empty cells: dropping an empty lab/collection field shifts
+            // NIMS's fixed table columns and corrupts the source relationship.
             val cells = row.select("td").map { compact(it.text()) }
-                .filter(String::isNotBlank).ifEmpty {
-                    row.select("th,td").map { compact(it.text()) }
-                        .filter(String::isNotBlank)
-                }
+                .ifEmpty { row.select("th,td").map { compact(it.text()) } }
             val onclick = row.select("[onclick]").map { it.attr("onclick") }
                 .firstOrNull { it.contains("printReport", true) }.orEmpty()
             val token = printReportRegex.find(onclick)?.groupValues?.getOrNull(1).orEmpty()
-            val href = row.selectFirst("a[href]")?.absUrl("href").orEmpty()
-            val url = safeReportUrl(href).ifBlank { reportUrlForToken(token) }
-            if (url.isBlank()) return@forEachIndexed
-
+            // Prefer a direct, explicitly validated NIMS report URL in the
+            // source row; scripts may store it in href, onclick or a data attr.
+            val directStrings = row.select("a[href], [data-url], [onclick]")
+                .flatMap { el -> listOf(el.absUrl("href"), el.attr("href"),
+                    el.attr("data-url"), el.attr("onclick")) }
+            val embedded = Regex(
+                """https?://[^\s'"]+|/HISInvestigationG5/new_investigation/[^\s'"]+""",
+                RegexOption.IGNORE_CASE
+            )
+            val url = directStrings.firstNotNullOfOrNull { raw ->
+                safeReportUrl(raw).takeIf(String::isNotBlank)
+                    ?: embedded.findAll(raw).mapNotNull { match ->
+                        val text = match.value.replace("&amp;", "&")
+                        val absolute = if (text.startsWith("/")) NimsUrls.WWW_ORIGIN + text
+                            else text
+                        safeReportUrl(absolute).takeIf(String::isNotBlank)
+                    }.firstOrNull()
+            }.orEmpty().ifBlank { reportUrlForToken(token) }
+            // Preserve source-index metadata even when NIMS uses an
+            // unrecognized JavaScript View Report handler. Do not manufacture
+            // a PDF URL from a guessed token.
             // NIMS "CR No Wise Result Report Printing New" table:
             // LabName | Test Name | Sample No/Lab No | Collection Date |
             // Report NO. | Report(View Report).
             // This source row is already the PDF-to-study association.
             val knownLayout = cells.size >= 6 &&
-                cells.last().contains("View Report", true) &&
-                dateRegex.containsMatchIn(cells[3])
+                cells.last().contains("View Report", true)
             val pair = if (knownLayout) cells[2] else ""
             val components = pair.split('/').map(String::trim)
                 .filter(String::isNotBlank)
@@ -299,12 +350,14 @@ object ReportPayloadParser {
             val id = token.ifBlank {
                 Integer.toHexString("$title|$date|$index|$url".hashCode())
             }
+            if (url.isBlank()) ReportInventoryTrace.event("html_rows_without_pdf")
             reports += ReportRef(id = id, title = title, date = date,
                 department = dept, url = url, sentDate = collected,
                 labNumber = guessedLab, sampleNumber = sample)
         }
         // Keep separate report-stage URLs even when lab accession is shared.
-        return reports.distinctBy { it.url }
+        return reports.distinctBy { if (it.url.isNotBlank()) "pdf|" + it.url
+            else "index|" + it.id }
     }
 
     fun reportUrlForToken(raw: String): String {
@@ -481,6 +534,8 @@ object ReportTitleCache {
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
+    private val revision = java.util.concurrent.atomic.AtomicInteger()
+    fun revision(): Int = revision.get()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
         learnPages(url, listOf(extracted), expectedCr)
@@ -492,6 +547,7 @@ object ReportTitleCache {
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         val full = pages.joinToString("\n\n") { it.take(40000) }
         OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
+        revision.incrementAndGet()
         extractedByUrl[url] = full.take(160000)
         if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
             if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
@@ -515,5 +571,6 @@ object ReportTitleCache {
         headers.clear()
         sectionsByUrl.clear()
         sha256ByUrl.clear()
+        revision.incrementAndGet()
     }
 }
