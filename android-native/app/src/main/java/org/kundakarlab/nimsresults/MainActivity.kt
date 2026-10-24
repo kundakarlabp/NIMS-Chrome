@@ -551,7 +551,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     // All reports are inspected independently; a multi-study
                     // PDF is one physical download with several accession parts.
                     val sources = inventory?.reports ?: restSeed
-                    if (sources.isEmpty()) {
+                    if (sources.none { it.url.isNotBlank() }) {
                         ReportInventoryTrace.event("webview_attempt")
                         engine.fetchReportIndexHtml(cr, requestId)
                     } else {
@@ -597,11 +597,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     return@runOnUiThread
                 if (reports.isNotEmpty()) {
                     val prior = bundle ?: return@runOnUiThread
-                    bundle = prior.copy(reports = reports)
-                    apiReportCount = reports.size
+                    val reconciled = (reports + prior.reports).distinctBy {
+                        if (it.url.isNotBlank()) "pdf|" + it.url
+                        else "index|" + it.id + "|" + it.title + "|" + it.date
+                    }
+                    bundle = prior.copy(reports = reconciled)
+                    apiReportCount = reconciled.size
                     statusText = prior.results.size.toString() +
-                        " structured values · " + reports.size + " NIMS original reports"
-                    startPdfIndex(requestId, cr, reports)
+                        " structured values · " + reconciled.count { it.url.isNotBlank() } +
+                        " PDF links (" + reconciled.size + " index entries)"
+                    startPdfIndex(requestId, cr, reconciled)
                 } else statusText =
                     "Results ready · unable to reconcile original PDF inventory"
             }
