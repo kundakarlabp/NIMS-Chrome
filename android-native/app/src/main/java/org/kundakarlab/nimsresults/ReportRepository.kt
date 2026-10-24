@@ -534,6 +534,8 @@ object ReportTitleCache {
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
+    private val revision = java.util.concurrent.atomic.AtomicInteger()
+    fun revision(): Int = revision.get()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
         learnPages(url, listOf(extracted), expectedCr)
@@ -545,6 +547,7 @@ object ReportTitleCache {
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         val full = pages.joinToString("\n\n") { it.take(40000) }
         OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
+        revision.incrementAndGet()
         extractedByUrl[url] = full.take(160000)
         if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
             if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
@@ -568,5 +571,6 @@ object ReportTitleCache {
         headers.clear()
         sectionsByUrl.clear()
         sha256ByUrl.clear()
+        revision.incrementAndGet()
     }
 }
