@@ -59,6 +59,7 @@ class ReportActivity : Activity() {
     private var tempFile: File? = null
     private var bitmap: Bitmap? = null
     private var pageIndex = 0
+    private val pdfOpenStartMs = android.os.SystemClock.elapsedRealtime()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -435,7 +436,7 @@ class ReportActivity : Activity() {
                     PdfPerformanceTrace.record("render_page_ms",
                         android.os.SystemClock.elapsedRealtime() - renderStart)
                     if (index == 0) PdfPerformanceTrace.record("full_pdf_open_ms",
-                        android.os.SystemClock.elapsedRealtime() - renderStart)
+                        android.os.SystemClock.elapsedRealtime() - pdfOpenStartMs)
                     progress.visibility = View.GONE
                     status.text = "PDF · page " + (index + 1) + "/" + current.pageCount
                     previous.isEnabled = index > 0
