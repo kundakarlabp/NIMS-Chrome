@@ -318,8 +318,9 @@ object ReportPayloadParser {
                         safeReportUrl(absolute).takeIf(String::isNotBlank)
                     }.firstOrNull()
             }.orEmpty().ifBlank { reportUrlForToken(token) }
-            if (url.isBlank()) return@forEachIndexed
-
+            // Preserve source-index metadata even when NIMS uses an
+            // unrecognized JavaScript View Report handler. Do not manufacture
+            // a PDF URL from a guessed token.
             // NIMS "CR No Wise Result Report Printing New" table:
             // LabName | Test Name | Sample No/Lab No | Collection Date |
             // Report NO. | Report(View Report).
@@ -349,12 +350,14 @@ object ReportPayloadParser {
             val id = token.ifBlank {
                 Integer.toHexString("$title|$date|$index|$url".hashCode())
             }
+            if (url.isBlank()) ReportInventoryTrace.event("html_rows_without_pdf")
             reports += ReportRef(id = id, title = title, date = date,
                 department = dept, url = url, sentDate = collected,
                 labNumber = guessedLab, sampleNumber = sample)
         }
         // Keep separate report-stage URLs even when lab accession is shared.
-        return reports.distinctBy { it.url }
+        return reports.distinctBy { if (it.url.isNotBlank()) "pdf|" + it.url
+            else "index|" + it.id }
     }
 
     fun reportUrlForToken(raw: String): String {
