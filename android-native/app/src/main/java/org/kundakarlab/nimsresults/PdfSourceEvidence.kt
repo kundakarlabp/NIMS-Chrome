@@ -1,48 +1,118 @@
 package org.kundakarlab.nimsresults
 
-/**
- * Source evidence for a single *physical* PDF. One PDF can include many lab
- * studies and many pages; never equate a PDF identifier with a specimen ID.
- * Section text remains on the device and is never treated as parsed clinical
- * parameters without an explicitly validated mapping.
- */
+import java.util.Locale
+
+/** Meaning is derived only from explicit report headings, not a phrase in a narrative. */
+enum class PdfStudyKind { GRAM_STAIN, CULTURE, CBC, CHEMISTRY, COAGULATION, RADIOLOGY,
+    BLOOD_BANK, MOLECULAR, OTHER }
+
 data class PdfSourcePart(
     val page: Int,
     val header: PdfDocumentHeader,
     val text: String,
-    val title: String = ""
+    val title: String = "",
+    val endPage: Int = page,
+    val kind: PdfStudyKind = PdfStudyKind.OTHER,
+    val specimen: String = "",
+    val sampleNumber: String = ""
 )
 
 object PdfSourceEvidence {
     private val crPattern = Regex("""(?i)\bCR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b""")
-    // Anchored to a *labelled* accession field. Ordinary values inside the
-    // report (including antibiotic MICs) never start a new study.
     private val labPattern = Regex(
-        """(?im)^\s*(?:Lab\s*/\s*Study\s*(?:No\.?|Number)?|Lab\s*(?:Number|No\.?|Study\s*No\.?)|Accession\s*(?:Number|No\.?)?|Study\s*No\.?)\s*[:#\-]\s*[A-Za-z0-9/_-]+"""
+        """(?i)\b(?:Lab\s*/\s*Study\s*(?:No\.?|Number)?|Lab\s*(?:Number|No\.?|Study\s*No\.?)|Accession\s*(?:Number|No\.?)?|Study\s*No\.?)\s*[:#\-]\s*[A-Za-z0-9/_-]+"""
     )
-    fun patientCrs(pages: List<String>): Set<String> =
-        pages.flatMap { page -> crPattern.findAll(page).map { it.groupValues[1] }.toList() }.toSet()
+    private val samplePattern = Regex("""(?i)\b(?:Specimen|(?:Serum|Blood|Urine|Plasma|CSF))\s*/\s*([A-Za-z0-9_-]{6,})""")
+    private val specimenPattern = Regex("""(?i)\bSample\s*Processed\s*:\s*([^\r\n]+)""")
+    private val reportFooter = Regex("""(?im)^\s*(?:Test results relate only to item received|This is computer generated report|Page\s+\d+\s+of\s+\d+|Validated By:).*$""")
 
+    fun patientCrs(pages: List<String>): Set<String> =
+        pages.flatMap { p -> crPattern.findAll(p).map { it.groupValues[1] }.toList() }.toSet()
+
+    fun sampleNumber(text: String): String = samplePattern.find(text)?.groupValues?.get(1).orEmpty()
+    fun specimen(text: String): String = specimenPattern.find(text)?.groupValues?.get(1)?.trim().orEmpty()
+
+    fun kind(text: String): PdfStudyKind {
+        val body = text.lowercase(Locale.ROOT)
+        return when {
+            Regex("""(?m)^\s*(?:staining|grams?\s+(?:stain|smear))\s*$""").containsMatchIn(body) &&
+                !Regex("""(?m)^\s*(?:urine\s+)?aerobic\s+culture\b|^\s*culture\s+final\s+report\b""")
+                    .containsMatchIn(body) -> PdfStudyKind.GRAM_STAIN
+            Regex("""(?m)^\s*(?:(?:fan\s+)?aerobic\s+blood\s+culture|(?:urine\s+)?aerobic\s+culture|culture\s+final\s+report)\b""")
+                .containsMatchIn(body) || body.contains("culture report") ->
+                PdfStudyKind.CULTURE
+            Regex("""(?m)^\s*cbc\s+with\s+diff|^\s*cbc\s*\(|^\s*complete\s+blood\s+count""")
+                .containsMatchIn(body) -> PdfStudyKind.CBC
+            body.contains("coagulation chemistry") ||
+                body.contains("prothrombin time") && body.contains("aptt") -> PdfStudyKind.COAGULATION
+            body.contains("routine chemistry") || body.contains("liver function tests") ->
+                PdfStudyKind.CHEMISTRY
+            body.contains("department of radio diagnosis") ||
+                Regex("""(?m)^\s*examination performed\s*:""").containsMatchIn(body) ->
+                PdfStudyKind.RADIOLOGY
+            body.contains("blood grouping") || body.contains("antibody screening") ->
+                PdfStudyKind.BLOOD_BANK
+            body.contains("biofire") || body.contains("filmarray") -> PdfStudyKind.MOLECULAR
+            else -> PdfStudyKind.OTHER
+        }
+    }
+
+    /** Strip repeated NIMS page headers/footers for *presentation only*.
+     * Original untouched source remains available through Open PDF. */
+    fun clinicalBody(page: String): String {
+        val lines = page.replace("\r\n", "\n").lines()
+        val ward = lines.indexOfFirst { Regex("""(?i)^\s*(?:ward(?:/opd)?|dept/unit)\b""").containsMatchIn(it) }
+        val begin = if (ward >= 0) ward + 1 else 0
+        val end = lines.indexOfFirst { reportFooter.containsMatchIn(it) }
+            .takeIf { it >= begin } ?: lines.size
+        return lines.subList(begin, end).joinToString("\n").trim()
+    }
+
+    /** Preserve all pages of a single radiology/long-form study as one
+     * logical section; do not mistake a repeated page header for a new test. */
     fun parts(pages: List<String>, provenCr: String): List<PdfSourcePart> {
-        return pages.flatMapIndexed { index, page ->
+        val fragments = pages.flatMapIndexed { index, page ->
             if (page.isBlank()) return@flatMapIndexed emptyList<PdfSourcePart>()
-            val starts = labPattern.findAll(page).map { it.range.first }.toList()
-            // With multiple lab headers on a page, preserve their *separate*
-            // collection/reporting metadata. Do not attribute a shared heading
-            // or first accession to all subsequent studies.
-            val slices = if (starts.size <= 1) listOf(page)
-                else starts.mapIndexed { i, start ->
-                    page.substring(start, starts.getOrNull(i + 1) ?: page.length)
+            val matches = labPattern.findAll(page).toList()
+            val distinct = matches.map { PdfDocumentHeaders.parse(it.value).labNumber }
+                .filter(String::isNotBlank).distinct()
+            val chunks = if (distinct.size < 2) listOf(page)
+                else matches.mapIndexed { i, m ->
+                    page.substring(m.range.first,
+                        matches.getOrNull(i + 1)?.range?.first ?: page.length)
                 }
-            slices.map { chunk ->
-                val original = PdfDocumentHeaders.parse(chunk)
+            chunks.map { chunk ->
+                val headingText = if (chunks.size == 1) page else chunk
+                val header = PdfDocumentHeaders.parse(headingText).copy(crNo = provenCr)
+                val sourceText = if (chunks.size == 1) clinicalBody(page) else chunk.trim()
                 PdfSourcePart(
-                    page = index + 1,
-                    header = original.copy(crNo = provenCr),
-                    text = chunk.take(40000),
-                    title = OpaqueReportTitles.titleFromExtractedText(chunk).orEmpty()
+                    page = index + 1, header = header, text = sourceText.take(40000),
+                    title = OpaqueReportTitles.titleFromExtractedText(headingText).orEmpty(),
+                    kind = kind(headingText),
+                    specimen = specimen(headingText),
+                    sampleNumber = sampleNumber(headingText)
                 )
             }
         }
+        val merged = mutableListOf<PdfSourcePart>()
+        fragments.forEach { item ->
+            val last = merged.lastOrNull()
+            // Only fold contiguous physical pages with the same accession and
+            // investigation kind. Different specimens and reports remain distinct.
+            if (last != null && item.page == last.endPage + 1 &&
+                item.header.labNumber.isNotBlank() &&
+                item.header.labNumber == last.header.labNumber &&
+                (item.kind == last.kind || item.kind == PdfStudyKind.OTHER ||
+                    last.kind == PdfStudyKind.OTHER)) {
+                merged[merged.lastIndex] = last.copy(
+                    endPage = item.page,
+                    text = (last.text + "\n" + item.text).take(160000),
+                    kind = if (last.kind == PdfStudyKind.OTHER) item.kind else last.kind,
+                    specimen = last.specimen.ifBlank { item.specimen },
+                    sampleNumber = last.sampleNumber.ifBlank { item.sampleNumber }
+                )
+            } else merged += item
+        }
+        return merged
     }
 }
