@@ -413,16 +413,34 @@ data class PdfDocumentHeader(
 
 object PdfDocumentHeaders {
     fun parse(text: String): PdfDocumentHeader {
-        // Only explicitly labelled header fields count. The original PDF is
-        // authoritative; names/dates alone cannot link a specimen.
+        // Only labelled fields carry clinical provenance; never label a generic
+        // index/result date as collection or validation time.
         fun field(pattern: String): String = Regex(pattern, RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{4}(?:\s+\d{1,2}:\d{2})?|\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)"""
+        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?"""
+        val time = """(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)"""
+        fun combine(d: String, t: String): String {
+            if (d.isBlank()) return t
+            if (t.isBlank() || Regex("""\d{1,2}:\d{2}""").containsMatchIn(d)) return d
+            return "$d $t"
+        }
+        val collected = field(
+            """\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
+        )
+        val collectedTime = field(
+            """\b(?:Collection|Sample\s*Collection|Specimen\s*Collection|Coll\s*/\s*Study|Collected)\s*Time\s*[:#\-]\s*""" + time
+        )
+        val reported = field(
+            """\b(?:Reporting|Reported|Report\s*Issued|Validation|Report)\s*Date\s*[:#\-]\s*""" + date
+        )
+        val reportedTime = field(
+            """\b(?:Reporting|Reported|Report\s*Issued|Validation)\s*Time\s*[:#\-]\s*""" + time
+        )
         return PdfDocumentHeader(
-            crNo = field("""\bCR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b"""),
+            crNo = field("""\b(?:Patient\s*)?CR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b"""),
             labNumber = field("""\b(?:Lab\s*/\s*Study|Lab\s*Number|Lab\s*No|Accession(?:\s*Number|\s*No)?|Study\s*No)\.?\s*(?:No\.?)?\s*[:#\-]\s*([A-Za-z0-9/_-]+)"""),
-            collectionDate = field("""\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date),
-            reportedDate = field("""\b(?:Reporting|Reported|Report\s*Issued|Validation)\s*Date\s*[:#\-]\s*""" + date),
+            collectionDate = combine(collected, collectedTime),
+            reportedDate = combine(reported, reportedTime),
             orderDate = field("""\b(?:Requisition|Ordered|Order)\s*Date\s*[:#\-]\s*""" + date)
         )
     }
