@@ -9,6 +9,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -36,6 +37,7 @@ class PdfSourceEnricher(private val context: Context) {
             .build()
         val tmp = File.createTempFile("nims-source-index-", ".pdf", context.cacheDir)
         try {
+            val digest = MessageDigest.getInstance("SHA-256")
             http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful || !stillSelected()) return false
                 if (response.request.url.scheme != "https" ||
@@ -54,6 +56,7 @@ class PdfSourceEnricher(private val context: Context) {
                             count += n
                             if (count > MAX_PDF_BYTES) return false
                             output.write(buffer, 0, n)
+                            digest.update(buffer, 0, n)
                         }
                     }
                 }
@@ -76,7 +79,8 @@ class PdfSourceEnricher(private val context: Context) {
                 }
             }
             if (!stillSelected() || pages.all { it.isBlank() }) return false
-            return ReportTitleCache.learnPages(url, pages, expectedCr)
+            return ReportTitleCache.learnPages(url, pages, expectedCr,
+                digest.digest().joinToString("") { "%02x".format(it) })
         } catch (_: Exception) {
             // An inaccessible/bitmap-only PDF stays a source card that the
             // clinician can open; never synthesize missing source metadata.
