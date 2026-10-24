@@ -656,6 +656,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
+            appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
                 // Engine details are restricted to boolean lifecycle evidence.
@@ -696,7 +697,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // are available in All Results and indexed when directly opened.
         val priority = unique.sortedByDescending {
             RecentReportDates.dateFor(it).first ?: LocalDate.MIN
-        }.take(32)
+        }.take(8)
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
@@ -1398,9 +1399,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }.sortedByDescending { BulkParser.dateKey(it.date) }
                 .distinctBy { normalizeKey(it.parameter) }.take(6)
         }
-        LazyColumn(state = scroll, 
+        LazyColumn(state = scroll,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(10.dp),
+            contentPadding = PaddingValues(start = 10.dp, top = 10.dp, end = 30.dp, bottom = 15.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             item {
@@ -2801,7 +2802,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 7.dp),
+                .padding(end = 20.dp, top = 7.dp, bottom = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -2811,7 +2812,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 if (row.refRange.isNotBlank()) Text("Ref: ${row.refRange}", fontSize = 10.sp, color = Color(0xFF9AA8B5))
             }
-            Column(horizontalAlignment = Alignment.End) {
+            Column(
+                modifier = Modifier.widthIn(max = 118.dp),
+                horizontalAlignment = Alignment.End
+            ) {
                 Text(
                     row.valueText + if (row.unit.isNotBlank()) " ${row.unit}" else "",
                     fontWeight = FontWeight.Bold,
