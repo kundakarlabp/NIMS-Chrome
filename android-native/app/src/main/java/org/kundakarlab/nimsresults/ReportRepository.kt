@@ -425,7 +425,7 @@ object PdfDocumentHeaders {
             return "$d $t"
         }
         val collected = field(
-            """\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
+            """\b(?:Coll\s*\.?\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
         )
         val collectedTime = field(
             """\b(?:Collection|Sample\s*Collection|Specimen\s*Collection|Coll\s*/\s*Study|Collected)\s*Time\s*[:#\-]\s*""" + time
@@ -451,19 +451,21 @@ object ReportTitleCache {
     private val extractedByUrl = ConcurrentHashMap<String, String>()
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
+    private val sha256ByUrl = ConcurrentHashMap<String, String>()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
         learnPages(url, listOf(extracted), expectedCr)
 
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
-    fun learnPages(url: String, pages: List<String>, expectedCr: String = ""): Boolean {
+    fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         val full = pages.joinToString("\n\n") { it.take(40000) }
         OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
         extractedByUrl[url] = full.take(160000)
         if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
+            if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
             val sections = PdfSourceEvidence.parts(pages, expectedCr)
             sectionsByUrl[url] = sections
             headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
@@ -475,6 +477,7 @@ object ReportTitleCache {
     fun extracted(url: String): String? = extractedByUrl[url]
     fun header(url: String): PdfDocumentHeader? = headers[url]
     fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
+    fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
     fun clear() {
@@ -482,5 +485,6 @@ object ReportTitleCache {
         extractedByUrl.clear()
         headers.clear()
         sectionsByUrl.clear()
+        sha256ByUrl.clear()
     }
 }
