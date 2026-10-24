@@ -44,9 +44,12 @@ object PdfSourceEvidence {
             Regex("""(?m)^\s*cbc\s+with\s+diff|^\s*cbc\s*\(|^\s*complete\s+blood\s+count""")
                 .containsMatchIn(body) -> PdfStudyKind.CBC
             body.contains("coagulation chemistry") ||
-                body.contains("prothrombin time") && body.contains("aptt") -> PdfStudyKind.COAGULATION
-            body.contains("routine chemistry") || body.contains("liver function tests") ->
-                PdfStudyKind.CHEMISTRY
+                body.contains("prothrombin time") || body.contains("aptt") ||
+                Regex("""\b(?:pt[\s./-]*inr|coagulation|pt\s*\+\s*aptt)\b""")
+                    .containsMatchIn(body) -> PdfStudyKind.COAGULATION
+            body.contains("routine chemistry") || body.contains("liver function") ||
+                Regex("""\b(?:creatinine|electrolytes|urea|sgot|sgpt|albumin|bilirubin|calcium|lipid\s+profile|cholesterol|renal\s+function|lft|rft)\b""")
+                    .containsMatchIn(body) -> PdfStudyKind.CHEMISTRY
             body.contains("department of radio diagnosis") ||
                 Regex("""(?m)^\s*examination performed\s*:""").containsMatchIn(body) ->
                 PdfStudyKind.RADIOLOGY
