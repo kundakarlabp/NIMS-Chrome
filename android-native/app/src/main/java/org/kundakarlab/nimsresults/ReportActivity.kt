@@ -316,21 +316,24 @@ class ReportActivity : Activity() {
             // Parse the report's own CR and headings before displaying it.
             // Failure to extract text does not prevent a user visually
             // inspecting an image-based source PDF.
-            if (file.length() <= 8L * 1024 * 1024) {
-                val sourceText = runCatching {
+            if (file.length() <= 16L * 1024 * 1024) {
+                // Read every PDF page; the first two pages are NOT a reliable
+                // inventory for combined reports with multiple lab accessions.
+                val pages = runCatching {
                     PDFBoxResourceLoader.init(applicationContext)
                     PDDocument.load(file).use { doc ->
-                        PDFTextStripper().apply {
-                            startPage = 1
-                            endPage = minOf(doc.numberOfPages, 2)
-                            sortByPosition = true
-                        }.getText(doc).take(12000)
+                        (1..doc.numberOfPages).map { page ->
+                            PDFTextStripper().apply {
+                                startPage = page
+                                endPage = page
+                                sortByPosition = true
+                            }.getText(doc).take(40000)
+                        }
                     }
                 }.getOrNull().orEmpty()
-                if (sourceText.isBlank()) DiagnosticEvents.record("PDF_TEXT_MISSING")
-                val header = PdfDocumentHeaders.parse(sourceText)
-                if (expectedCr.isNotBlank() && header.crNo.isNotBlank() &&
-                    header.crNo != expectedCr) {
+                if (pages.all { it.isBlank() }) DiagnosticEvents.record("PDF_TEXT_MISSING")
+                val crs = PdfSourceEvidence.patientCrs(pages)
+                if (expectedCr.isNotBlank() && crs.any { it != expectedCr }) {
                     DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                     runOnUiThread {
                         status.text = "Wrong patient CR in PDF — blocked"
@@ -343,10 +346,9 @@ class ReportActivity : Activity() {
                     }
                     return
                 }
-                if (sourceText.isNotBlank() &&
-                    (expectedCr.isBlank() || expectedCr == header.crNo)) {
-                    cachedExtractedText = sourceText
-                    ReportTitleCache.learn(sourceUrl, sourceText, expectedCr)
+                if (pages.any { it.isNotBlank() } &&
+                    ReportTitleCache.learnPages(sourceUrl, pages, expectedCr)) {
+                    cachedExtractedText = pages.joinToString("\n\n").take(160000)
                 }
             }
             descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)

@@ -54,8 +54,12 @@ object ReportLinkResolver {
         if (lab.isNotBlank()) {
             val labMatched = relevant.filter { report ->
                 val header = ReportTitleCache.header(report.url)
-                uniqueLabMatch(lab,
-                    header?.labNumber?.takeIf(String::isNotBlank) ?: report.labNumber)
+                // The same signed PDF may contain several separate lab
+                // accessions. A match to any CR-verified section links to
+                // the physical PDF without assigning another study's fields.
+                val labs = ReportTitleCache.accessions(report.url) +
+                    listOfNotNull(header?.labNumber, report.labNumber)
+                labs.any { uniqueLabMatch(lab, it) }
             }
             if (labMatched.size == 1) return ReportCandidates(labMatched.single(), labMatched)
             if (labMatched.isNotEmpty()) return ReportCandidates(null, labMatched)
@@ -68,7 +72,8 @@ object ReportLinkResolver {
         val micro = ClinicalReportRenderer.isMicrobiologyInvestigation(test)
         val matching = relevant.mapNotNull { report ->
             val name = ReportTitleCache.get(report.url).orEmpty()
-            val reportTest = listOf(name, report.title)
+            val reportTest = listOf(name, report.title) +
+                ReportTitleCache.sections(report.url).map { it.title }.filter { it.isNotBlank() }
             val sameTest = reportTest.any { candidate ->
                 val n = kind(candidate)
                 n == canonical || (canonical.length >= 8 && n.length >= 8 &&

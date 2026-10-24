@@ -413,16 +413,34 @@ data class PdfDocumentHeader(
 
 object PdfDocumentHeaders {
     fun parse(text: String): PdfDocumentHeader {
-        // Only explicitly labelled header fields count. The original PDF is
-        // authoritative; names/dates alone cannot link a specimen.
+        // Only labelled fields carry clinical provenance; never label a generic
+        // index/result date as collection or validation time.
         fun field(pattern: String): String = Regex(pattern, RegexOption.IGNORE_CASE)
             .find(text)?.groupValues?.getOrNull(1)?.trim().orEmpty()
-        val date = """(\d{1,2}[-/][A-Za-z]{3}[-/]\d{4}(?:\s+\d{1,2}:\d{2})?|\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?)"""
+        val date = """((?:\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?)"""
+        val time = """(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)"""
+        fun combine(d: String, t: String): String {
+            if (d.isBlank()) return t
+            if (t.isBlank() || Regex("""\d{1,2}:\d{2}""").containsMatchIn(d)) return d
+            return "$d $t"
+        }
+        val collected = field(
+            """\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Collection|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date
+        )
+        val collectedTime = field(
+            """\b(?:Collection|Sample\s*Collection|Specimen\s*Collection|Coll\s*/\s*Study|Collected)\s*Time\s*[:#\-]\s*""" + time
+        )
+        val reported = field(
+            """\b(?:Reporting|Reported|Report\s*Issued|Validation|Report)\s*Date\s*[:#\-]\s*""" + date
+        )
+        val reportedTime = field(
+            """\b(?:Reporting|Reported|Report\s*Issued|Validation)\s*Time\s*[:#\-]\s*""" + time
+        )
         return PdfDocumentHeader(
-            crNo = field("""\bCR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b"""),
+            crNo = field("""\b(?:Patient\s*)?CR\s*(?:No|Number)?\.?\s*[:#\-]?\s*(\d{15})\b"""),
             labNumber = field("""\b(?:Lab\s*/\s*Study|Lab\s*Number|Lab\s*No|Accession(?:\s*Number|\s*No)?|Study\s*No)\.?\s*(?:No\.?)?\s*[:#\-]\s*([A-Za-z0-9/_-]+)"""),
-            collectionDate = field("""\b(?:Coll\s*/\s*Study|Specimen\s*Collect(?:ion|ed)?|Sample\s*Collect(?:ion|ed)?|Date\s*Sent|Sent\s*Date)\s*(?:Date)?\s*[:#\-]\s*""" + date),
-            reportedDate = field("""\b(?:Reporting|Reported|Report\s*Issued|Validation)\s*Date\s*[:#\-]\s*""" + date),
+            collectionDate = combine(collected, collectedTime),
+            reportedDate = combine(reported, reportedTime),
             orderDate = field("""\b(?:Requisition|Ordered|Order)\s*Date\s*[:#\-]\s*""" + date)
         )
     }
@@ -432,24 +450,37 @@ object ReportTitleCache {
     private val recognized = ConcurrentHashMap<String, String>()
     private val extractedByUrl = ConcurrentHashMap<String, String>()
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
-    fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean {
-        val header = PdfDocumentHeaders.parse(extracted)
-        // Wrong-patient source PDFs must never enrich the clinical dashboard.
-        if (expectedCr.isNotBlank() && header.crNo != expectedCr) return false
-        OpaqueReportTitles.titleFromExtractedText(extracted)?.let { recognized[url] = it }
-        // Volatile, on-device only; no persistent source text or external upload.
-        extractedByUrl[url] = extracted.take(12000)
-        if (header.crNo.isNotBlank() && expectedCr.isNotBlank() && header.crNo == expectedCr) {
-            headers[url] = header
+    private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
+
+    fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
+        learnPages(url, listOf(extracted), expectedCr)
+
+    /** Index all pages, not just page 1-2. Explicit CR proof is required to
+     * associate PDF contents with the selected patient's investigations. */
+    fun learnPages(url: String, pages: List<String>, expectedCr: String = ""): Boolean {
+        val crs = PdfSourceEvidence.patientCrs(pages)
+        if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
+        val full = pages.joinToString("\n\n") { it.take(40000) }
+        OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
+        extractedByUrl[url] = full.take(160000)
+        if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
+            val sections = PdfSourceEvidence.parts(pages, expectedCr)
+            sectionsByUrl[url] = sections
+            headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
+                ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
         }
         return true
     }
     fun get(url: String): String? = recognized[url]
     fun extracted(url: String): String? = extractedByUrl[url]
     fun header(url: String): PdfDocumentHeader? = headers[url]
+    fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
+    fun accessions(url: String): Set<String> = sections(url)
+        .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
     fun clear() {
         recognized.clear()
         extractedByUrl.clear()
         headers.clear()
+        sectionsByUrl.clear()
     }
 }
