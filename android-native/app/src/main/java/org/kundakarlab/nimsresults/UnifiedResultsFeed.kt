@@ -38,14 +38,34 @@ object UnifiedResultsFeed {
                     rows = rows
                 )
             }
+        // An accession-verified document is attached to the corresponding
+        // investigation card. Standalone PDF entries are kept only for
+        // unmatched sources, so the timeline does not duplicate results.
+        val linkedUrls = structured.mapNotNull { study ->
+            ReportLinkResolver.candidates(study.rows, bundle.reports,
+                bundle.patient.crNo).verified?.url
+        }.toSet()
+        val linkedDigests = linkedUrls.map { ReportTitleCache.digest(it) }
+            .filter(String::isNotBlank).toSet()
         val documents = bundle.reports
             .filter { it.url.isNotBlank() }
-            .distinctBy { it.url }
+            .distinctBy { ReportTitleCache.digest(it.url).ifBlank { it.url } }
+            .filterNot { it.url in linkedUrls ||
+                ReportTitleCache.digest(it.url).let { hash ->
+                    hash.isNotBlank() && hash in linkedDigests
+                } }
             .map { report ->
+                val header = ReportTitleCache.header(report.url)
+                    ?.takeIf { it.crNo == bundle.patient.crNo }
+                val name = if (OpaqueReportTitles.isCode(report.title) ||
+                    report.title == "Investigation title unavailable")
+                    ReportTitleCache.get(report.url).orEmpty()
+                        .ifBlank { report.title } else report.title
                 UnifiedResultEntry(
                     key = "pdf|" + report.url,
-                    title = ReportTitleCache.get(report.url) ?: report.title,
-                    date = RecentReportDates.dateFor(report).first ?: LocalDate.MIN,
+                    title = name,
+                    date = RecentReportDates.parse(header?.reportedDate.orEmpty())
+                        ?: RecentReportDates.dateFor(report).first ?: LocalDate.MIN,
                     report = report
                 )
             }
