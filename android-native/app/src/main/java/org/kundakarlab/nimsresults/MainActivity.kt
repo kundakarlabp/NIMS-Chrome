@@ -181,6 +181,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashTrace.install(this)
         vault = SessionVault(this)
         patientShelf = PatientShelf(this)
         shelfEntries = patientShelf.read()
@@ -649,6 +650,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("NIMS Results diagnostics · entire app")
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
+            appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
             appendLine("app.crInputLength=${crInput.length}")
