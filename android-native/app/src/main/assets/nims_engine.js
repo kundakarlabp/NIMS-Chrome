@@ -286,6 +286,14 @@
     st.index += 1;
     st.frame.contentWindow.__NIMS_NATIVE_REQUEST_ID__ = requestId;
     st.frame.contentWindow.__NIMS_NATIVE_BATCH_PENDING__ = true;
+    st.timer = setTimeout(() => {
+      if (staged !== st || st.waitingAck || !st.running) return;
+      staged = null;
+      st.frame.contentWindow.__NIMS_NATIVE_BATCH_PENDING__ = false;
+      if (st.index === 1) AndroidNimsBridge.onError(
+        requestId, 'NIMS first Custom Sheet date window timed out.');
+      else AndroidNimsBridge.onStage(requestId, 'bulk_partial_timeout');
+    }, 30000);
     AndroidNimsBridge.onStage(requestId,
       st.index === 1 ? 'capturing_results' :
       'fetching_older_results:' + st.index + '/' + st.batches.length);
@@ -316,6 +324,7 @@
         if (!text.trim()) return;
         w.__NIMS_NATIVE_BATCH_PENDING__ = false;
         if (staged?.requestId === req) {
+          clearTimeout(staged.timer);
           staged.waitingAck = true;
           staged.running = false;
         }
