@@ -3,6 +3,7 @@ package org.kundakarlab.nimsresults
 import android.content.Context
 import android.webkit.CookieManager
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import okhttp3.OkHttpClient
@@ -67,7 +68,7 @@ class PdfSourceEnricher(private val context: Context) {
                     byteArrayOf(37, 80, 68, 70) /* %PDF */)
             }) return false
             PDFBoxResourceLoader.init(context.applicationContext)
-            val pages = PDDocument.load(tmp).use { pdf ->
+            val pages = PDDocument.load(tmp, MemoryUsageSetting.setupMixed(4L * 1024 * 1024)).use { pdf ->
                 (1..pdf.numberOfPages).map { p ->
                     if (!stillSelected() || Thread.currentThread().isInterrupted)
                         return false
