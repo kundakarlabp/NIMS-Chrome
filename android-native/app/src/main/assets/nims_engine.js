@@ -414,6 +414,9 @@
       const dateChecks = [...(doc()?.querySelectorAll(UI.dateChecks) || [])];
       const batches = planDateBatches(dateChecks);
       if (!batches.length) throw new Error('NIMS returned no selectable dates.');
+      AndroidNimsBridge.onStage(requestId,
+        batches.length === 1 && batches[0] === null ? 'bulk_mode_single' :
+          'bulk_mode_staged:' + batches.length);
       installCapture(frame, requestId);
       staged = {
         requestId, cr: crNo, frame, dateCount: dateChecks.length,
