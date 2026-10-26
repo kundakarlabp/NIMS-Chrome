@@ -556,7 +556,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     statusText = initial.results.size.toString() + " results · loading report links…"
                 }
                 val inventory = try {
-                    reportRepository.load(cr, restSeed)
+                    reportRepository.load(cr, restSeed, restAlreadyAttempted = true)
                 } catch (mismatch: IdentityMismatchException) {
                     DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                     runOnUiThread {
