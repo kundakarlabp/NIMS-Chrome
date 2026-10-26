@@ -23,7 +23,12 @@ object UnifiedResultsFeed {
         query: String = "",
         category: String = "All",
         days: Long? = null
-    ): List<UnifiedResultEntry> {
+    ): List<UnifiedResultEntry> =
+        filterEntries(baseEntries(bundle), query, category, days)
+
+    /** Build expensive report-to-investigation associations only when the
+     * bundle or verified source evidence actually changes. */
+    fun baseEntries(bundle: ClinicalBundle): List<UnifiedResultEntry> {
         val structured = bundle.results
             .groupBy { Triple(it.test, it.date, it.labNumber.trim()) }
             .map { (identity, rows) ->
@@ -69,9 +74,21 @@ object UnifiedResultsFeed {
                     report = report
                 )
             }
-        val all = structured + documents
-        val latest = all.map { it.date }.filter { it != LocalDate.MIN }.maxOrNull()
-        return all.filter { entry ->
+        return (structured + documents).sortedWith(
+            compareByDescending<UnifiedResultEntry> { it.date }
+                .thenBy { if (it.report != null) 1 else 0 }
+                .thenBy { it.title })
+    }
+
+    /** Filters cached records without rerunning PDF matching on every keypress. */
+    fun filterEntries(
+        base: List<UnifiedResultEntry>,
+        query: String = "",
+        category: String = "All",
+        days: Long? = null
+    ): List<UnifiedResultEntry> {
+        val latest = base.firstOrNull { it.date != LocalDate.MIN }?.date
+        return base.filter { entry ->
             val source = entry.report
             val rows = entry.rows
             val name = if (source != null) {
@@ -107,8 +124,6 @@ object UnifiedResultsFeed {
                 java.time.temporal.ChronoUnit.DAYS.between(entry.date, latest) in 0..days
             matchesCategory && matchesDate &&
                 (query.isBlank() || name.contains(query, ignoreCase = true))
-        }.sortedWith(compareByDescending<UnifiedResultEntry> { it.date }
-            .thenBy { if (it.report != null) 1 else 0 }
-            .thenBy { it.title })
+        }
     }
 }

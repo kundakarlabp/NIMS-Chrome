@@ -50,10 +50,16 @@ class ReportRepository(
         return Inventory(reports, "nims_rest_report_list")
     }
 
-    fun load(crNo: String, verifiedRest: List<ReportRef> = emptyList()): Inventory {
+    fun load(
+        crNo: String,
+        verifiedRest: List<ReportRef> = emptyList(),
+        restAlreadyAttempted: Boolean = false
+    ): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
-        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching {
+        val rest = if (verifiedRest.isNotEmpty()) verifiedRest
+            else if (restAlreadyAttempted) emptyList()
+            else runCatching {
             ReportInventoryTrace.event("rest_attempt")
             loadRest(crNo)
         }.getOrElse { error ->
@@ -119,7 +125,13 @@ class ReportRepository(
 
     private fun loadHtml(crNo: String): List<ReportRef> {
         ReportInventoryTrace.event("html_attempt")
-        val landing = client.newCall(
+        // Do not occupy the single clinical-results executor for 90 seconds
+        // on a stalled NIMS frameset GET + report POST.
+        val htmlClient = client.newBuilder()
+            .callTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+        val landing = htmlClient.newCall(
             request(NimsUrls.CR_REPORTS)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
                 .get()
@@ -149,7 +161,7 @@ class ReportRepository(
         body.add("hmode", "SHOWPATDETAILS")
         body.add("patCrNo", crNo)
 
-        return client.newCall(
+        return htmlClient.newCall(
             request(action)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
                 .header("Origin", NimsUrls.WWW_ORIGIN)
@@ -535,6 +547,9 @@ object ReportTitleCache {
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
     private val revision = java.util.concurrent.atomic.AtomicInteger()
+    private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger()
+    private const val MAX_MEMORY_PDFS = 8
+    private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
@@ -543,18 +558,43 @@ object ReportTitleCache {
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
     fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
+        val startingSession = sessionGeneration.get()
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
+        // PDF text parsing can be slow. Do not hold the shared source-cache
+        // monitor while extracting sections: low-memory callbacks clear the
+        // cache on Android's main thread.
         val full = pages.joinToString("\n\n") { it.take(40000) }
-        OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
-        revision.incrementAndGet()
-        extractedByUrl[url] = full.take(160000)
-        if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
-            if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
-            val sections = PdfSourceEvidence.parts(pages, expectedCr)
-            sectionsByUrl[url] = sections
-            headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
+        val title = OpaqueReportTitles.titleFromExtractedText(full)
+        val trusted = expectedCr.isNotBlank() && crs == setOf(expectedCr)
+        val parsedParts = if (trusted) PdfSourceEvidence.parts(pages, expectedCr) else emptyList()
+        val parsedHeader = if (trusted) (
+            parsedParts.firstOrNull { it.header.labNumber.isNotBlank() }?.header
                 ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
+            ) else null
+        synchronized(this) {
+            // Source extracted before a patient switch or memory reset must
+            // not be reintroduced after the cache has been cleared.
+            if (sessionGeneration.get() != startingSession) return false
+            loadedUrls.remove(url)
+            loadedUrls.add(url)
+            while (loadedUrls.size > MAX_MEMORY_PDFS) {
+                val oldest = loadedUrls.iterator().next()
+                loadedUrls.remove(oldest)
+                recognized.remove(oldest)
+                extractedByUrl.remove(oldest)
+                headers.remove(oldest)
+                sectionsByUrl.remove(oldest)
+                sha256ByUrl.remove(oldest)
+            }
+            if (title != null) recognized[url] = title
+            extractedByUrl[url] = full.take(64000)
+            if (trusted) {
+                if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
+                sectionsByUrl[url] = parsedParts
+                if (parsedHeader != null) headers[url] = parsedHeader
+            }
+            revision.incrementAndGet()
         }
         return true
     }
@@ -565,7 +605,10 @@ object ReportTitleCache {
     fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
+    @Synchronized
     fun clear() {
+        sessionGeneration.incrementAndGet()
+        loadedUrls.clear()
         recognized.clear()
         extractedByUrl.clear()
         headers.clear()

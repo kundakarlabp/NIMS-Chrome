@@ -101,8 +101,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
     private val worker = Executors.newSingleThreadExecutor()
-    private val pdfWorker = Executors.newSingleThreadExecutor()
-    @Volatile private var pdfIndexSelection = ""
+    private val diagnosticsWorker = Executors.newSingleThreadExecutor()
+     @Volatile private var pdfIndexSelection = ""
     private var pdfInspectedCount by mutableStateOf(0)
     private var pdfConfirmedCount by mutableStateOf(0)
     private var pdfTotalCount by mutableStateOf(0)
@@ -183,6 +183,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashTrace.install(this)
+        ProcessHealth.onLaunch(this)
         vault = SessionVault(this)
         patientShelf = PatientShelf(this)
         shelfEntries = patientShelf.read()
@@ -247,6 +248,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     override fun onStop() {
+        ProcessHealth.checkpoint(this, loadStage.name, selectedTab.name,
+            bundle?.results?.size ?: 0, bundle?.reports?.size ?: 0)
         if (appLockEnabled && appUnlocked && !unlockPromptActive) {
             leftAt = SystemClock.elapsedRealtime()
         }
@@ -261,6 +264,27 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             leftAt = 0L
             handler.post { requestDeviceUnlock() }
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        ProcessHealth.onTrim(this, level)
+        // Release optional parsed PDF text when Android reports pressure.
+        // The signed originals remain accessible via the source inventory.
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
+            level != android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            ReportTitleCache.clear()
+            ReportLinkResolver.clear()
+            reportTitleEpoch++
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        ProcessHealth.onTrim(this, 100)
+        ReportTitleCache.clear()
+        ReportLinkResolver.clear()
+        reportTitleEpoch++
     }
 
     private fun updateShelf(operation: () -> List<PatientBookmark>) {
@@ -528,10 +552,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
                     reportQueryPrefill = ""
                     loadStage = LoadStage.READY
+                    ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
+                        selectedTab.name, initial.results.size, initial.reports.size)
                     statusText = initial.results.size.toString() + " results · loading report links…"
                 }
                 val inventory = try {
-                    reportRepository.load(cr, restSeed)
+                    reportRepository.load(cr, restSeed, restAlreadyAttempted = true)
                 } catch (mismatch: IdentityMismatchException) {
                     DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                     runOnUiThread {
@@ -647,13 +673,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
-    private fun diagnosticsText(): String {
+    private fun diagnosticsText(includeAudit: Boolean = true): String {
         val current = bundle
         return buildString {
             appendLine("NIMS Results diagnostics · entire app")
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
+            appendLine(ProcessHealth.snapshot(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
             appendLine("app.crInputLength=${crInput.length}")
@@ -675,14 +702,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     .joinToString("\n")
                 appendLine(safe)
             }
-            append(AppDiagnostics.summarize(current))
+            if (includeAudit) append(AppDiagnostics.summarize(current))
         }
     }
 
     private fun copyDiagnostics() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS diagnostics", diagnosticsText()))
-        Toast.makeText(this, "App-wide diagnostics copied", Toast.LENGTH_SHORT).show()
+        // WebView/Activity diagnostics must be read on the UI thread; full
+        // investigation-to-PDF analysis must NOT block it.
+        val header = diagnosticsText(includeAudit = false)
+        val current = bundle
+        Toast.makeText(this, "Compiling redacted diagnostics…", Toast.LENGTH_SHORT).show()
+        diagnosticsWorker.execute {
+            val audit = runCatching { AppDiagnostics.summarize(current) }
+                .getOrDefault("audit.error=analysis_unavailable\n")
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("NIMS diagnostics", header + audit)
+                )
+                Toast.makeText(this, "App-wide diagnostics copied", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun browseSourceReports(test: String) {
@@ -701,41 +742,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
-        val unique = reports.filter { it.url.isNotBlank() }.distinctBy { it.url }
-        // A CR can have hundreds of PDFs. Avoid downloading the entire
-        // archive at login; inspect recent documents first. Older originals
-        // are available in All Results and indexed when directly opened.
-        val priority = unique.sortedByDescending {
-            RecentReportDates.dateFor(it).first ?: LocalDate.MIN
-        }.take(8)
+        // A report list can contain hundreds of multi-page PDFs. Fetching
+        // and parsing them automatically competes with clinical navigation
+        // and can trigger Android low-memory process termination. Keep the
+        // verified inventory; inspect PDF text only when its source is opened.
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
-        pdfTotalCount = unique.size
-        if (unique.isEmpty()) return
-        pdfWorker.execute {
-            val inspector = PdfSourceEnricher(applicationContext)
-            var confirmed = 0
-            priority.forEachIndexed { index, report ->
-                if (pdfIndexSelection != requestId || activeRequestId != requestId ||
-                    Thread.currentThread().isInterrupted) return@execute
-                val read = inspector.inspect(report, cr) {
-                    pdfIndexSelection == requestId && activeRequestId == requestId
-                }
-                if (read) confirmed++
-                if (index % 4 == 3 || index == priority.lastIndex) {
-                    val done = index + 1
-                    val success = confirmed
-                    runOnUiThread {
-                        if (pdfIndexSelection == requestId && activeRequestId == requestId) {
-                            pdfInspectedCount = done
-                            pdfConfirmedCount = success
-                            reportTitleEpoch++
-                        }
-                    }
-                }
-            }
-        }
+        pdfTotalCount = reports.map { it.url }.filter(String::isNotBlank).distinct().size
     }
 
     private fun openReport(url: String) {
@@ -2509,9 +2523,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 scroll.scrollToItem(0)
             }
         }
-        val feed = remember(current.results, current.reports, query, category,
-            range, reportTitleEpoch) {
-            UnifiedResultsFeed.entries(current, query, category, days)
+        val baseFeed = remember(current.results, current.reports, reportTitleEpoch) {
+            UnifiedResultsFeed.baseEntries(current)
+        }
+        val feed = remember(baseFeed, query, category, range) {
+            UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
@@ -2524,8 +2540,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigations · $sourceCount unlinked original PDFs · one timeline",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 if (pdfTotalCount > 0) Text(
-                    "Recent PDFs inspected: $pdfInspectedCount of $pdfTotalCount total · " +
-                        "$pdfConfirmedCount CR-verified; open older PDFs to inspect",
+                    "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
                     value = query,
@@ -2664,13 +2679,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (linkedPart != null) {
                                     Text("Confirmed source section · page " + linkedPart.page,
                                         fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    val extractedValues = PdfClinicalValues.parse(linkedPart.text)
+                                    val extractedValues = remember(linkedPart.text) {
+                                        PdfClinicalValues.parse(linkedPart.text)
+                                    }
                                     extractedValues.take(25).forEach { value ->
                                         Text(value.parameter + ": " + value.value +
                                             if (value.unit.isNotBlank()) " " + value.unit else "",
                                             fontSize = 11.sp, color = Color(0xFF243B53))
                                     }
-                                    Text(if (showEntireSource) linkedPart.text
+                                    Text(if (showEntireSource) linkedPart.text.take(4000)
                                          else linkedPart.text.take(900) +
                                             if (linkedPart.text.length > 900) "…" else "",
                                         fontSize = 11.sp, color = Color(0xFF486581))
@@ -2769,7 +2786,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontSize = 10.sp)
                                         if (part.header.reportedDate.isNotBlank()) Text(
                                             "Reported: " + part.header.reportedDate, fontSize = 10.sp)
-                                        val sourceValues = PdfClinicalValues.parse(part.text)
+                                        val sourceValues = remember(part.text) {
+                                            PdfClinicalValues.parse(part.text)
+                                        }
                                         if (sourceValues.isNotEmpty()) {
                                             Text(sourceValues.size.toString() +
                                                 " named PDF-derived laboratory values",
@@ -2781,7 +2800,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                         fontSize = 11.sp)
                                                 }
                                         }
-                                        Text(if (showEntireSource) part.text
+                                        Text(if (showEntireSource) part.text.take(4000)
                                             else part.text.take(450) +
                                                 if (part.text.length > 450) "…" else "",
                                             fontSize = 11.sp, color = Color(0xFF486581))
@@ -2791,8 +2810,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             showEntireSource = !showEntireSource
                                         }) {
                                             Text(if (showEntireSource) "Collapse PDF text"
-                                                else "Show all " + parts.size +
-                                                    " extracted PDF sections")
+                                                else "Show longer PDF excerpts (" + parts.size +
+                                                    " sections)")
                                         }
                                     }
                                 }
@@ -2869,8 +2888,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         handler.removeCallbacksAndMessages(null)
         worker.shutdownNow()
+        diagnosticsWorker.shutdownNow()
         pdfIndexSelection = ""
-        pdfWorker.shutdownNow()
         engine.destroy()
         super.onDestroy()
     }

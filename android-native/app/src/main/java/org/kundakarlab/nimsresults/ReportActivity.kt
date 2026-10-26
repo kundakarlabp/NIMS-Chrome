@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import android.graphics.Bitmap
@@ -327,7 +328,7 @@ class ReportActivity : Activity() {
                 // inventory for combined reports with multiple lab accessions.
                 val pages = runCatching {
                     PDFBoxResourceLoader.init(applicationContext)
-                    PDDocument.load(file).use { doc ->
+                    PDDocument.load(file, MemoryUsageSetting.setupMixed(4L * 1024 * 1024)).use { doc ->
                         (1..doc.numberOfPages).map { page ->
                             PDFTextStripper().apply {
                                 startPage = page
