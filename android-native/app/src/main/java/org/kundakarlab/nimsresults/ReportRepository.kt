@@ -556,33 +556,40 @@ object ReportTitleCache {
 
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
-    @Synchronized
     fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
+        // PDF text parsing can be slow. Do not hold the shared source-cache
+        // monitor while extracting sections: low-memory callbacks clear the
+        // cache on Android's main thread.
         val full = pages.joinToString("\n\n") { it.take(40000) }
-        OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
-        // Keep only a bounded working set; the source PDFs remain available
-        // through their original authenticated URLs on demand.
-        loadedUrls.remove(url)
-        loadedUrls.add(url)
-        while (loadedUrls.size > MAX_MEMORY_PDFS) {
-            val oldest = loadedUrls.iterator().next()
-            loadedUrls.remove(oldest)
-            recognized.remove(oldest)
-            extractedByUrl.remove(oldest)
-            headers.remove(oldest)
-            sectionsByUrl.remove(oldest)
-            sha256ByUrl.remove(oldest)
-        }
-        revision.incrementAndGet()
-        extractedByUrl[url] = full.take(64000)
-        if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
-            if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
-            val sections = PdfSourceEvidence.parts(pages, expectedCr)
-            sectionsByUrl[url] = sections
-            headers[url] = sections.firstOrNull { it.header.labNumber.isNotBlank() }?.header
+        val title = OpaqueReportTitles.titleFromExtractedText(full)
+        val trusted = expectedCr.isNotBlank() && crs == setOf(expectedCr)
+        val parsedParts = if (trusted) PdfSourceEvidence.parts(pages, expectedCr) else emptyList()
+        val parsedHeader = if (trusted) (
+            parsedParts.firstOrNull { it.header.labNumber.isNotBlank() }?.header
                 ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
+            ) else null
+        synchronized(this) {
+            loadedUrls.remove(url)
+            loadedUrls.add(url)
+            while (loadedUrls.size > MAX_MEMORY_PDFS) {
+                val oldest = loadedUrls.iterator().next()
+                loadedUrls.remove(oldest)
+                recognized.remove(oldest)
+                extractedByUrl.remove(oldest)
+                headers.remove(oldest)
+                sectionsByUrl.remove(oldest)
+                sha256ByUrl.remove(oldest)
+            }
+            if (title != null) recognized[url] = title
+            extractedByUrl[url] = full.take(64000)
+            if (trusted) {
+                if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
+                sectionsByUrl[url] = parsedParts
+                if (parsedHeader != null) headers[url] = parsedHeader
+            }
+            revision.incrementAndGet()
         }
         return true
     }
