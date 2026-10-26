@@ -182,6 +182,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashTrace.install(this)
+        ProcessHealth.onLaunch(this)
         vault = SessionVault(this)
         patientShelf = PatientShelf(this)
         shelfEntries = patientShelf.read()
@@ -246,6 +247,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     override fun onStop() {
+        ProcessHealth.checkpoint(this, loadStage.name, selectedTab.name,
+            bundle?.results?.size ?: 0, bundle?.reports?.size ?: 0)
         if (appLockEnabled && appUnlocked && !unlockPromptActive) {
             leftAt = SystemClock.elapsedRealtime()
         }
@@ -260,6 +263,27 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             leftAt = 0L
             handler.post { requestDeviceUnlock() }
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        ProcessHealth.onTrim(this, level)
+        // Release optional parsed PDF text when Android reports pressure.
+        // The signed originals remain accessible via the source inventory.
+        if (level >= TRIM_MEMORY_RUNNING_LOW &&
+            level != TRIM_MEMORY_UI_HIDDEN) {
+            ReportTitleCache.clear()
+            ReportLinkResolver.clear()
+            reportTitleEpoch++
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        ProcessHealth.onTrim(this, 100)
+        ReportTitleCache.clear()
+        ReportLinkResolver.clear()
+        reportTitleEpoch++
     }
 
     private fun updateShelf(operation: () -> List<PatientBookmark>) {
@@ -527,6 +551,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
                     reportQueryPrefill = ""
                     loadStage = LoadStage.READY
+                    ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
+                        selectedTab.name, initial.results.size, initial.reports.size)
                     statusText = initial.results.size.toString() + " results · loading report links…"
                 }
                 val inventory = try {
@@ -653,6 +679,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
+            appendLine(ProcessHealth.snapshot(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
             appendLine("app.loadStage=$loadStage")
             appendLine("app.crInputLength=${crInput.length}")
