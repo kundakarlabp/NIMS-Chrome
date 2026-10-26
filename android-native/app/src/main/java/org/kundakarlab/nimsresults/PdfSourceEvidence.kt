@@ -47,15 +47,21 @@ object PdfSourceEvidence {
                 body.contains("prothrombin time") || body.contains("aptt") ||
                 Regex("""\b(?:pt[\s./-]*inr|coagulation|pt\s*\+\s*aptt)\b""")
                     .containsMatchIn(body) -> PdfStudyKind.COAGULATION
+            // Classification must prioritize a report's own department and
+            // headings. CT/MRI narratives may mention serum creatinine,
+            // calcium, or laboratory results without becoming chemistry PDFs.
+            body.contains("department of radio diagnosis") ||
+                body.contains("department of radiodiagnosis") ||
+                body.contains("department of radiology") ||
+                body.contains("department of nuclear medicine") ||
+                Regex("""(?m)^\s*(?:examination performed|pet[- ]?ct|bone scintigraphy|nuclear medicine study)\s*:""")
+                    .containsMatchIn(body) -> PdfStudyKind.RADIOLOGY
+            body.contains("blood grouping") || body.contains("antibody screening") ||
+                body.contains("cross matching") -> PdfStudyKind.BLOOD_BANK
+            body.contains("biofire") || body.contains("filmarray") -> PdfStudyKind.MOLECULAR
             body.contains("routine chemistry") || body.contains("liver function") ||
                 Regex("""\b(?:creatinine|electrolytes|urea|sgot|sgpt|albumin|bilirubin|calcium|lipid\s+profile|cholesterol|renal\s+function|lft|rft)\b""")
                     .containsMatchIn(body) -> PdfStudyKind.CHEMISTRY
-            body.contains("department of radio diagnosis") ||
-                Regex("""(?m)^\s*examination performed\s*:""").containsMatchIn(body) ->
-                PdfStudyKind.RADIOLOGY
-            body.contains("blood grouping") || body.contains("antibody screening") ->
-                PdfStudyKind.BLOOD_BANK
-            body.contains("biofire") || body.contains("filmarray") -> PdfStudyKind.MOLECULAR
             else -> PdfStudyKind.OTHER
         }
     }
