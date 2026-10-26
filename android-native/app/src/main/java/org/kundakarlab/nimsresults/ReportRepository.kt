@@ -535,6 +535,8 @@ object ReportTitleCache {
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
     private val revision = java.util.concurrent.atomic.AtomicInteger()
+    private const val MAX_MEMORY_PDFS = 8
+    private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
@@ -542,13 +544,27 @@ object ReportTitleCache {
 
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
+    @Synchronized
     fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         val full = pages.joinToString("\n\n") { it.take(40000) }
         OpaqueReportTitles.titleFromExtractedText(full)?.let { recognized[url] = it }
+        // Keep only a bounded working set; the source PDFs remain available
+        // through their original authenticated URLs on demand.
+        loadedUrls.remove(url)
+        loadedUrls.add(url)
+        while (loadedUrls.size > MAX_MEMORY_PDFS) {
+            val oldest = loadedUrls.iterator().next()
+            loadedUrls.remove(oldest)
+            recognized.remove(oldest)
+            extractedByUrl.remove(oldest)
+            headers.remove(oldest)
+            sectionsByUrl.remove(oldest)
+            sha256ByUrl.remove(oldest)
+        }
         revision.incrementAndGet()
-        extractedByUrl[url] = full.take(160000)
+        extractedByUrl[url] = full.take(64000)
         if (expectedCr.isNotBlank() && crs == setOf(expectedCr)) {
             if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
             val sections = PdfSourceEvidence.parts(pages, expectedCr)
@@ -565,7 +581,9 @@ object ReportTitleCache {
     fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
+    @Synchronized
     fun clear() {
+        loadedUrls.clear()
         recognized.clear()
         extractedByUrl.clear()
         headers.clear()
