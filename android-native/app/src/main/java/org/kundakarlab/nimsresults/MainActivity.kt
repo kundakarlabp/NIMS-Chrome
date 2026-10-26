@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Volatile private var bulkBatchCount = 0
     private var indexRequested = false
     private var historyStatus by mutableStateOf("")
+    private var historyMode by mutableStateOf("unknown")
     private var apiStage by mutableStateOf("not_checked")
     private var apiReportCount by mutableStateOf(0)
     private var apiAttemptMs by mutableStateOf(0L)
@@ -349,6 +350,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         bulkBatchCount = 0
         indexRequested = false
         historyStatus = ""
+        historyMode = "unknown"
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = 0
@@ -479,6 +481,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         accumulatedBulk = null
         bulkBatchCount = 0
         historyStatus = ""
+        historyMode = "unknown"
         ReportTitleCache.clear()
         ReportLinkResolver.clear()
         apiReportCount = 0
@@ -515,6 +518,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onStage(requestId: String, stage: String) {
         if (requestId != activeRequestId) return
         runOnUiThread {
+            if (stage == "bulk_mode_single") {
+                historyMode = "single_bulk"
+                historyStatus = "The NIMS date selector could not be paged; fetching available dates together."
+                return@runOnUiThread
+            }
+            if (stage.startsWith("bulk_mode_staged:")) {
+                historyMode = "staged"
+                historyStatus = "Fetching the newest two-week results first; older dates will follow."
+                return@runOnUiThread
+            }
+            if (stage == "bulk_partial_timeout") {
+                historyStatus = "Older history fetch stopped after a server timeout; recent results remain available."
+                return@runOnUiThread
+            }
             if (stage.startsWith("fetching_older_results:")) {
                 historyStatus = "Recent results ready · Fetching older dates (" +
                     stage.substringAfter(':') + ")…"
@@ -739,6 +756,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
             appendLine("bulk.acceptedBatches=$bulkBatchCount")
+            appendLine("bulk.fetchMode=$historyMode")
             appendLine("bulk.historyStatus=" + historyStatus.take(100))
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
@@ -871,6 +889,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
+                        if (historyStatus.isNotBlank()) {
+                            Text(historyStatus,
+                                modifier = Modifier.fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                                fontSize = 10.sp, maxLines = 1,
+                                color = Color(0xFF486581))
+                        }
                         if (current.source == "nims_rest_report_list" && current.results.isEmpty()) {
                             Surface(color = Color(0xFFEAF3FF)) {
                                 Row(
