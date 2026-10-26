@@ -714,7 +714,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         Toast.makeText(this, "Compiling redacted diagnostics…", Toast.LENGTH_SHORT).show()
         diagnosticsWorker.execute {
             val audit = runCatching { AppDiagnostics.summarize(current) }
-                .getOrDefault("audit.error=analysis_unavailable\\n")
+                .getOrDefault("audit.error=analysis_unavailable\n")
             runOnUiThread {
                 if (isDestroyed || isFinishing) return@runOnUiThread
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
