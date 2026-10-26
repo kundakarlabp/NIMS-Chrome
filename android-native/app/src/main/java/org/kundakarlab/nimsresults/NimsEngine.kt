@@ -147,6 +147,8 @@ class NimsEngine(
               try { window.AndroidNimsBridge.onReportIndexHtml(req, html || "", code); }
               catch (_) { }
             }
+            const abort = new AbortController();
+            const timeout = setTimeout(() => abort.abort(), 20000);
             try {
               const endpoint = ${JSONObject.quote(NimsUrls.CR_REPORTS)};
               const origin = new URL(endpoint).origin;
@@ -154,7 +156,7 @@ class NimsEngine(
                 done("", "origin_mismatch"); return;
               }
               const first = await fetch(endpoint, { credentials:"include", redirect:"follow",
-                  cache:"no-store" });
+                  cache:"no-store", signal:abort.signal });
               if (!first.ok) { done("", "landing_http_error"); return; }
               const landing = await first.text();
               if (landing.length > 2500000) { done("", "landing_too_large"); return; }
@@ -175,6 +177,7 @@ class NimsEngine(
               if (dest.origin !== origin) { done("", "post_origin_mismatch"); return; }
               const response = await fetch(dest.toString(), {
                 method:"POST", credentials:"include", redirect:"follow", cache:"no-store",
+                signal:abort.signal,
                 headers: {"Content-Type":"application/x-www-form-urlencoded"},
                 body:fields.toString()
               });
@@ -182,7 +185,10 @@ class NimsEngine(
               const result = await response.text();
               if (result.length > 2500000) { done("", "html_too_large"); return; }
               done(result, "ok");
-            } catch (error) { done("", "webview_fetch_error"); }
+            } catch (error) {
+              done("", error && error.name === "AbortError" ?
+                "webview_timeout" : "webview_fetch_error");
+            } finally { clearTimeout(timeout); }
           })(${JSONObject.quote(crNo)}, ${JSONObject.quote(requestId)});
         """.trimIndent()
         webView.evaluateJavascript(script, null)
