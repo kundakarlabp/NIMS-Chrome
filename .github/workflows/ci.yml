@@ -49,7 +49,9 @@ jobs:
         with:
           gradle-version: "8.10.2"
       - name: Validate captured WebView JavaScript
-        run: node --check android-native/app/src/main/assets/nims_engine.js
+        run: |
+          node --check android-native/app/src/main/assets/nims_engine.js
+          node --test android-native/tests/nims_engine_batches.test.cjs
       - name: Build, unit test, lint, assemble
         run: gradle -p android-native clean test lintDebug assembleDebug --stacktrace --console=plain
       - name: Verify APK
