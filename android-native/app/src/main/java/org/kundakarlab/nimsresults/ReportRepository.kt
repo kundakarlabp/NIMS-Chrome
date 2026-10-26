@@ -547,6 +547,7 @@ object ReportTitleCache {
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
     private val revision = java.util.concurrent.atomic.AtomicInteger()
+    private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger()
     private const val MAX_MEMORY_PDFS = 8
     private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
@@ -557,6 +558,7 @@ object ReportTitleCache {
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
     fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
+        val startingSession = sessionGeneration.get()
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
         // PDF text parsing can be slow. Do not hold the shared source-cache
@@ -571,6 +573,9 @@ object ReportTitleCache {
                 ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
             ) else null
         synchronized(this) {
+            // Source extracted before a patient switch or memory reset must
+            // not be reintroduced after the cache has been cleared.
+            if (sessionGeneration.get() != startingSession) return false
             loadedUrls.remove(url)
             loadedUrls.add(url)
             while (loadedUrls.size > MAX_MEMORY_PDFS) {
@@ -602,6 +607,7 @@ object ReportTitleCache {
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
     @Synchronized
     fun clear() {
+        sessionGeneration.incrementAndGet()
         loadedUrls.clear()
         recognized.clear()
         extractedByUrl.clear()
