@@ -48,19 +48,6 @@ object BulkParser {
                 // Only metadata explicitly supplied by NIMS may be labelled
                 // specimen collection or reporting time. The chart/date key
                 // itself is not necessarily the actual collection date.
-                val sent = metadata(row, group,
-                    "collectionDate", "collection_date", "sampleCollectionDate",
-                    "sampleDate", "sample_date", "dateSent", "date_sent")
-                val ordered = metadata(row, group,
-                    "requisitionDate", "requisition_date", "orderDate", "order_date",
-                    "orderedDate", "ordered_date")
-                val reported = metadata(row, group,
-                    "reportingDate", "reporting_date", "reportedDate", "reported_date",
-                    "validationDate", "validation_date")
-                val lab = metadata(row, group,
-                    "labNo", "lab_no", "labNumber", "lab_number",
-                    "labStudyNo", "labStudyNumber", "accessionNo", "accession_no",
-                    "sampleNo", "sample_no")
                 val values = row.optJSONObject("valuesByDate") ?: JSONObject()
                 val flags = firstObject(row, "flagsByDate", "abnormalByDate", "flagByDate")
                 val keys = values.keys()
@@ -69,6 +56,23 @@ object BulkParser {
                     val valueText = cleanValue(ResultTableFormats.format(values.opt(rawDate)?.toString().orEmpty()))
                     if (valueText.isBlank()) continue
                     val date = isoDate(rawDate)
+                    // NIMS sometimes provides a separate metadata value per
+                    // date. Never copy an entire JSON object into a lab number
+                    // or timestamp, and never relabel the chart date as a
+                    // collection or report timestamp.
+                    val sent = metadataAt(row, group, rawDate,
+                        "collectionDate", "collection_date", "sampleCollectionDate",
+                        "sampleDate", "sample_date", "dateSent", "date_sent")
+                    val ordered = metadataAt(row, group, rawDate,
+                        "requisitionDate", "requisition_date", "orderDate", "order_date",
+                        "orderedDate", "ordered_date")
+                    val reported = metadataAt(row, group, rawDate,
+                        "reportingDate", "reporting_date", "reportedDate", "reported_date",
+                        "validationDate", "validation_date")
+                    val lab = metadataAt(row, group, rawDate,
+                        "labNo", "lab_no", "labNumber", "lab_number",
+                        "labStudyNo", "labStudyNumber", "accessionNo", "accession_no",
+                        "sampleNo", "sample_no")
                     val abnormal = clean(flags?.opt(rawDate)?.toString())
                         .ifBlank { clean(row.opt("abnormal")?.toString()) }
                         .ifBlank { clean(row.opt("flag")?.toString()) }
@@ -129,14 +133,19 @@ object BulkParser {
         }
     }
 
-    private fun metadata(row: JSONObject, group: JSONObject, vararg keys: String): String {
-        for (objectSource in listOf(row, group)) {
+    private fun metadataAt(row: JSONObject, group: JSONObject, rawDate: String,
+                           vararg keys: String): String {
+        for (source in listOf(row, group)) {
             for (name in keys) {
-                val candidate = objectSource.opt(name)?.toString()?.trim().orEmpty()
-                if (candidate.isNotBlank() && candidate != "null" &&
-                    candidate != "-1" && candidate != "--") {
-                    return candidate
-                }
+                val raw = source.opt(name) ?: continue
+                val text = when (raw) {
+                    is JSONObject -> raw.optString(rawDate)
+                        .ifBlank { raw.optString(isoDate(rawDate)) }
+                    is JSONArray -> "" // Ambiguous; do not infer a date index.
+                    else -> raw.toString()
+                }.trim()
+                if (text.isNotBlank() && !text.equals("null", true) &&
+                    text != "-1" && text != "--") return text
             }
         }
         return ""

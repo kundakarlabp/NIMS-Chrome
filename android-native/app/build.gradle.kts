@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.0.19-native"
+        versionCode = 22
+        versionName = "1.0.21-native"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

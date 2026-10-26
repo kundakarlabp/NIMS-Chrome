@@ -133,6 +133,16 @@ class NimsEngine(
         webView.evaluateJavascript(js, null)
     }
 
+    /** Acknowledge an accepted, parsed Custom Sheet batch before requesting
+     * more dates. This bounds the number of large JSON payloads in flight. */
+    fun continueBulk(requestId: String) {
+        if (requestId != activeRequestId || !pageReady) return
+        webView.evaluateJavascript(
+            "window.NativeNimsEngine && window.NativeNimsEngine.continueRun(" +
+                JSONObject.quote(requestId) + ");", null
+        )
+    }
+
     /** Same-origin fallback: runs in the already-authenticated NIMS WebView,
      * not a new login window. HTML is sent only to the local Java bridge and
      * must be re-validated for the requested CR by ReportPayloadParser. */

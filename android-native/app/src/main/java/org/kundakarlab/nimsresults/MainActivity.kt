@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
     private val worker = Executors.newSingleThreadExecutor()
+    private val inventoryWorker = Executors.newSingleThreadExecutor()
     private val diagnosticsWorker = Executors.newSingleThreadExecutor()
      @Volatile private var pdfIndexSelection = ""
     private var pdfInspectedCount by mutableStateOf(0)
@@ -123,11 +124,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var appUnlocked by mutableStateOf(true)
     private var leftAt = 0L
     private var unlockPromptActive = false
-    private var activeRequestId = ""
-    private var activeCr = ""
+    @Volatile private var activeRequestId = ""
+    @Volatile private var activeCr = ""
     private var pendingPatient = PatientInfo()
     private var pendingCrAfterLogin = ""
     private var verifiedRestReports: List<ReportRef> = emptyList()
+    @Volatile private var accumulatedBulk: ClinicalBundle? = null
+    @Volatile private var bulkBatchCount = 0
+    private var indexRequested = false
+    private var historyStatus by mutableStateOf("")
+    private var historyMode by mutableStateOf("unknown")
     private var apiStage by mutableStateOf("not_checked")
     private var apiReportCount by mutableStateOf(0)
     private var apiAttemptMs by mutableStateOf(0L)
@@ -340,6 +346,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         cancelTimeout()
         pdfIndexSelection = ""
+        accumulatedBulk = null
+        bulkBatchCount = 0
+        indexRequested = false
+        historyStatus = ""
+        historyMode = "unknown"
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = 0
@@ -467,6 +478,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }?.forEach { it.delete() }
         bundle = null
         verifiedRestReports = emptyList()
+        accumulatedBulk = null
+        bulkBatchCount = 0
+        historyStatus = ""
+        historyMode = "unknown"
         ReportTitleCache.clear()
         ReportLinkResolver.clear()
         apiReportCount = 0
@@ -503,6 +518,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onStage(requestId: String, stage: String) {
         if (requestId != activeRequestId) return
         runOnUiThread {
+            if (stage == "bulk_mode_single") {
+                historyMode = "single_bulk"
+                historyStatus = "The NIMS date selector could not be paged; fetching available dates together."
+                return@runOnUiThread
+            }
+            if (stage.startsWith("bulk_mode_staged:")) {
+                historyMode = "staged"
+                historyStatus = "Fetching the newest two-week results first; older dates will follow."
+                return@runOnUiThread
+            }
+            if (stage == "bulk_partial_timeout") {
+                historyStatus = "Older history fetch stopped after a server timeout; recent results remain available."
+                return@runOnUiThread
+            }
+            if (stage.startsWith("fetching_older_results:")) {
+                historyStatus = "Recent results ready · Fetching older dates (" +
+                    stage.substringAfter(':') + ")…"
+                return@runOnUiThread
+            }
+            if (stage == "bulk_complete") {
+                historyStatus = "Available Custom Sheet dates loaded (" +
+                    bulkBatchCount + " batch(es))."
+                statusText = historyStatus
+                return@runOnUiThread
+            }
             when (stage) {
                 "opening_trends" -> {
                     loadStage = LoadStage.OPENING_TRENDS
@@ -534,67 +574,90 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         val cr = activeCr
         val patient = pendingPatient
-        // Normalize and display authenticated Custom Sheet values immediately.
-        // An optional report-index fetch must never block clinical lab review.
+        // Acknowledgment-based pagination: only parse one Custom Sheet
+        // payload at a time, then allow the next NIMS date window.
         worker.execute {
             try {
-                val restSeed = verifiedRestReports
-                val initial = BulkParser.parse(rawJson, cr, patient, restSeed)
+                if (requestId != activeRequestId) return@execute
+                val parsed = BulkParser.parse(rawJson, cr, patient, verifiedRestReports)
+                if (requestId != activeRequestId) return@execute
+                val pageNumber = bulkBatchCount + 1
+                val combined = BulkAccumulator.append(accumulatedBulk, parsed, pageNumber)
+                if (requestId != activeRequestId) return@execute
+                accumulatedBulk = combined
+                bulkBatchCount = pageNumber
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    bundle = initial
-                    if (initial.patient.name.isNotBlank()) {
-                        updateShelf { patientShelf.confirmedPatient(cr, initial.patient.name) }
-                    }
-                    apiStage = "structured_verified"
-                    crInput = cr
-                    selectedTab = ResultsTab.OVERVIEW
-
-                    reportQueryPrefill = ""
-                    loadStage = LoadStage.READY
-                    ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
-                        selectedTab.name, initial.results.size, initial.reports.size)
-                    statusText = initial.results.size.toString() + " results · loading report links…"
-                }
-                val inventory = try {
-                    reportRepository.load(cr, restSeed, restAlreadyAttempted = true)
-                } catch (mismatch: IdentityMismatchException) {
-                    DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
-                    runOnUiThread {
-                        if (requestId == activeRequestId) {
-                            statusText = "Report identity mismatch. PDF links withheld."
+                    val existingReports = bundle?.takeIf {
+                        it.patient.crNo == cr
+                    }?.reports.orEmpty()
+                    bundle = combined.copy(reports = existingReports
+                        .ifEmpty { verifiedRestReports })
+                    if (pageNumber == 1) {
+                        if (combined.patient.name.isNotBlank())
+                            updateShelf { patientShelf.confirmedPatient(cr, combined.patient.name) }
+                        crInput = cr
+                        selectedTab = ResultsTab.OVERVIEW
+                        reportQueryPrefill = ""
+                        loadStage = LoadStage.READY
+                        ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
+                            selectedTab.name, combined.results.size, combined.reports.size)
+                        if (!indexRequested) {
+                            indexRequested = true
+                            loadSourceInventory(requestId, cr, verifiedRestReports)
                         }
                     }
-                    return@execute
-                } catch (_: Throwable) {
-                    DiagnosticEvents.record("REPORT_INDEX_FAILED")
-                    null
+                    apiStage = "structured_verified"
+                    historyStatus = "Loaded " + combined.results.size +
+                        " fields across " + pageNumber + " date batch(es). Fetching older dates…"
+                    statusText = historyStatus
+                    engine.continueBulk(requestId)
                 }
-                runOnUiThread {
-                    if (requestId != activeRequestId) return@runOnUiThread
-                    // No patient data is retained from the REST/HTML reply beyond validated links.
-                    bundle = initial.copy(reports = inventory?.reports ?: restSeed)
-                    apiStage = if (initial.results.isNotEmpty()) "structured_verified" else apiStage
-                    apiReportCount = (inventory?.reports ?: restSeed).size
-                    statusText = initial.results.size.toString() + " structured values · " +
-                        apiReportCount + " source reports"
-                    // All reports are inspected independently; a multi-study
-                    // PDF is one physical download with several accession parts.
-                    val sources = inventory?.reports ?: restSeed
-                    if (sources.none { it.url.isNotBlank() }) {
-                        ReportInventoryTrace.event("webview_attempt")
-                        engine.fetchReportIndexHtml(cr, requestId)
-                    } else {
-                        startPdfIndex(requestId, cr, sources)
-                    }
-                }
-            } catch (error: Throwable) {
+            } catch (_: Exception) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    loadStage = LoadStage.ERROR
-                    statusText = error.message ?: "Could not normalize NIMS results."
+                    if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
+                        loadStage = LoadStage.READY
+                        historyStatus = "Older history paused after " + bulkBatchCount +
+                            " batch(es); previously loaded results are preserved."
+                        statusText = historyStatus
+                    } else {
+                        loadStage = LoadStage.ERROR
+                        statusText = "NIMS could not normalize the first Custom Sheet batch."
+                    }
                 }
+            }
+        }
+    }
+
+    private fun loadSourceInventory(requestId: String, cr: String, seed: List<ReportRef>) {
+        // A slow PDF index must not block new structured laboratory batches.
+        inventoryWorker.execute {
+            val inventory = try {
+                reportRepository.load(cr, seed, restAlreadyAttempted = true)
+            } catch (_: IdentityMismatchException) {
+                DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
+                runOnUiThread {
+                    if (requestId == activeRequestId)
+                        statusText = "Report identity mismatch; PDF links withheld."
+                }
+                return@execute
+            } catch (_: Exception) {
+                DiagnosticEvents.record("REPORT_INDEX_FAILED")
+                null
+            }
+            runOnUiThread {
+                if (requestId != activeRequestId || bundle?.patient?.crNo != cr)
+                    return@runOnUiThread
+                val sources = inventory?.reports ?: seed
+                val current = bundle ?: return@runOnUiThread
+                bundle = current.copy(reports = sources)
+                apiReportCount = sources.size
+                if (sources.none { it.url.isNotBlank() }) {
+                    ReportInventoryTrace.event("webview_attempt")
+                    engine.fetchReportIndexHtml(cr, requestId)
+                } else startPdfIndex(requestId, cr, sources)
             }
         }
     }
@@ -649,6 +712,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         runOnUiThread {
             val authLike = Regex("(?i)auth|login|session").containsMatchIn(message)
             DiagnosticEvents.record(if (authLike) "AUTH_REQUIRED" else "STRUCTURED_FAILURE")
+            if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
+                loadStage = LoadStage.READY
+                historyStatus = "Older history interrupted; " + bulkBatchCount +
+                    " accepted batch(es) remain available."
+                if (authLike) {
+                    sessionState = SessionState.LOGIN_REQUIRED
+                    pendingCrAfterLogin = activeCr
+                }
+                statusText = historyStatus
+                return@runOnUiThread
+            }
             if (verifiedRestReports.isNotEmpty()) {
                 loadStage = LoadStage.READY
                 if (authLike) pendingCrAfterLogin = activeCr
@@ -692,6 +766,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("api.stage=$apiStage")
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
+            appendLine("bulk.acceptedBatches=$bulkBatchCount")
+            appendLine("bulk.fetchMode=$historyMode")
+            appendLine("bulk.historyStatus=" + historyStatus.take(100))
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
@@ -823,6 +900,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
+                        if (historyStatus.isNotBlank()) {
+                            Text(historyStatus,
+                                modifier = Modifier.fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 2.dp),
+                                fontSize = 10.sp, maxLines = 1,
+                                color = Color(0xFF486581))
+                        }
                         if (current.source == "nims_rest_report_list" && current.results.isEmpty()) {
                             Surface(color = Color(0xFFEAF3FF)) {
                                 Row(
@@ -2623,12 +2707,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 fontSize = 11.sp, color = Color(0xFF0B5CAB))
                         }
                         if (report == null) {
-                            val summary = rows.firstOrNull()?.valueText.orEmpty()
+                            val summary = remember(rows) {
+                                ClinicalReportRenderer.preferredRows(rows)
+                                    .firstOrNull {
+                                        it.valueText.isNotBlank() &&
+                                            !ClinicalResultRules.isAdministrativeParameter(it.parameter)
+                                    }?.valueText.orEmpty()
+                            }
                             if (!expanded && summary.isNotBlank()) Text(
                                 summary.replace(Regex("[\\r\\n]+"), " ").take(155) +
                                     if (summary.length > 155) "…" else "",
                                 fontSize = 11.sp, maxLines = 2,
                                 color = Color(0xFF486581))
+                            else if (!expanded) Text(
+                                "Only source-coded or technical fields; expand to review.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
                             val collected = ClinicalPresentation.sentDate(rows)
                                 .ifBlank { linkedPart?.header?.collectionDate.orEmpty() }
                             val reported = ClinicalPresentation.reportedDate(rows)
@@ -2888,6 +2981,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         handler.removeCallbacksAndMessages(null)
         worker.shutdownNow()
+        inventoryWorker.shutdownNow()
         diagnosticsWorker.shutdownNow()
         pdfIndexSelection = ""
         engine.destroy()

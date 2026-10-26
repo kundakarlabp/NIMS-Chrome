@@ -22,6 +22,7 @@ on:
       - fix/android-v117-reconciled-reports
       - fix/android-v118-report-inventory-performance
       - fix/android-v119-stability-on-demand-pdf
+      - fix/android-v120-staged-bulk-clinical-data
   pull_request:
     branches:
       - release/android-native-rebuild-base
@@ -47,6 +48,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
+      - name: Validate captured WebView JavaScript
+        run: |
+          node --check android-native/app/src/main/assets/nims_engine.js
+          node --test android-native/tests/nims_engine_batches.test.cjs
       - name: Build, unit test, lint, assemble
         run: gradle -p android-native clean test lintDebug assembleDebug --stacktrace --console=plain
       - name: Verify APK
