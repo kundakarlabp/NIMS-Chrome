@@ -270,8 +270,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ProcessHealth.onTrim(this, level)
         // Release optional parsed PDF text when Android reports pressure.
         // The signed originals remain accessible via the source inventory.
-        if (level >= TRIM_MEMORY_RUNNING_LOW &&
-            level != TRIM_MEMORY_UI_HIDDEN) {
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
+            level != android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             ReportTitleCache.clear()
             ReportLinkResolver.clear()
             reportTitleEpoch++
