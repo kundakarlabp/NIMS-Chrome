@@ -21,8 +21,18 @@ object BulkAccumulator {
         // decoded. If a server repeats rows at a page boundary, exclude only
         // exact source duplicates across batches, not repeated rows within
         // a single source response.
-        val seen = present.mapTo(HashSet()) { identity(it) }
-        val added = firstPage.filter { seen.add(identity(it)) }
+        // Cross-window deduplication is multiplicity-aware: two identical
+        // observations within the SAME response may represent two real
+        // samples. Retain both, while skipping occurrences already seen
+        // in a previously accepted window.
+        val previousCounts = present.groupingBy(::identity).eachCount()
+        val incomingCounts = HashMap<String, Int>()
+        val added = firstPage.filter { result ->
+            val key = identity(result)
+            val occurrence = (incomingCounts[key] ?: 0) + 1
+            incomingCounts[key] = occurrence
+            occurrence > (previousCounts[key] ?: 0)
+        }
         return ClinicalBundle(
             patient = next.patient.copy(
                 name = next.patient.name.ifBlank { prior?.patient?.name.orEmpty() },
