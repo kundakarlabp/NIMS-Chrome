@@ -50,10 +50,16 @@ class ReportRepository(
         return Inventory(reports, "nims_rest_report_list")
     }
 
-    fun load(crNo: String, verifiedRest: List<ReportRef> = emptyList()): Inventory {
+    fun load(
+        crNo: String,
+        verifiedRest: List<ReportRef> = emptyList(),
+        restAlreadyAttempted: Boolean = false
+    ): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
-        val rest = if (verifiedRest.isNotEmpty()) verifiedRest else runCatching {
+        val rest = if (verifiedRest.isNotEmpty()) verifiedRest
+            else if (restAlreadyAttempted) emptyList()
+            else runCatching {
             ReportInventoryTrace.event("rest_attempt")
             loadRest(crNo)
         }.getOrElse { error ->
@@ -119,7 +125,13 @@ class ReportRepository(
 
     private fun loadHtml(crNo: String): List<ReportRef> {
         ReportInventoryTrace.event("html_attempt")
-        val landing = client.newCall(
+        // Do not occupy the single clinical-results executor for 90 seconds
+        // on a stalled NIMS frameset GET + report POST.
+        val htmlClient = client.newBuilder()
+            .callTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+        val landing = htmlClient.newCall(
             request(NimsUrls.CR_REPORTS)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
                 .get()
@@ -149,7 +161,7 @@ class ReportRepository(
         body.add("hmode", "SHOWPATDETAILS")
         body.add("patCrNo", crNo)
 
-        return client.newCall(
+        return htmlClient.newCall(
             request(action)
                 .header("Accept", "text/html,application/xhtml+xml,*/*")
                 .header("Origin", NimsUrls.WWW_ORIGIN)
