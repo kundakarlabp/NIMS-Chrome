@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
     private val worker = Executors.newSingleThreadExecutor()
+    private val diagnosticsWorker = Executors.newSingleThreadExecutor()
      @Volatile private var pdfIndexSelection = ""
     private var pdfInspectedCount by mutableStateOf(0)
     private var pdfConfirmedCount by mutableStateOf(0)
@@ -672,7 +673,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
-    private fun diagnosticsText(): String {
+    private fun diagnosticsText(includeAudit: Boolean = true): String {
         val current = bundle
         return buildString {
             appendLine("NIMS Results diagnostics · entire app")
@@ -701,14 +702,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     .joinToString("\n")
                 appendLine(safe)
             }
-            append(AppDiagnostics.summarize(current))
+            if (includeAudit) append(AppDiagnostics.summarize(current))
         }
     }
 
     private fun copyDiagnostics() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("NIMS diagnostics", diagnosticsText()))
-        Toast.makeText(this, "App-wide diagnostics copied", Toast.LENGTH_SHORT).show()
+        // WebView/Activity diagnostics must be read on the UI thread; full
+        // investigation-to-PDF analysis must NOT block it.
+        val header = diagnosticsText(includeAudit = false)
+        val current = bundle
+        Toast.makeText(this, "Compiling redacted diagnostics…", Toast.LENGTH_SHORT).show()
+        diagnosticsWorker.execute {
+            val audit = runCatching { AppDiagnostics.summarize(current) }
+                .getOrDefault("audit.error=analysis_unavailable\\n")
+            runOnUiThread {
+                if (isDestroyed || isFinishing) return@runOnUiThread
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("NIMS diagnostics", header + audit)
+                )
+                Toast.makeText(this, "App-wide diagnostics copied", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun browseSourceReports(test: String) {
@@ -2873,6 +2888,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         handler.removeCallbacksAndMessages(null)
         worker.shutdownNow()
+        diagnosticsWorker.shutdownNow()
         pdfIndexSelection = ""
         engine.destroy()
         super.onDestroy()
