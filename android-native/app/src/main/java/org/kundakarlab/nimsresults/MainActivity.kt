@@ -2696,12 +2696,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 fontSize = 11.sp, color = Color(0xFF0B5CAB))
                         }
                         if (report == null) {
-                            val summary = rows.firstOrNull()?.valueText.orEmpty()
+                            val summary = remember(rows) {
+                                ClinicalReportRenderer.preferredRows(rows)
+                                    .firstOrNull {
+                                        it.valueText.isNotBlank() &&
+                                            !ClinicalResultRules.isAdministrativeParameter(it.parameter)
+                                    }?.valueText.orEmpty()
+                            }
                             if (!expanded && summary.isNotBlank()) Text(
                                 summary.replace(Regex("[\\r\\n]+"), " ").take(155) +
                                     if (summary.length > 155) "…" else "",
                                 fontSize = 11.sp, maxLines = 2,
                                 color = Color(0xFF486581))
+                            else if (!expanded) Text(
+                                "Only source-coded or technical fields; expand to review.",
+                                fontSize = 10.sp, color = Color(0xFF66788A))
                             val collected = ClinicalPresentation.sentDate(rows)
                                 .ifBlank { linkedPart?.header?.collectionDate.orEmpty() }
                             val reported = ClinicalPresentation.reportedDate(rows)
