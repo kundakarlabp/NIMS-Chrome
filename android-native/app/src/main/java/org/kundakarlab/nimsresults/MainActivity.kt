@@ -712,6 +712,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         runOnUiThread {
             val authLike = Regex("(?i)auth|login|session").containsMatchIn(message)
             DiagnosticEvents.record(if (authLike) "AUTH_REQUIRED" else "STRUCTURED_FAILURE")
+            if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
+                loadStage = LoadStage.READY
+                historyStatus = "Older history interrupted; " + bulkBatchCount +
+                    " accepted batch(es) remain available."
+                if (authLike) {
+                    sessionState = SessionState.LOGIN_REQUIRED
+                    pendingCrAfterLogin = activeCr
+                }
+                statusText = historyStatus
+                return@runOnUiThread
+            }
             if (verifiedRestReports.isNotEmpty()) {
                 loadStage = LoadStage.READY
                 if (authLike) pendingCrAfterLogin = activeCr
