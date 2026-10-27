@@ -66,4 +66,28 @@ class ProvenanceV122Test {
         assertNull(association.verified)
         ReportTitleCache.clear()
     }
+
+    @Test fun specimenIdentifierDoesNotMasqueradeAsLabAccession() {
+        val json = """{"status":1,"crNo":"$cr","groups":[{"testName":"CBC","rows":[
+          {"parameterName":"WBC","sampleNo":"S123456",
+           "valuesByDate":{"15-Oct-2026":"9.1"}}]}]}"""
+        val result = BulkParser.parse(json, cr, PatientInfo(crNo=cr), emptyList()).results.single()
+        assertEquals("S123456", result.sampleNumber)
+        assertEquals("", result.labNumber)
+    }
+
+    @Test fun sharedPdfUrlDoesNotCollapseSeparateReportNumbers() {
+        val base = NimsUrls.CR_REPORTS
+        val html = """<html><body>CR No: $cr<table>
+           <tr><td>Microbiology</td><td>Blood culture</td><td>Sample/A123</td>
+           <td>15-Oct-2026</td><td>1</td>
+           <td><a onclick="printReport('blood.pdf')">View Report</a></td></tr>
+           <tr><td>Microbiology</td><td>Blood culture</td><td>Sample/A123</td>
+           <td>15-Oct-2026</td><td>2</td>
+           <td><a onclick="printReport('blood.pdf')">View Report</a></td></tr>
+           </table></body></html>"""
+        val reports = ReportPayloadParser.parseHtml(html, base, cr)
+        assertEquals(2, reports.size)
+        assertEquals(setOf("1","2"), reports.map { it.reportNumber }.toSet())
+    }
 }
