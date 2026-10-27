@@ -21,7 +21,14 @@ data class LabResult(
     val sentDate: String = "",
     val reportedDate: String = "",
     val labNumber: String = "",
-    val orderDate: String = ""
+    val orderDate: String = "",
+    val sourceOrderId: String = "",
+    val sampleNumber: String = "",
+    val reportNumber: String = "",
+    val reportStage: String = "",
+    val documentReference: String = "",
+    val packingListNumber: String = "",
+    val sourceRow: String = ""
 )
 
 data class ReportRef(
@@ -34,7 +41,13 @@ data class ReportRef(
     val reportedDate: String = "",
     val labNumber: String = "",
     val orderDate: String = "",
-    val sampleNumber: String = ""
+    val sampleNumber: String = "",
+    val reportNumber: String = "",
+    val reportStage: String = "",
+    val sourceOrderId: String = "",
+    val documentReference: String = "",
+    val packingListNumber: String = "",
+    val sourceRow: String = ""
 )
 
 data class ClinicalBundle(
