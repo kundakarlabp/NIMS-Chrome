@@ -1391,32 +1391,37 @@ async function optionalBulkReportMetadata(crNo) {
   }
 }
 
-function canonicalReportKey(report) {
-  const title = String(report && report.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const date = String(report && report.date || "").trim().toLowerCase();
-  const id = String(report && report.id || "").trim();
-  return title || date ? [title, date].join("|") : ("id|" + id);
+function canonicalReportKey(report, listIndex, rowIndex) {
+  const clean = value => String(value == null ? "" : value).trim().toLowerCase();
+  const url = clean(report.url || report.resolvedUrl);
+  const doc = clean(report.documentReference || report.documentRef);
+  const stage = clean(report.reportStage || report.stage);
+  const reportNo = clean(report.reportNumber || report.reportNo);
+  const accession = clean(report.labNumber || report.labNo);
+  const sample = clean(report.sampleNumber || report.sampleNo);
+  const identity = [doc, reportNo, accession, sample, stage].join("|");
+  if (url) return "pdf|" + url + "|" + identity;
+  if (doc || reportNo) return "document|" + identity;
+  const sourceId = clean(report.sourceOrderId || report.id);
+  if (sourceId) return "source|" + sourceId + "|" + accession + "|" + sample + "|" + stage;
+  return "unidentified|" + listIndex + "|" + rowIndex;
 }
 
 function mergeReportInventories(...lists) {
   const merged = new Map();
-  for (const list of lists) {
-    for (const report of Array.isArray(list) ? list : []) {
-      if (!report || !report.title) continue;
-      const key = canonicalReportKey(report);
+  lists.forEach((list, listIndex) => {
+    (Array.isArray(list) ? list : []).forEach((report, rowIndex) => {
+      if (!report || (!report.title && !report.url)) return;
+      const key = canonicalReportKey(report, listIndex, rowIndex);
       const previous = merged.get(key);
-      if (!previous) {
-        merged.set(key, { ...report });
-        continue;
+      if (!previous) { merged.set(key, { ...report }); return; }
+      const updated = { ...previous };
+      for (const [field, value] of Object.entries(report)) {
+        if (value !== undefined && value !== null && value !== "") updated[field] = value;
       }
-      merged.set(key, {
-        ...previous,
-        ...report,
-        url: previous.url || report.url || "",
-        provenance: report.provenance || previous.provenance
-      });
-    }
-  }
+      merged.set(key, updated);
+    });
+  });
   return Array.from(merged.values());
 }
 
@@ -1611,13 +1616,13 @@ function bundleFromParsedReports(crNo, extracted, state) {
     ...report,
     provenance: { source: "nims" }
   }));
-  const linkByKey = new Map(reports.map(report => [[report.title || "", report.date || ""].join("|"), report.url || ""]));
+  const availableOriginals = new Set(reports.map(report => report.url).filter(Boolean));
   const results = [];
   let resultIndex = 0;
   const parsedReports = (state && state.parsedReports) || [];
   for (const report of parsedReports) {
-    const key = [report.report_name || "", report.date_sent || ""].join("|");
-    const pdfUrl = linkByKey.get(key) || "";
+    const sourcePdf = report.sourceDocumentUrl || "";
+    const pdfUrl = availableOriginals.has(sourcePdf) ? sourcePdf : "";
     for (const parameter of report.parameters || []) {
       results.push({
         id: "nims-" + (++resultIndex),
@@ -1717,8 +1722,10 @@ async function tryRestApiForDashboard(crNo) {
           })
         });
         if (parsed && parsed.ok && parsed.data) {
-          parsedReports.push(parsed.data);
-          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department });
+          parsedReports.push({ ...parsed.data, sourceDocumentUrl: report.resolvedUrl, sourceDocumentId: report.id });
+          sourceReports.push({ id: report.id, title: report.title, date: report.date, department: report.department,
+            url: report.resolvedUrl, labNumber: report.labNumber || "", sampleNumber: report.sampleNumber || "",
+            reportNumber: report.reportNumber || "", reportStage: report.reportStage || "" });
           reportDiagnostics.parsed += 1;
         } else {
           reportDiagnostics.parseFailures += 1;
