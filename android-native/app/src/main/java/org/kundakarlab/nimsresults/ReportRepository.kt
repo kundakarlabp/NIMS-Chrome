@@ -211,7 +211,8 @@ class ReportRepository(
             // Distinct same-day CBC/culture PDFs must not collapse into one
             // merely because they share a test title and date.
             val key = if (report.url.isNotBlank()) {
-                "pdf|" + report.url
+                listOf("pdf", report.url, report.reportNumber, report.reportStage,
+                    report.labNumber, report.sampleNumber).joinToString("|")
             } else {
                 "meta|" + canonical(report.title) + "|" +
                     report.date.trim().lowercase() + "|" + report.id
@@ -388,8 +389,11 @@ object ReportPayloadParser {
                 sourceRow = row.outerHtml())
         }
         // Keep separate report-stage URLs even when lab accession is shared.
-        return reports.distinctBy { if (it.url.isNotBlank()) "pdf|" + it.url
-            else "index|" + it.id }
+        return reports.distinctBy {
+            if (it.url.isNotBlank()) listOf("pdf", it.url, it.reportNumber,
+                it.reportStage, it.labNumber, it.sampleNumber).joinToString("|")
+            else "index|" + it.id
+        }
     }
 
     fun reportUrlForToken(raw: String): String {
