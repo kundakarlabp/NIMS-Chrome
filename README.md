@@ -1,6 +1,6 @@
-# NIMS Results Connector
+# NIMS Results — Desktop Connector and Native Android App
 
-This repository owns one desktop workflow only: the NIMS Results Dashboard connector.
+This repository contains the Chrome connector for the desktop NIMS Results Dashboard and the independent native Android client under `android-native/`. Both use authenticated NIMS HIS retrieval and must preserve source provenance.
 
 ## Live dashboard
 
@@ -28,14 +28,11 @@ Dashboard
 
 The REST endpoint is an optimization layered on top of the existing working bridge. It does not replace authentication and it does not bypass CAPTCHA.
 
-## What is intentionally not in this repository
+## Repository boundaries
 
-- Android/mobile app
-- mobile or ChatGPT relay
-- side-panel product
-- manual-analysis UI
-- Chrome Web Store publishing workflow
-- duplicated navigation engine
+- The deployed `appdeploy.ai` dashboard frontend is not included here; desktop dashboard code/deployment must be independently identified and verified.
+- The Chrome connector and native Android client are separate runtimes. Do not assume their builds or retrieval results are identical.
+- There is no mobile or ChatGPT relay, side-panel product, Chrome Web Store publishing workflow, or shared backend authentication bypass.
 
 ## Runtime components
 
@@ -65,3 +62,16 @@ npm test
 pip install -r helper/requirements-dev.txt
 PYTHONPATH=helper python -m pytest -q tests/test_parsers.py
 ```
+
+## Native Android app
+
+- Sources: `android-native/app/src/main/`; Gradle project: `android-native/`.
+- Clinical ingestion: `BulkParser.kt` retains source rows, distinct accession/specimen/report identifiers, and source-scoped observation identity.
+- Report inventory: `ReportRepository.kt` keeps New table Report No. and source document metadata distinct; matching by title/date alone is not identity verification.
+- Source links: `ReportLinkResolver.kt` requires PDF-derived CR and accession evidence to mark automatic association verified. Inventory-only matches remain suggestions.
+- PDFs: `PdfSourceEvidence.kt` indexes multiple report sections while keeping original PDFs available. The runtime deliberately does not prefetch every PDF, to limit memory/network load.
+- Build: GitHub Actions runs unit tests, lint, and `assembleDebug`. Successful builds upload a debug APK artifact. The APK is **not** a reproducible production-signed release; debug signatures may differ between runners.
+
+## Release verification and known limits
+
+Unit tests and a valid APK archive do not prove that a particular phone runs the latest commit, that all NIMS HIS sources were captured, or that the deployed desktop dashboard uses this model. Capture installed version/build provenance and perform an authenticated same-CR reconciliation before declaring clinical end-to-end completeness. Track Enquiry rows, raw Custom Sheet cells, structured observations, inventory rows, received PDFs, rendered PDFs and fully identity-verified PDFs independently. Never infer completeness from a nonempty result set.
