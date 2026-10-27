@@ -58,11 +58,11 @@ class IntegratedResultsV115Test {
         ReportTitleCache.clear()
     }
 
-    @Test fun verifiedLabNumberMustMatchUniqueReportNotDateOnly() {
+    @Test fun inventoryLabNumberAloneMustNotVerifyPdf() {
         val result = ReportLinkResolver.candidates(
             listOf(row("Gram stain", "2025-07-08", "M2222")),
             listOf(report("Gram stain", "08-Jul-2025", lab = "M2222")))
-        assertNotNull(result.verified)
+        assertNull(result.verified)
     }
 
     @Test fun realPdfHeaderFieldsAreParsedWhenExplicitlyLabelled() {
