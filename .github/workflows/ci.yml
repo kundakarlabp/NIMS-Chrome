@@ -23,6 +23,8 @@ on:
       - fix/android-v118-report-inventory-performance
       - fix/android-v119-stability-on-demand-pdf
       - fix/android-v120-staged-bulk-clinical-data
+      - fix/results-provenance-identity-v2
+      - main
   pull_request:
     branches:
       - release/android-native-rebuild-base
