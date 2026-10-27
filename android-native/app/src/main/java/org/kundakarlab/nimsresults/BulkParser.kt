@@ -86,11 +86,18 @@ object BulkParser {
                         unit = unit,
                         refRange = refRange,
                         abnormal = abnormal,
-                        sourceKey = sourceKey(test, parameter, date, unit, valueText),
+                        sourceKey = sourceKey(expectedCr, row, g, r, rawDate),
                         sentDate = sent,
                         reportedDate = reported,
                         labNumber = lab,
-                        orderDate = ordered
+                        orderDate = ordered,
+                        sourceOrderId = metadataAt(row, group, rawDate, "sourceOrderId", "orderId", "requisitionNo", "reqNo"),
+                        sampleNumber = metadataAt(row, group, rawDate, "sampleNo", "sampleNumber", "specimenNo"),
+                        reportNumber = metadataAt(row, group, rawDate, "reportNo", "reportNumber"),
+                        reportStage = metadataAt(row, group, rawDate, "reportStage", "stage"),
+                        documentReference = metadataAt(row, group, rawDate, "documentRef", "reportRef"),
+                        packingListNumber = metadataAt(row, group, rawDate, "packingListNo", "packingListNumber"),
+                        sourceRow = row.toString()
                     )
                 }
             }
@@ -182,8 +189,18 @@ object BulkParser {
         }?.toDoubleOrNull()
     }
 
-    private fun sourceKey(test: String, parameter: String, date: String, unit: String, value: String): String =
-        listOf("nims_bulk_api", canonical(test), canonical(parameter), date, canonical(unit), value.trim()).joinToString("|")
+    // Amended values must retain their event identity; preserve repeated specimens.
+    // A source ordinal is scoped to the patient and exact source table layout.
+    private fun sourceKey(cr: String, row: JSONObject, groupIndex: Int,
+                          rowIndex: Int, rawDate: String): String {
+        val eventId = listOf("observationId", "resultId", "eventId")
+            .firstNotNullOfOrNull { key ->
+                row.optString(key).trim().takeIf { it.isNotBlank() && it != "null" }
+            }
+        return if (eventId != null) listOf("nims_bulk_api", cr, "event", eventId, rawDate).joinToString("|")
+        else listOf("nims_bulk_api", cr, "group", groupIndex.toString(),
+            "row", rowIndex.toString(), "date", rawDate).joinToString("|")
+    }
 
     private fun canonical(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]+"), "")
     private fun clean(value: String?): String = value.orEmpty().replace(Regex("\\s+"), " ").trim()
