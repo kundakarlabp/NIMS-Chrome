@@ -26,11 +26,11 @@ class ReportIdentityV111Test {
         assertEquals("11-Apr-2026 17:14", header.reportedDate)
     }
 
-    @Test fun compoundAccessionCanMatchExactlyOneVerifiedInventoryReport() {
+    @Test fun uniqueInventoryAccessionRemainsUnverifiedWithoutPdfHeader() {
         val rows = listOf(lab("26T010443"))
         val reports = listOf(report("T048/26T010443", id="one"),report("T049/26T010444",id="two"))
         val result = ReportLinkResolver.candidates(rows,reports,"123456789012345")
-        assertEquals("one",result.verified?.id)
+        assertNull(result.verified)
         assertEquals(1,result.candidates.size)
     }
 
