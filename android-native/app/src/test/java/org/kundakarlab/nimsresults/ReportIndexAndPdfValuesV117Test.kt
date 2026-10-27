@@ -26,6 +26,7 @@ class ReportIndexAndPdfValuesV117Test {
         assertEquals("25BCT55555",item.sampleNumber)
         assertEquals("B12345",item.labNumber)
         assertEquals("28-Aug-2025",item.sentDate)
+        assertEquals("1", item.reportNumber)
         assertEquals("",item.reportedDate)
         assertTrue(item.url.contains("synthetic.pdf"))
     }
@@ -65,7 +66,7 @@ class ReportIndexAndPdfValuesV117Test {
             labNumber="E9999")
         val row = LabResult("r","STAINING","Report","2025-07-14",
             "Gram negative bacilli",labNumber="E9999")
-        assertEquals(stain.url,ReportLinkResolver.candidates(
-            listOf(row),listOf(stain,culture),cr).verified?.url)
+        assertNull(ReportLinkResolver.candidates(
+            listOf(row),listOf(stain,culture),cr).verified)
     }
 }
