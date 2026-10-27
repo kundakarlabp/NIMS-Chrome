@@ -118,7 +118,18 @@ object ReportLinkResolver {
                     (narrativeHint.isBlank() || header?.crNo == expectedCr &&
                         expectedCr.isNotBlank())
             }
-            if (labMatched.size == 1) return ReportCandidates(labMatched.single(), labMatched)
+            // Inventory association is only a candidate until independently
+            // extracted PDF sections confirm both patient CR and accession.
+            if (labMatched.size == 1) {
+                val only = labMatched.single()
+                val header = ReportTitleCache.header(only.url)
+                val pdfAccessionMatches = ReportTitleCache.sections(only.url).any { part ->
+                    uniqueLabMatch(lab, part.header.labNumber)
+                }
+                if (expectedCr.isNotBlank() && header?.crNo == expectedCr &&
+                    pdfAccessionMatches) return ReportCandidates(only, labMatched)
+                return ReportCandidates(null, labMatched)
+            }
             if (labMatched.isNotEmpty()) return ReportCandidates(null, labMatched)
         }
 
