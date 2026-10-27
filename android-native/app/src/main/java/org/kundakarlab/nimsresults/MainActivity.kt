@@ -753,6 +753,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("NIMS Results diagnostics · entire app")
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
+            appendLine("app.sourceCommit=${BuildConfig.SOURCE_COMMIT}")
             appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
             appendLine(ProcessHealth.snapshot(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
