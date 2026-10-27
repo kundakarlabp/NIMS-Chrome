@@ -1,43 +1,100 @@
-name: Native Android Rebuild
+name: CI
 
 on:
   push:
-    branches:
-      - release/android-native-rebuild-v1
-      - fix/android-v102-clinical-usability
-      - fix/android-v103-crash-api-labs
-      - fix/android-v104-clinical-trends-cultures
-      - fix/android-v105-clinical-workspace
-      - fix/android-v106-dashboard-api-parity
-      - fix/android-v107-report-reading-persistence
-      - fix/android-v108-provenance-report-fidelity
-      - fix/android-v109-patient-shelf-pdf-tables
-      - fix/android-v110-clinical-report-renderers
-      - fix/android-v111-source-provenance-routing
-      - fix/android-v112-report-completeness
-      - fix/android-v113-inline-review-diagnostics
-      - fix/android-v114-global-diagnostics-recent-scroll
-      - fix/android-v115-integrated-results-pdf-evidence
-      - fix/android-v116-bundled-pdf-unified-results
-      - fix/android-v117-reconciled-reports
-      - fix/android-v118-report-inventory-performance
-      - fix/android-v119-stability-on-demand-pdf
-      - fix/android-v120-staged-bulk-clinical-data
-      - fix/results-provenance-identity-v2
-      - main
+    branches: [main, fix/results-provenance-identity-v2, fix/android-v120-staged-bulk-clinical-data]
   pull_request:
-    branches:
-      - release/android-native-rebuild-base
-      - release/android-native-rebuild-v101
+    branches: [main, fix/results-provenance-identity-v2, fix/android-v120-staged-bulk-clinical-data]
 
 concurrency:
-  group: native-android-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  repository-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce desktop Results-only repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          for removed in mobile shared docs scripts railway.json .dockerignore; do
+            test ! -e "$removed"
+          done
+          test ! -e dashboard/mobileRelay.ts
+          test ! -e dashboard/APPDEPLOY_MOBILE_BRIDGE_PATCH.md
+          ! find extension/src -maxdepth 1 -type f \( -name 'sidepanel*' -o -name 'manualAnalysis*' -o -name 'manualSidepanel*' \) | grep .
+      - name: Verify connector manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          m = json.load(open("extension/manifest.json"))
+          assert m["version"] == "0.6.10"
+          for entry in m["content_scripts"]:
+            if entry.get("match_origin_as_fallback"):
+              assert entry.get("all_frames") is True
+              assert entry["matches"] == ["https://nimsts.edu.in/*", "https://www.nimsts.edu.in/*"]
+              assert all(p.endswith("/*") and p.count("/", p.index("://")+3) == 1 for p in entry["matches"])
+          assert "side_panel" not in m and "action" not in m
+          scripts = [p for entry in m["content_scripts"] for p in entry.get("js", [])]
+          assert "src/contentScript.js" in scripts
+          assert "src/contentUtils.js" in scripts
+          assert "src/nimsSessionBridge.js" in scripts
+          assert "src/bulkCaptureMain.js" in scripts
+          assert "src/nimsUiBridge.js" in scripts
+          assert not any("manual" in p.lower() or "sidepanel" in p.lower() for p in scripts)
+          PY
+
+  javascript:
+    needs: repository-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  helper:
+    needs: repository-contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r helper/requirements-dev.txt
+      - run: PYTHONPATH=helper python -m pytest -q tests/test_parsers.py tests/test_remote_helper.py
+      - run: python -m py_compile helper/main.py helper/models.py helper/cache.py helper/parsers/*.py
+
+  extension-package:
+    needs: [javascript, helper]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package validated extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          mkdir -p dist
+          cd extension
+          zip -qr "../dist/nims-results-connector-$version.zip" manifest.json src
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nims-results-connector
+          path: dist/nims-results-connector-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
