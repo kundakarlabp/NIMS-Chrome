@@ -691,7 +691,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (reports.isNotEmpty()) {
                     val prior = bundle ?: return@runOnUiThread
                     val reconciled = (reports + prior.reports).distinctBy {
-                        if (it.url.isNotBlank()) "pdf|" + it.url
+                        if (it.url.isNotBlank()) listOf("pdf", it.url,
+                            it.reportNumber, it.reportStage, it.labNumber,
+                            it.sampleNumber).joinToString("|")
                         else "index|" + it.id + "|" + it.title + "|" + it.date
                     }
                     bundle = prior.copy(reports = reconciled)
