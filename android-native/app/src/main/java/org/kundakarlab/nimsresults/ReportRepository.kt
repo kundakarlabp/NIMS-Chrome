@@ -228,7 +228,13 @@ class ReportRepository(
                 reportedDate = previous.reportedDate.ifBlank { report.reportedDate },
                 labNumber = previous.labNumber.ifBlank { report.labNumber },
                 orderDate = previous.orderDate.ifBlank { report.orderDate },
-                sampleNumber = previous.sampleNumber.ifBlank { report.sampleNumber }
+                sampleNumber = previous.sampleNumber.ifBlank { report.sampleNumber },
+                reportNumber = previous.reportNumber.ifBlank { report.reportNumber },
+                reportStage = previous.reportStage.ifBlank { report.reportStage },
+                sourceOrderId = previous.sourceOrderId.ifBlank { report.sourceOrderId },
+                documentReference = previous.documentReference.ifBlank { report.documentReference },
+                packingListNumber = previous.packingListNumber.ifBlank { report.packingListNumber },
+                sourceRow = previous.sourceRow.ifBlank { report.sourceRow }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -247,6 +253,11 @@ object ReportPayloadParser {
     private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent")
     private val orderKeys = listOf("requisitionDate","requisition_date","orderDate","order_date","orderedDate","ordered_date")
     private val reportedKeys = listOf("reportingDate","reporting_date","reportedDate","reported_date","reportDate","report_date","validationDate","validation_date")
+    private val reportNumberKeys = listOf("reportNo", "reportNumber", "report_no", "report_number")
+    private val stageKeys = listOf("reportStage", "report_stage", "stage", "reportStatus")
+    private val packingKeys = listOf("packingListNo", "packing_list_no", "packingListNumber")
+    private val documentKeys = listOf("documentRef", "document_ref", "reportRef", "report_ref")
+    private val orderIdKeys = listOf("orderId", "order_id", "sourceOrderId", "requisitionNo", "reqNo")
     private val sampleKeys = listOf("sampleNo","sample_no","sampleNumber","sample_number","specimenNo","specimen_no")
     private val labKeys = listOf("labStudyNo","labStudyNumber","labNo","lab_no","labNumber","lab_number","accessionNo","accession_no")
     private val departmentKeys = listOf("department","dept","lab","laboratory","section")
@@ -291,7 +302,13 @@ object ReportPayloadParser {
             val url = direct.ifBlank { reportUrlForToken(token) }
             val id = first(row, idKeys).ifBlank { token }.ifBlank { Integer.toHexString("$title|$date|$index".hashCode()) }
             if (title.isBlank() && url.isBlank()) null else ReportRef(
-                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate, sampleNumber
+                id, title, date, department, url, sentDate, reportedDate, labNumber, orderedDate, sampleNumber,
+                reportNumber = first(row, reportNumberKeys),
+                reportStage = first(row, stageKeys),
+                sourceOrderId = first(row, orderIdKeys),
+                documentReference = first(row, documentKeys),
+                packingListNumber = first(row, packingKeys),
+                sourceRow = row.toString()
             )
         }
     }
@@ -365,7 +382,10 @@ object ReportPayloadParser {
             if (url.isBlank()) ReportInventoryTrace.event("html_rows_without_pdf")
             reports += ReportRef(id = id, title = title, date = date,
                 department = dept, url = url, sentDate = collected,
-                labNumber = guessedLab, sampleNumber = sample)
+                labNumber = guessedLab, sampleNumber = sample,
+                reportNumber = if (knownLayout) cells[4] else "",
+                documentReference = token.ifBlank { url },
+                sourceRow = row.outerHtml())
         }
         // Keep separate report-stage URLs even when lab accession is shared.
         return reports.distinctBy { if (it.url.isNotBlank()) "pdf|" + it.url
