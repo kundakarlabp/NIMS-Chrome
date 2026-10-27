@@ -71,8 +71,7 @@ object BulkParser {
                         "validationDate", "validation_date")
                     val lab = metadataAt(row, group, rawDate,
                         "labNo", "lab_no", "labNumber", "lab_number",
-                        "labStudyNo", "labStudyNumber", "accessionNo", "accession_no",
-                        "sampleNo", "sample_no")
+                        "labStudyNo", "labStudyNumber", "accessionNo", "accession_no")
                     val abnormal = clean(flags?.opt(rawDate)?.toString())
                         .ifBlank { clean(row.opt("abnormal")?.toString()) }
                         .ifBlank { clean(row.opt("flag")?.toString()) }
