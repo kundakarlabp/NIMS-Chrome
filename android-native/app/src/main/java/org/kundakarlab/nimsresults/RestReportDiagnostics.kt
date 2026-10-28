@@ -29,6 +29,8 @@ object RestReportDiagnostics {
         metrics["rest.stage"] = value.take(50)
     }
 
+    @Synchronized fun elapsedMs(): Long = metrics["rest.elapsedMs"]?.toLongOrNull() ?: 0L
+
     @Synchronized fun snapshot(): String =
         metrics.entries.joinToString("\n") { (k,v) -> "$k=$v" } +
             "\nrest.privacy=no_CR_values_names_tokens_urls_or_lab_numbers"
@@ -141,8 +143,16 @@ object RestReportDiagnostics {
         assign("rest.rowsWithDocumentRef",objects.count { value(obj=it,"fileName","reportUrl","pdfUrl","reportToken") })
         assign("rest.possibleDetailRecords",possibleDetailed)
         val identityFields = listOf("crNo","crNumber","patientCrNo","patCrNo")
-        val rootCr=(payload as? JSONObject)?.let { o ->
-            identityFields.firstNotNullOfOrNull { k -> o.optString(k).takeIf(String::isNotBlank) }
+        val root=(payload as? JSONObject)
+        val patient=root?.optJSONObject("patient") ?: root?.optJSONObject("patientDetails")
+            ?: root?.optJSONObject("patient_details")
+        val rootCr=listOfNotNull(patient,root).firstNotNullOfOrNull { obj ->
+            val normalized=obj.keys().asSequence().associateBy(::canonical)
+            identityFields.firstNotNullOfOrNull { k ->
+                normalized[canonical(k)]?.let { actual ->
+                    obj.optString(actual).takeIf(String::isNotBlank)
+                }
+            }
         }.orEmpty()
         val rowCrs=objects.mapNotNull { obj ->
             identityFields.firstNotNullOfOrNull { k ->
