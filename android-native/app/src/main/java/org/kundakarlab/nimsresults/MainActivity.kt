@@ -1289,7 +1289,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ResultsTab.entries.forEach { tab ->
+            ResultsTab.entries.filter { it != ResultsTab.LABS }.forEach { tab ->
                 FilterChip(
                     selected = selectedTab == tab,
                     onClick = { selectedTab = tab },
@@ -1512,7 +1512,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("Positive cultures (" + positives.size + ")", fontSize = 11.sp)
                     }
                     OutlinedButton(modifier = Modifier.weight(1f),
-                        onClick = { selectedTab = ResultsTab.LABS }) {
+                        onClick = { allResultsSourceFilter = "Labs"; selectedTab = ResultsTab.ALL }) {
                         Text("Lab timeline", fontSize = 11.sp)
                     }
                 }
