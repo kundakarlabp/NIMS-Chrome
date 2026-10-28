@@ -821,6 +821,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("bulk.fetchMode=$historyMode")
             appendLine("bulk.historyStatus=" + historyStatus.take(100))
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
+            appendLine(RestReportDiagnostics.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
