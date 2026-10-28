@@ -48,7 +48,7 @@ object UnifiedResultsFeed {
         // matching, hashing, PDF loading or interpretation during lab viewing.
         val documents = bundle.reports
             .filter { it.url.isNotBlank() }
-            .distinctBy { listOf(it.id,it.url,it.reportNumber,it.reportStage,
+            .distinctBy { listOf(it.url,it.reportNumber,it.reportStage,
                 it.labNumber,it.sampleNumber).joinToString("|") }
             .mapIndexed { index, report ->
                 UnifiedResultEntry(
