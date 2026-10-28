@@ -2697,7 +2697,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF102A43))
                                 Text(
-                                    if (report != null) "Original NIMS PDF · " +
+                                    if (report != null) (if (report.url.isNotBlank()) "Original NIMS PDF · " else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString())
                                     else rows.size.toString() + " result fields · column date " +
@@ -2854,6 +2854,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 ?.takeIf { it.crNo == current.patient.crNo }
                             val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
                             val collected = header?.collectionDate.orEmpty()
+                                .ifBlank { report.collectionDateTime }
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
@@ -2861,10 +2862,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (parts.isNotEmpty()) "Multiple studies / see sections"
                                 else "Not yet extracted"
                             }, fontSize = 11.sp)
-                            Text("Sample collection/sent: " +
-                                collected.ifBlank { "Not yet available" }, fontSize = 11.sp)
-                            Text("Reported: " +
-                                reported.ifBlank { "Not yet available" }, fontSize = 11.sp)
+                            if (report.sampleNumber.isNotBlank()) Text(
+                                "Sample No.: " + report.sampleNumber, fontSize = 11.sp)
+                            if (report.sourceSampleLabText.isNotBlank()) Text(
+                                "Original Sample No/Lab No: " + report.sourceSampleLabText,
+                                fontSize = 11.sp)
+                            if (report.department.isNotBlank()) Text(
+                                "Source laboratory: " + report.department, fontSize = 11.sp)
+                            if (report.reportNumber.isNotBlank()) Text(
+                                "Report No.: " + report.reportNumber, fontSize = 11.sp)
+                            if (report.reportStage.isNotBlank()) Text(
+                                "Report stage: " + report.reportStage, fontSize = 11.sp)
+                            Text("Collection date (report index / verified PDF): " +
+                                collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
+                            Text("Reporting date/time (verified PDF only): " +
+                                reported.ifBlank { "Not in this report-index row" }, fontSize = 11.sp)
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
@@ -2935,8 +2947,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            TextButton(onClick = { openReport(report.url) }) {
-                                Text("Open complete original PDF")
+                            if (report.url.isNotBlank()) {
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text("Open complete original PDF")
+                                }
+                            } else Text("Metadata-only NIMS report row: no usable PDF URL provided.",
+                                fontSize = 11.sp, color = Color(0xFF875B22))
+                            if (expanded && report.sourceRow.isNotBlank()) {
+                                TextButton(onClick = { showEntireSource = !showEntireSource }) {
+                                    Text(if (showEntireSource) "Hide original index row"
+                                        else "Show complete source index row")
+                                }
+                                if (showEntireSource) Text(report.sourceRow,
+                                    fontSize = 10.sp, color = Color(0xFF486581))
                             }
                         }
                     }
