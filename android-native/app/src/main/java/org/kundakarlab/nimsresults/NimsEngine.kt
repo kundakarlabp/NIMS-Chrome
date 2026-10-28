@@ -11,6 +11,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import org.json.JSONArray
 import org.json.JSONObject
@@ -23,6 +25,7 @@ class NimsEngine(
 ) {
     interface Listener {
         fun onSession(state: SessionState)
+        fun onRendererGone(didCrash: Boolean)
         fun onStage(requestId: String, stage: String)
         fun onPatient(requestId: String, patient: PatientInfo)
         fun onBulk(requestId: String, rawJson: String)
@@ -33,6 +36,7 @@ class NimsEngine(
     val webView: WebView = WebView(context)
     private val engineScript = context.assets.open("nims_engine.js").bufferedReader().use { it.readText() }
     private var pageReady = false
+    private var rendererDead = false
     private var pendingProbe: ((SessionState) -> Unit)? = null
     private var pendingRun: Pair<String, String>? = null
     private var ambiguousProbeCount = 0
@@ -86,6 +90,19 @@ class NimsEngine(
         webView.addJavascriptInterface(Bridge(), "AndroidNimsBridge")
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                pageReady = false
+                rendererDead = true
+                pendingRun = null
+                pendingProbe = null
+                activeRequestId = ""
+                runCatching { view.removeJavascriptInterface("AndroidNimsBridge") }
+                runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                runCatching { view.destroy() }
+                listener.onRendererGone(detail.didCrash())
+                return true
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
                 val host = uri.host?.lowercase().orEmpty()
@@ -239,6 +256,8 @@ class NimsEngine(
     }
 
     fun destroy() {
+        if (rendererDead) return
+        rendererDead = true
         runCatching { webView.removeJavascriptInterface("AndroidNimsBridge") }
         runCatching { webView.stopLoading() }
         runCatching { webView.destroy() }
