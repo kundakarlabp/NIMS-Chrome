@@ -224,7 +224,9 @@ class BulkParserTest {
         val row = BulkParser.parse(raw, "123456789012345",
             PatientInfo(crNo="123456789012345"), emptyList()).results.single()
         assertEquals("2026-05-07", row.date)
-        assertEquals("03-May-2026", row.sentDate)
+        assertEquals("03-May-2026", row.collectionDateTime)
+        assertEquals("", row.sentDate)
+        assertEquals(1, BulkParser.parse(raw, "123456789012345", PatientInfo(crNo="123456789012345"), emptyList()).rawRows.size)
         assertEquals("08-May-2026", row.reportedDate)
         assertEquals("ABC123", row.labNumber)
     }
@@ -238,6 +240,48 @@ class BulkParserTest {
         assertEquals("", row.sentDate)
         assertEquals("", row.reportedDate)
         assertEquals("", row.labNumber)
+    }
+
+    @Test fun retainsCompleteSourceRowsOnceAndKeepsTimestampsDistinct() {
+        val raw = """
+          {"status":1,"crNo":"123456789012345","groups":[
+            {"testName":"Culture","rows":[
+              {"parameterName":"Result","labNo":"LAB-1","sampleNo":"S-1",
+               "collectionDate":"26-Oct-2026 09:00","dateSent":"26-Oct-2026 09:30",
+               "receivedDate":"26-Oct-2026 10:00",
+               "reportingDate":"27-Oct-2026 11:00","validationDate":"27-Oct-2026 12:00",
+               "specimenType":"Blood","comment":"full source metadata",
+               "valuesByDate":{"26-Oct-2026":"PRELIMINARY","27-Oct-2026":"FINAL"}}
+            ]}
+          ]}
+        """.trimIndent()
+        val b=BulkParser.parse(raw,"123456789012345",PatientInfo(crNo="123456789012345"),emptyList())
+        assertEquals(2,b.results.size)
+        assertEquals(1,b.rawRows.size)
+        assertTrue(b.rawRows.single().sourceJson.contains("full source metadata"))
+        assertEquals(1,b.results.count { it.sourceRow.contains("full source metadata") })
+        val row=b.results.first()
+        assertEquals("26-Oct-2026 09:00",row.collectionDateTime)
+        assertEquals("26-Oct-2026 09:30",row.sentDate)
+        assertEquals("26-Oct-2026 10:00",row.receivedDateTime)
+        assertEquals("27-Oct-2026 11:00",row.reportedDate)
+        assertEquals("27-Oct-2026 12:00",row.validationDateTime)
+        assertEquals("Blood",row.specimenType)
+        assertEquals("S-1",row.sampleNumber)
+        assertEquals("LAB-1",row.labNumber)
+    }
+
+    @Test fun blankOnlyRawRowsAreStillAccessible() {
+        val raw = """{"status":1,"crNo":"123456789012345","groups":[
+            {"testName":"CBC","rows":[
+             {"parameterName":"WBC","valuesByDate":{"26-Oct-2026":"7"}},
+             {"parameterName":"Machine status","comment":"retain unclassified note",
+              "valuesByDate":{"26-Oct-2026":""}}
+            ]}]}"""
+        val b=BulkParser.parse(raw,"123456789012345",PatientInfo(crNo="123456789012345"),emptyList())
+        assertEquals(1,b.results.size)
+        assertEquals(2,b.rawRows.size)
+        assertTrue(b.rawRows.last().sourceJson.contains("retain unclassified note"))
     }
 
 }
