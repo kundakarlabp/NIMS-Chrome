@@ -2556,6 +2556,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
+        var subview by remember(current.patient.crNo) { mutableStateOf("Investigations") }
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2581,6 +2582,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
+        val visibleFeed = feed.filter { if (subview == "Source PDF List")
+            it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
@@ -2589,8 +2592,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigations · $sourceCount unlinked original PDFs · one timeline",
+                Text("$studyCount investigation groups · $sourceCount original source reports",
                     fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("Investigations", "Source PDF List").forEach { name ->
+                        FilterChip(selected = subview == name,
+                            onClick = { subview = name; query = "" },
+                            label = { Text(name, fontSize = 11.sp) })
+                    }
+                }
                 if (pdfTotalCount > 0) Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -2621,16 +2631,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                Text("Each investigation retains its own values and provenance. " +
-                    "A bundled PDF can be linked to several lab accessions; " +
-                    "date or title alone is not proof of a match.",
+                Text("Full investigations and the independent source PDF list are separate. " +
+                    "No automatic PDF-to-result links are inferred.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            if (feed.isEmpty()) item {
+            if (visibleFeed.isEmpty()) item {
                 Text("No investigations or source PDFs match these filters.",
                     color = Color(0xFF66788A))
             }
-            items(feed, key = { it.key }) { entry ->
+            items(visibleFeed, key = { it.key }) { entry ->
                 var expanded by remember(current.patient.crNo, entry.key) {
                     mutableStateOf(false)
                 }
@@ -2642,9 +2651,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val report = entry.report
                 val rows = entry.rows
-                val resultLinks = if (report == null)
-                    ReportLinkResolver.candidates(rows, current.reports, current.patient.crNo)
-                    else ReportCandidates(null, emptyList())
+                val resultLinks = ReportCandidates(null, emptyList())
                 val verifiedReport = resultLinks.verified
                 val accession = ClinicalPresentation.accession(rows)
                 val linkedPart = verifiedReport?.url?.let { url ->
@@ -2690,22 +2697,37 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             else if (!expanded) Text(
                                 "Only source-coded or technical fields; expand to review.",
                                 fontSize = 10.sp, color = Color(0xFF66788A))
-                            val collected = ClinicalPresentation.sentDate(rows)
-                                .ifBlank { linkedPart?.header?.collectionDate.orEmpty() }
+                            val collected = rows.firstOrNull { it.collectionDateTime.isNotBlank() }
+                                ?.collectionDateTime.orEmpty()
+                            val sent = rows.firstOrNull { it.sentDate.isNotBlank() }?.sentDate.orEmpty()
                             val reported = ClinicalPresentation.reportedDate(rows)
                                 .ifBlank { linkedPart?.header?.reportedDate.orEmpty() }
                             if (!expanded) {
                                 Text(
                                     "Lab: " + accession.ifBlank { "—" } +
-                                        "  ·  Collected: " + collected.ifBlank { "—" } +
-                                        "  ·  Reported: " + reported.ifBlank { "—" },
+                                        " · Sample: " + rows.firstOrNull()?.sampleNumber.orEmpty().ifBlank { "—" } +
+                                        " · Collected: " + collected.ifBlank { "—" } +
+                                        " · Reported: " + reported.ifBlank { "—" },
                                     fontSize = 10.sp, color = Color(0xFF486581))
                             } else {
                                 Text("Lab/study no.: " +
                                     accession.ifBlank { "Not available in structured feed" },
                                     fontSize = 11.sp)
                                 Text("Collected/studied: " +
-                                    collected.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                                    collected.ifBlank { "Not supplied by NIMS" }, fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
+                                rows.firstOrNull()?.let { first ->
+                                    if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
+                                    if (first.accessionNumber.isNotBlank()) Text("Accession: " + first.accessionNumber, fontSize=11.sp)
+                                    if (first.specimenType.isNotBlank()) Text("Specimen: " + first.specimenType, fontSize=11.sp)
+                                    if (first.laboratory.isNotBlank()) Text("Laboratory: " + first.laboratory, fontSize=11.sp)
+                                    if (first.receivedDateTime.isNotBlank()) Text("Received: " + first.receivedDateTime, fontSize=11.sp)
+                                    if (first.validationDateTime.isNotBlank()) Text("Validated: " + first.validationDateTime, fontSize=11.sp)
+                                    if (first.requisitionDateTime.isNotBlank()) Text("Requisition: " + first.requisitionDateTime, fontSize=11.sp)
+                                    if (first.sourceOrderId.isNotBlank()) Text("Order: " + first.sourceOrderId, fontSize=11.sp)
+                                    if (first.reportNumber.isNotBlank()) Text("Report No: " + first.reportNumber, fontSize=11.sp)
+                                    if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
+                                }
                                 Text("Reported: " +
                                     reported.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
                             }
@@ -2732,6 +2754,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         color = abnormalColor(result.abnormal))
                                     if (result.refRange.isNotBlank()) Text(
                                         "Reference: " + result.refRange, fontSize = 10.sp)
+                                }
+                                if (category == "Raw") {
+                                    val rawForTest = remember(current.rawRows, entry.title) {
+                                        current.rawRows.filter { it.investigation == entry.title }
+                                    }
+                                    rawForTest.forEach { source ->
+                                        Text("Original source row " + source.rowIndex, fontSize = 11.sp)
+                                        Text(source.sourceJson, fontSize = 10.sp, color = Color(0xFF486581))
+                                    }
                                 }
                                 if (preferred.size < rows.size) Text(
                                     "Additional unclassified source fields are available " +
