@@ -235,7 +235,9 @@ class ReportRepository(
                 sourceOrderId = previous.sourceOrderId.ifBlank { report.sourceOrderId },
                 documentReference = previous.documentReference.ifBlank { report.documentReference },
                 packingListNumber = previous.packingListNumber.ifBlank { report.packingListNumber },
-                sourceRow = previous.sourceRow.ifBlank { report.sourceRow }
+                sourceRow = previous.sourceRow.ifBlank { report.sourceRow },
+                collectionDateTime = previous.collectionDateTime.ifBlank { report.collectionDateTime },
+                sourceSampleLabText = previous.sourceSampleLabText.ifBlank { report.sourceSampleLabText }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -265,7 +267,9 @@ object ReportPayloadParser {
     private val urlKeys = listOf("url","reportUrl","report_url","pdfUrl","pdf_url","href","downloadUrl","download_url")
     private val tokenKeys = listOf("fileName","filename","file_name","reportToken","report_token","token","reportFileName","report_file_name","pdfFileName","pdf_file_name")
     private val idKeys = listOf("reportId","report_id","requisitionNo","requisition_no","reqNo","req_no","labNo","lab_no","accessionNo","accession_no","id")
-    private val dateRegex = Regex("""\b\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}\b|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b\d{4}-\d{1,2}-\d{1,2}\b""")
+    private val dateRegex = Regex(
+        """(?:\b\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}\b|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b\d{4}-\d{1,2}-\d{1,2}\b)(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?"""
+    )
     private val crRegex = Regex("""(?i)(?:CR\s*(?:No|Number)?|patCrNo)\s*[:=\-]?\s*(\d{15})""")
     private val printReportRegex = Regex("""(?i)printReport\s*\(\s*['"]([^'"]+)['"]\s*\)""")
 
@@ -309,7 +313,8 @@ object ReportPayloadParser {
                 sourceOrderId = first(row, orderIdKeys),
                 documentReference = first(row, documentKeys),
                 packingListNumber = first(row, packingKeys),
-                sourceRow = row.toString()
+                sourceRow = row.toString(),
+                collectionDateTime = first(row, listOf("collectionDate", "sampleCollectionDate", "collection_date"))
             )
         }
     }
@@ -360,9 +365,11 @@ object ReportPayloadParser {
             val pair = if (knownLayout) cells[2] else ""
             val components = pair.split('/').map(String::trim)
                 .filter(String::isNotBlank)
-            val sample = if (components.size >= 2) components.first() else ""
-            val lab = if (components.size >= 2) components.last()
-                else if (knownLayout && OpaqueReportTitles.isCode(pair)) pair else ""
+            // More than two components are ambiguous: preserve the original
+            // column, but do not fabricate sample and lab identifiers.
+            val sample = if (components.size == 2) components.first() else ""
+            val lab = if (components.size == 2) components.last()
+                else if (knownLayout && !pair.contains('/') && OpaqueReportTitles.isCode(pair)) pair else ""
             val collected = if (knownLayout)
                 dateRegex.find(cells[3])?.value.orEmpty() else ""
             val date = collected.ifBlank {
@@ -386,7 +393,9 @@ object ReportPayloadParser {
                 labNumber = guessedLab, sampleNumber = sample,
                 reportNumber = if (knownLayout) cells[4] else "",
                 documentReference = token.ifBlank { url },
-                sourceRow = row.outerHtml())
+                sourceRow = row.outerHtml(),
+                collectionDateTime = collected,
+                sourceSampleLabText = pair)
         }
         // Keep separate report-stage URLs even when lab accession is shared.
         return reports.distinctBy {

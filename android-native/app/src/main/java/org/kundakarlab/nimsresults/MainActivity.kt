@@ -222,6 +222,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (bundle == null && activeRequestId.isBlank()) {
                     bundle = previous
                     crInput = previous.patient.crNo
+                    apiStage = "encrypted_cache_not_live_verified"
+                    apiReportCount = previous.reports.size
+                    pdfTotalCount = previous.reports.map { it.url }
+                        .filter(String::isNotBlank).distinct().size
+                    historyStatus = "Cached " + previous.results.size + " result fields · " +
+                        previous.reports.size + " source-index rows · refresh for live data"
                     selectedTab = ResultsTab.OVERVIEW
                     loadStage = LoadStage.READY
                     statusText = "Encrypted local snapshot · refresh before clinical use."
@@ -638,8 +644,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     return@runOnUiThread
                 val sources = inventory?.reports ?: seed
                 val current = bundle ?: return@runOnUiThread
-                bundle = current.copy(reports = sources)
+                val withInventory = current.copy(reports = sources)
+                bundle = withInventory
+                worker.execute {
+                    if (requestId == activeRequestId) snapshotCache.save(withInventory)
+                }
                 apiReportCount = sources.size
+                if (sources.isNotEmpty()) historyStatus =
+                    current.results.size.toString() + " structured fields · " +
+                        sources.size + " NIMS source-index rows (separate identifiers)"
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -682,8 +695,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             it.sampleNumber).joinToString("|")
                         else "index|" + it.id + "|" + it.title + "|" + it.date
                     }
-                    bundle = prior.copy(reports = reconciled)
+                    val withInventory = prior.copy(reports = reconciled)
+                    bundle = withInventory
+                    worker.execute {
+                        if (requestId == activeRequestId) snapshotCache.save(withInventory)
+                    }
                     apiReportCount = reconciled.size
+                    historyStatus = prior.results.size.toString() +
+                        " structured fields · " + reconciled.size +
+                        " source-index rows (not yet event-linked)"
                     statusText = prior.results.size.toString() +
                         " structured values · " + reconciled.count { it.url.isNotBlank() } +
                         " PDF links (" + reconciled.size + " index entries)"
@@ -1294,7 +1314,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ResultsTab.entries.filter { it != ResultsTab.LABS }.forEach { tab ->
+            ResultsTab.entries.forEach { tab ->
                 FilterChip(
                     selected = selectedTab == tab,
                     onClick = { selectedTab = tab },
@@ -2601,7 +2621,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
-        val visibleFeed = feed.filter { if (subview == "Source PDF List")
+        val visibleFeed = feed.filter { if (subview == "Report index / PDFs")
             it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
@@ -2611,10 +2631,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigation groups · $sourceCount original source reports",
+                Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Source PDF List").forEach { name ->
+                    listOf("Investigations", "Report index / PDFs").forEach { name ->
                         FilterChip(selected = subview == name,
                             onClick = { subview = name; query = "" },
                             label = { Text(name, fontSize = 11.sp) })
@@ -2651,11 +2671,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
                 Text("Full investigations and the independent source PDF list are separate. " +
-                    "No automatic PDF-to-result links are inferred.",
+                    "Specimen identifiers from the report index are kept separate until verified.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
             if (visibleFeed.isEmpty()) item {
-                Text("No investigations or source PDFs match these filters.",
+                Text("No investigations or source-index entries match these filters.",
                     color = Color(0xFF66788A))
             }
             items(visibleFeed, key = { it.key }) { entry ->
@@ -2689,10 +2709,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF102A43))
                                 Text(
-                                    if (report != null) "Original NIMS PDF · " +
+                                    if (report != null) (if (report.url.isNotBlank()) "Original NIMS PDF · " else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString())
-                                    else rows.size.toString() + " result fields · " +
+                                    else rows.size.toString() + " result fields · column date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString()),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -2733,7 +2753,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     accession.ifBlank { "Not available in structured feed" },
                                     fontSize = 11.sp)
                                 Text("Collected/studied: " +
-                                    collected.ifBlank { "Not supplied by NIMS" }, fontSize = 11.sp)
+                                    collected.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
                                 if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
                                 rows.firstOrNull()?.let { first ->
                                     if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
@@ -2748,7 +2768,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
                                 }
                                 Text("Reported: " +
-                                    reported.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                                    reported.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
@@ -2756,6 +2776,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             if (ordered.isNotBlank()) Text("Ordered: $ordered", fontSize = 10.sp)
                             if (expanded) {
+                                val unlinkedSources = remember(rows, current.reports) {
+                                    SourceMetadataReview.candidates(rows, current.reports)
+                                }
+                                if (unlinkedSources.isNotEmpty()) {
+                                    HorizontalDivider()
+                                    Text("Possible source-index records (" +
+                                        unlinkedSources.size + ") · NOT specimen-verified",
+                                        fontSize = 11.sp, color = Color(0xFF875B22),
+                                        fontWeight = FontWeight.SemiBold)
+                                    unlinkedSources.take(4).forEach { source ->
+                                        Text("Lab: " + source.labNumber.ifBlank { "unknown" } +
+                                            " · Sample: " + source.sampleNumber.ifBlank { "unknown" } +
+                                            " · Collected: " +
+                                            source.collectionDateTime.ifBlank { source.sentDate }
+                                                .ifBlank { "unknown" } +
+                                            " · Report No: " +
+                                            source.reportNumber.ifBlank { "unknown" },
+                                            fontSize = 10.sp, color = Color(0xFF486581))
+                                    }
+                                    TextButton(onClick = {
+                                        subview = "Report index / PDFs"
+                                        query = entry.title
+                                    }) { Text("Review source-index records (no automatic linking)") }
+                                }
                                 HorizontalDivider()
                                 // Preserve even unclassified source values. Codes are
                                 // labelled, never falsely interpreted or discarded.
@@ -2846,6 +2890,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 ?.takeIf { it.crNo == current.patient.crNo }
                             val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
                             val collected = header?.collectionDate.orEmpty()
+                                .ifBlank { report.collectionDateTime }
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
@@ -2853,10 +2898,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (parts.isNotEmpty()) "Multiple studies / see sections"
                                 else "Not yet extracted"
                             }, fontSize = 11.sp)
-                            Text("Sample collection/sent: " +
-                                collected.ifBlank { "Not yet available" }, fontSize = 11.sp)
-                            Text("Reported: " +
-                                reported.ifBlank { "Not yet available" }, fontSize = 11.sp)
+                            if (report.sampleNumber.isNotBlank()) Text(
+                                "Sample No.: " + report.sampleNumber, fontSize = 11.sp)
+                            if (report.sourceSampleLabText.isNotBlank()) Text(
+                                "Original Sample No/Lab No: " + report.sourceSampleLabText,
+                                fontSize = 11.sp)
+                            if (report.department.isNotBlank()) Text(
+                                "Source laboratory: " + report.department, fontSize = 11.sp)
+                            if (report.reportNumber.isNotBlank()) Text(
+                                "Report No.: " + report.reportNumber, fontSize = 11.sp)
+                            if (report.reportStage.isNotBlank()) Text(
+                                "Report stage: " + report.reportStage, fontSize = 11.sp)
+                            Text("Collection date (report index / verified PDF): " +
+                                collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
+                            Text("Reporting date/time (verified PDF only): " +
+                                reported.ifBlank { "Not in this report-index row" }, fontSize = 11.sp)
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
@@ -2927,8 +2983,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            TextButton(onClick = { openReport(report.url) }) {
-                                Text("Open complete original PDF")
+                            if (report.url.isNotBlank()) {
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text("Open complete original PDF")
+                                }
+                            } else Text("Metadata-only NIMS report row: no usable PDF URL provided.",
+                                fontSize = 11.sp, color = Color(0xFF875B22))
+                            if (expanded && report.sourceRow.isNotBlank()) {
+                                TextButton(onClick = { showEntireSource = !showEntireSource }) {
+                                    Text(if (showEntireSource) "Hide original index row"
+                                        else "Show complete source index row")
+                                }
+                                if (showEntireSource) Text(report.sourceRow,
+                                    fontSize = 10.sp, color = Color(0xFF486581))
                             }
                         }
                     }

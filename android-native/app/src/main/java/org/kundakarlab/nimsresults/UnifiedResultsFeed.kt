@@ -47,13 +47,18 @@ object UnifiedResultsFeed {
         // Documents remain an independent source list: no eager identity
         // matching, hashing, PDF loading or interpretation during lab viewing.
         val documents = bundle.reports
-            .filter { it.url.isNotBlank() }
+            // Retain metadata-only source records with unavailable PDF links.
             .distinctBy { report ->
-                val digest = ReportTitleCache.digest(report.url)
+                val digest = if (report.url.isNotBlank())
+                    ReportTitleCache.digest(report.url) else ""
                 if (digest.isNotBlank()) listOf("content", digest,
                     report.reportNumber, report.reportStage).joinToString("|")
-                else listOf("source", report.url, report.reportNumber,
-                    report.reportStage, report.labNumber, report.sampleNumber).joinToString("|")
+                else if (report.url.isNotBlank()) listOf("url",
+                    report.url, report.reportNumber, report.reportStage,
+                    report.labNumber, report.sampleNumber).joinToString("|")
+                else listOf("meta", report.id, report.reportNumber,
+                    report.reportStage, report.labNumber, report.sampleNumber,
+                    report.title, report.date, report.sourceRow.hashCode()).joinToString("|")
             }
             .mapIndexed { index, report ->
                 UnifiedResultEntry(
@@ -83,7 +88,10 @@ object UnifiedResultsFeed {
             val name = if (source != null) {
                 listOf(entry.title, source.title, source.department,
                     source.date, source.sentDate, source.reportedDate,
-                    source.labNumber, ReportTitleCache.accessions(source.url).joinToString(" "))
+                    source.labNumber, source.sampleNumber, source.reportNumber,
+                    source.reportStage, source.collectionDateTime, source.sourceSampleLabText,
+                    if (source.url.isNotBlank()) ReportTitleCache.accessions(source.url).joinToString(" ")
+                    else "")
                     .joinToString(" ")
             } else {
                 listOf(entry.title, rows.joinToString(" ") {
