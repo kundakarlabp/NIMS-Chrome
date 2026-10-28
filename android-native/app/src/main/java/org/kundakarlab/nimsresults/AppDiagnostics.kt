@@ -24,6 +24,7 @@ object AppDiagnostics {
         if (bundle == null) return "audit.no_patient_bundle=true\n"
         val rows = bundle.results
         val reports = bundle.reports
+        val enquiry = EnquirySourceBridge.coverage(bundle)
         val groups = rows.groupBy {
             listOf(it.test, it.date, it.labNumber, it.sampleNumber,
                 it.reportStage, it.sourceOrderId)
@@ -76,6 +77,21 @@ object AppDiagnostics {
             appendLine("audit.scope=all_fetched_investigations")
             appendLine("audit.result_fields=" + rows.size)
             appendLine("audit.investigation_groups=" + groups.size)
+            appendLine("audit.enquiry_rows=" + enquiry.total)
+            appendLine("audit.enquiry_origin=" + if (bundle.enquiryCapturedAt > 0L)
+                "manual_verified_ui" else "not_captured")
+            appendLine("audit.enquiry_with_sample_id=" +
+                bundle.enquiryOrders.count { it.sampleNumber.isNotBlank() })
+            appendLine("audit.enquiry_with_lab_id=" +
+                bundle.enquiryOrders.count { it.labNumber.isNotBlank() })
+            appendLine("audit.enquiry_with_packing_list=" +
+                bundle.enquiryOrders.count { it.packingListNumber.isNotBlank() })
+            appendLine("audit.enquiry_pending_statuses=" + enquiry.pending)
+            appendLine("audit.enquiry_reported_statuses=" + enquiry.reported)
+            appendLine("audit.enquiry_report_index_exact_matches=" + enquiry.linked)
+            appendLine("audit.enquiry_report_index_unmatched=" + enquiry.unmatched)
+            appendLine("audit.enquiry_report_index_ambiguous=" + enquiry.ambiguous)
+            appendLine("audit.enquiry_report_index_missing_ids=" + enquiry.missingIds)
             appendLine("audit.source_index_entries=" + reports.size)
             appendLine("audit.unique_source_documents=" + sourceIds.size)
             appendLine("audit.source_PDF_links=" + reports.count { it.url.isNotBlank() })
