@@ -17,6 +17,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -30,6 +32,11 @@ class LoginActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
     private lateinit var continueButton: Button
+    private lateinit var networkNotice: TextView
+    private var alternateAttempted = false
+    private var portalUnavailable = false
+    private var networkErrorCode = 0
+    private var failedHostname = ""
     private lateinit var signOutButton: Button
     private var manageSession = false
     private var signOutPending = false
@@ -96,6 +103,11 @@ class LoginActivity : Activity() {
             text = "Open login"
             setOnClickListener {
                 injected = false
+                alternateAttempted = false
+                portalUnavailable = false
+                networkNotice.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                status.text = "Retrying the NIMS hospital login…"
                 webView.loadUrl(NimsUrls.LOGIN)
             }
         }
@@ -135,6 +147,13 @@ class LoginActivity : Activity() {
         top.addView(diagnosticActions)
         root.addView(top)
 
+        networkNotice = TextView(this).apply {
+            visibility = View.GONE
+            textSize = 14f
+            setTextColor(Color.rgb(110, 38, 27))
+            setPadding(dp(18), dp(20), dp(18), dp(18))
+        }
+        root.addView(networkNotice)
         webView = WebView(this)
         configureWebView()
         root.addView(
@@ -178,13 +197,53 @@ class LoginActivity : Activity() {
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (url.startsWith("https://www.nimsts.edu.in/") ||
+                    url.startsWith("https://nimsts.edu.in/")) {
+                    portalUnavailable = false
+                    networkNotice.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                }
                 injected = false
                 continueButton.isEnabled = false
                 authCompletionScheduled = false
                 status.text = "NIMS page is loading. Your session and page are kept inside this app."
             }
 
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                if (!request.isForMainFrame) return
+                val host = request.url.host.orEmpty().lowercase()
+                if (host !in NimsUrls.HOSTS) return
+                val code = error.errorCode
+                val alternate = NimsLoginRecovery.alternateLoginUrl(
+                    request.url.toString(), code, alternateAttempted
+                )
+                if (alternate != null) {
+                    alternateAttempted = true
+                    injected = false
+                    status.text = "NIMS $host cannot be resolved. Trying the hospital alternate host…"
+                    view.post { if (!isFinishing) view.loadUrl(alternate) }
+                    return
+                }
+                portalUnavailable = true
+                networkErrorCode = code
+                failedHostname = host
+                injected = false
+                continueButton.isEnabled = false
+                signOutButton.isEnabled = false
+                status.text = "NIMS hospital portal is unreachable. Login was not attempted."
+                networkNotice.text = NimsLoginRecovery.errorDescription(code) +
+                    "\n\nHospital host: $host" +
+                    "\n\nThis is a network/server availability problem, not a password or CAPTCHA error." +
+                    "\nUse Retry connection when NIMS works in your phone's Chrome browser." +
+                    "\nThe app will retain existing saved session cookies and will not clear patient data."
+                networkNotice.visibility = View.VISIBLE
+                webView.visibility = View.INVISIBLE
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
+                if (portalUnavailable || url.startsWith("chrome-error://")) return
                 CookieManager.getInstance().flush()
                 injectAndProbe()
             }
@@ -192,6 +251,7 @@ class LoginActivity : Activity() {
     }
 
     private fun injectAndProbe() {
+        if (portalUnavailable) return
         if (!injected) {
             webView.evaluateJavascript(engineScript) {
                 injected = true
@@ -342,6 +402,10 @@ class LoginActivity : Activity() {
         }
         return listOf(
             "screen=login",
+            "network.portalUnavailable=$portalUnavailable",
+            "network.lastErrorCode=$networkErrorCode",
+            "network.failedHost=$failedHostname",
+            "network.alternateAttempted=$alternateAttempted",
             "url=$safePath",
             "authenticated=${obj.optBoolean("authenticated", false)}",
             "loginRoute=${obj.optBoolean("loginRoute", false)}",
