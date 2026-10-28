@@ -48,8 +48,13 @@ object UnifiedResultsFeed {
         // matching, hashing, PDF loading or interpretation during lab viewing.
         val documents = bundle.reports
             .filter { it.url.isNotBlank() }
-            .distinctBy { listOf(it.url,it.reportNumber,it.reportStage,
-                it.labNumber,it.sampleNumber).joinToString("|") }
+            .distinctBy { report ->
+                val digest = ReportTitleCache.digest(report.url)
+                if (digest.isNotBlank()) listOf("content", digest,
+                    report.reportNumber, report.reportStage).joinToString("|")
+                else listOf("source", report.url, report.reportNumber,
+                    report.reportStage, report.labNumber, report.sampleNumber).joinToString("|")
+            }
             .mapIndexed { index, report ->
                 UnifiedResultEntry(
                     key = "pdf|" + index + "|" + report.id + "|" + report.reportNumber,
