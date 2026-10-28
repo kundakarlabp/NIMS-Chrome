@@ -108,8 +108,7 @@ object RestReportDiagnostics {
             k.any { it in setOf("parametername","resultvalue","valuesbydate",
                 "reportcontent","reporttext","observations","findings") }
         }
-        @Synchronized
-        fun assign(key: String, value: Any) { metrics[key]=value.toString() }
+        fun assign(key: String, value: Any) { synchronized(this) { metrics[key]=value.toString() } }
         assign("rest.rootType", if(payload is JSONArray) "array" else "object")
         assign("rest.rootKeys",rootKeys.joinToString(","))
         assign("rest.arrayCount",arrays.size)
