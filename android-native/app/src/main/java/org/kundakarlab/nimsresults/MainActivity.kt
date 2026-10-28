@@ -685,6 +685,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (requestId != activeRequestId || bundle?.patient?.crNo != cr)
                     return@runOnUiThread
                 val sources = inventory?.reports ?: seed
+                apiAttemptMs = RestReportDiagnostics.elapsedMs()
                 val current = bundle ?: return@runOnUiThread
                 val withInventory = current.copy(reports = sources)
                 bundle = withInventory
