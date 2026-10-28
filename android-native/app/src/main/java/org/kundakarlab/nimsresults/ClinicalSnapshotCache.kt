@@ -95,9 +95,10 @@ class ClinicalSnapshotCache(context: Context) {
         val raw = GZIPInputStream(ByteArrayInputStream(zipped)).use { stream ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(8192)
-            var length: Int
             var total = 0
-            while (stream.read(buffer).also { length = it } != -1) {
+            while (true) {
+                val length = stream.read(buffer)
+                if (length < 0) break
                 total += length
                 require(total <= 30_000_000) { "Inflated cache size limit exceeded" }
                 output.write(buffer, 0, length)
