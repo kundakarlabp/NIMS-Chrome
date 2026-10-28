@@ -11,6 +11,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceError
 import android.webkit.RenderProcessGoneDetail
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -36,6 +37,10 @@ class NimsEngine(
     val webView: WebView = WebView(context)
     private val engineScript = context.assets.open("nims_engine.js").bufferedReader().use { it.readText() }
     private var pageReady = false
+    private var alternateLoginAttempted = false
+    private var portalNetworkError = false
+    private var lastNetworkErrorCode = 0
+    private var lastFailedHost = ""
     private var rendererDead = false
     private var pendingProbe: ((SessionState) -> Unit)? = null
     private var pendingRun: Pair<String, String>? = null
@@ -103,6 +108,36 @@ class NimsEngine(
                 return true
             }
 
+            override fun onReceivedError(
+                view: WebView, request: WebResourceRequest, error: WebResourceError
+            ) {
+                if (!request.isForMainFrame) return
+                val host = request.url.host.orEmpty().lowercase()
+                if (host !in NimsUrls.HOSTS) return
+                val code = error.errorCode
+                val alternate = NimsLoginRecovery.alternateLoginUrl(
+                    request.url.toString(), code, alternateLoginAttempted
+                )
+                if (alternate != null) {
+                    alternateLoginAttempted = true
+                    portalNetworkError = false
+                    view.post { if (!rendererDead) view.loadUrl(alternate) }
+                    return
+                }
+                portalNetworkError = true
+                pageReady = false
+                lastNetworkErrorCode = code
+                lastFailedHost = host
+                sessionState = SessionState.ERROR
+                listener.onSession(SessionState.ERROR)
+                pendingProbe?.invoke(SessionState.ERROR)
+                pendingProbe = null
+                pendingRun?.let { pending ->
+                    listener.onError(pending.second, NimsLoginRecovery.errorDescription(code))
+                }
+                pendingRun = null
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
                 val host = uri.host?.lowercase().orEmpty()
@@ -110,11 +145,14 @@ class NimsEngine(
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (url.startsWith("https://www.nimsts.edu.in/") ||
+                    url.startsWith("https://nimsts.edu.in/")) portalNetworkError = false
                 pageReady = false
                 ambiguousProbeCount = 0
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                if (portalNetworkError || url.startsWith("chrome-error://")) return
                 CookieManager.getInstance().flush()
                 inject {
                     pageReady = true
@@ -125,6 +163,10 @@ class NimsEngine(
     }
 
     fun checkSession(callback: ((SessionState) -> Unit)? = null) {
+        if (portalNetworkError) {
+            callback?.invoke(SessionState.ERROR)
+            return
+        }
         pendingProbe = callback
         if (!pageReady) {
             if (webView.url.isNullOrBlank()) webView.loadUrl(NimsUrls.LOGIN)
@@ -135,6 +177,8 @@ class NimsEngine(
 
     fun reloadSession() {
         pageReady = false
+        portalNetworkError = false
+        alternateLoginAttempted = false
         webView.loadUrl(NimsUrls.LOGIN)
     }
 
@@ -237,6 +281,10 @@ class NimsEngine(
 
         return listOf(
             "engine.sessionState=$sessionState",
+            "engine.networkUnavailable=$portalNetworkError",
+            "engine.networkErrorCode=$lastNetworkErrorCode",
+            "engine.networkFailedHost=$lastFailedHost",
+            "engine.alternateLoginAttempted=$alternateLoginAttempted",
             "engine.pageReady=$pageReady",
             "engine.currentPath=$path",
             "engine.cookiePresent=$cookiePresent",
@@ -268,6 +316,7 @@ class NimsEngine(
     }
 
     private fun probeInternal() {
+        if (portalNetworkError) return
         val js = "JSON.stringify(window.NativeNimsEngine ? window.NativeNimsEngine.probe() : {})"
         webView.evaluateJavascript(js) { raw ->
             val json = decodeJsString(raw)

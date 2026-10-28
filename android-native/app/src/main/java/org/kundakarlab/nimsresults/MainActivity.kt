@@ -392,7 +392,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             runOnUiThread {
                 if (requestId != activeRequestId) return@runOnUiThread
                 if (state == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
-                else {
+                else if (state == SessionState.ERROR) {
+                    loadStage = if (bundle?.results?.isNotEmpty() == true)
+                        LoadStage.READY else LoadStage.ERROR
+                    statusText = "Cannot contact the NIMS hospital website. " +
+                        "Check Wi-Fi/mobile data or NIMS server DNS. Saved results stay available."
+                } else {
                     loadStage = LoadStage.IDLE
                     pendingCrAfterLogin = cr
                     statusText = "NIMS login required for structured results."
@@ -486,7 +491,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     SessionState.LOGIN_REQUIRED -> "NIMS login required."
                     SessionState.EXPIRED -> "NIMS session expired. Log in again."
                     SessionState.CHECKING -> "Checking NIMS session…"
-                    SessionState.ERROR -> "NIMS session check failed."
+                    SessionState.ERROR -> "NIMS portal unreachable or session check failed. Use NIMS login to retry."
                     SessionState.UNKNOWN -> "NIMS session not checked yet."
                 }
                 if (loadStage == LoadStage.CHECKING_SESSION && state != SessionState.CHECKING) loadStage = LoadStage.IDLE
