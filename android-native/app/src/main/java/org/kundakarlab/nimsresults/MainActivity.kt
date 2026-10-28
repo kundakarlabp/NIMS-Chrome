@@ -580,7 +580,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     if (requestId != activeRequestId) return@runOnUiThread
                     cancelTimeout()
                     bundle = parsed
-                    worker.execute { snapshotCache.save(parsed) }
+                    worker.execute { if (requestId == activeRequestId) snapshotCache.save(parsed) }
                     bulkBatchCount = 1
                     accumulatedBulk = null
                     crInput = cr
