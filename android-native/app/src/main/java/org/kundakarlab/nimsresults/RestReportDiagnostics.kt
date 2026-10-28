@@ -18,7 +18,12 @@ object RestReportDiagnostics {
         metrics["rest.httpStatus"] = http.toString()
         metrics["rest.responseBytes"] = bytes.toString()
         metrics["rest.elapsedMs"] = elapsedMs.toString()
-        metrics["rest.responseType"] = kind
+        metrics["rest.responseType"] = when {
+            kind.contains("json",true) -> "json"
+            kind.contains("html",true) -> "html"
+            kind.contains("text",true) -> "text"
+            else -> "other"
+        }
     }
     @Synchronized fun stage(value: String) {
         metrics["rest.stage"] = value.take(50)
@@ -91,12 +96,18 @@ object RestReportDiagnostics {
         }.orEmpty()
         val keys=objects.flatMap { obj -> obj.keys().asSequence().toList() }
         val names=keys.map(::canonical).toSet()
-        val fields=keys.map { it.lowercase(Locale.US) }
-            .filter { it.matches(Regex("[a-z][a-z0-9_]{1,39}")) &&
-                it.none { char -> char.isDigit() && it.length > 24 } }
-            .distinct().sorted().take(75)
+        // Server-controlled property names may themselves encode patient data.
+        // Only known schema labels may leave the app in copied diagnostics.
+        val allowed = reportKeys + detailKeys + patientKeys +
+            setOf("data","reports","patient","patientdetails","status",
+                "success","message","items","list","results","result",
+                "reportlist","observation","measurement","measurements",
+                "labname","department","lab","reportstatus","testcode",
+                "referenceinterval","referencevalue","collectiondatetime",
+                "reportingdatetime","reportdetails","reportdata")
+        val fields=names.filter { it in allowed }.sorted().take(75)
         val rootKeys=(payload as? JSONObject)?.keys()?.asSequence()?.toList()
-            ?.map(::canonical)?.filter { it.matches(Regex("[a-z]{2,30}")) }
+            ?.map(::canonical)?.filter { it in allowed }
             ?.sorted()?.take(35).orEmpty()
         val present = listOf("labno","labnumber","labstudyno","sampleno",
             "samplenumber","requisitionno","reportnumber","reportno",
@@ -120,6 +131,7 @@ object RestReportDiagnostics {
         assign("rest.candidateRows",selected?.rows?.length() ?: 0)
         assign("rest.candidateObjects",objects.size)
         assign("rest.fieldNames",fields.joinToString(","))
+        assign("rest.unrecognizedFieldCount",names.count { it !in allowed })
         assign("rest.identifierFieldsPresent",present.joinToString(","))
         assign("rest.rowsWithLabNo",objects.count { value(obj=it,"labNo","labNumber","labStudyNo","accessionNo") })
         assign("rest.rowsWithSampleNo",objects.count { value(obj=it,"sampleNo","sampleNumber","specimenNo") })
