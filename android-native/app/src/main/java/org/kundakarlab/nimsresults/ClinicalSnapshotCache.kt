@@ -79,6 +79,8 @@ class ClinicalSnapshotCache(context: Context) {
                         put("documentReference", report.documentReference)
                         put("packingListNumber", report.packingListNumber)
                         put("sourceRow", report.sourceRow)
+                        put("collectionDateTime", report.collectionDateTime)
+                        put("sourceSampleLabText", report.sourceSampleLabText)
                     })
                 }
             })
@@ -173,7 +175,9 @@ class ClinicalSnapshotCache(context: Context) {
                 sampleNumber=field("sampleNumber"), reportNumber=field("reportNumber"),
                 reportStage=field("reportStage"), sourceOrderId=field("sourceOrderId"),
                 documentReference=field("documentReference"),
-                packingListNumber=field("packingListNumber"), sourceRow=field("sourceRow")
+                packingListNumber=field("packingListNumber"), sourceRow=field("sourceRow"),
+                collectionDateTime=field("collectionDateTime"),
+                sourceSampleLabText=field("sourceSampleLabText")
             )
         }
         ClinicalBundle(
