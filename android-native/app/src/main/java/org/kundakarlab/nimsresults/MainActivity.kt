@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var engine: NimsEngine
     private lateinit var vault: SessionVault
     private lateinit var patientShelf: PatientShelf
+    private val snapshotCache by lazy { ClinicalSnapshotCache(this) }
     private var shelfEntries by mutableStateOf<List<PatientBookmark>>(emptyList())
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
@@ -214,6 +215,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        // Restore encrypted results without network access; visibly mark as cached.
+        worker.execute {
+            val previous = snapshotCache.load()
+            if (previous != null) runOnUiThread {
+                if (bundle == null && activeRequestId.isBlank()) {
+                    bundle = previous
+                    crInput = previous.patient.crNo
+                    selectedTab = ResultsTab.OVERVIEW
+                    loadStage = LoadStage.READY
+                    statusText = "Encrypted local snapshot · refresh before clinical use."
+                }
+            }
+        }
         if (appLockEnabled) handler.post { requestDeviceUnlock() }
     }
 
@@ -421,6 +435,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun logout() {
         cancelTimeout()
         vault.clear()
+        snapshotCache.clear()
         pdfIndexSelection = ""
         cacheDir.listFiles { file ->
             file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
@@ -565,6 +580,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     if (requestId != activeRequestId) return@runOnUiThread
                     cancelTimeout()
                     bundle = parsed
+                    worker.execute { snapshotCache.save(parsed) }
                     bulkBatchCount = 1
                     accumulatedBulk = null
                     crInput = cr
