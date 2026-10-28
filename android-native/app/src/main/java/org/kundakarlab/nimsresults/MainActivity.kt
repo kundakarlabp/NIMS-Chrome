@@ -2715,7 +2715,57 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     "Specimen identifiers from the report index are kept separate until verified.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            if (visibleFeed.isEmpty()) item {
+            if (subview == "Enquiry orders") {
+                item {
+                    Text("NIMS CR-wise Enquiry is the source of orders and statuses, " +
+                        "not a second result-value feed.",
+                        fontSize = 11.sp, color = Color(0xFF486581))
+                    Text(current.enquiryOrders.size.toString() +
+                        " order rows · " +
+                        (if (current.enquiryCapturedAt > 0L) "Imported and locally cached"
+                         else "Not yet captured"),
+                        fontSize = 11.sp)
+                    Button(onClick = { openEnquiryReview() }) {
+                        Text("Open NIMS Enquiry / Import", fontSize = 12.sp)
+                    }
+                    if (current.enquiryOrders.isEmpty())
+                        Text("Use the normal NIMS CR-wise Enquiry form and import its visible " +
+                            "result table. No unverified Enquiry API requests are made.",
+                            fontSize = 11.sp)
+                }
+                items(current.enquiryOrders.mapIndexed { index, order -> index to order },
+                    key = { (index, _) -> "enquiry|$index" }) { (_, order) ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(order.testName, fontWeight = FontWeight.SemiBold)
+                            Text("NIMS status: " + order.status, fontSize = 11.sp)
+                            if (order.sampleNumber.isNotBlank())
+                                Text("Sample No.: " + order.sampleNumber, fontSize = 11.sp)
+                            if (order.labNumber.isNotBlank())
+                                Text("Lab/Study No.: " + order.labNumber, fontSize = 11.sp)
+                            if (order.requestDateTime.isNotBlank())
+                                Text("Requested: " + order.requestDateTime, fontSize = 11.sp)
+                            if (order.collectionDateTime.isNotBlank())
+                                Text("Collected: " + order.collectionDateTime, fontSize = 11.sp)
+                            if (order.requisitionNumber.isNotBlank())
+                                Text("Requisition: " + order.requisitionNumber, fontSize = 11.sp)
+                            if (order.packingListNumber.isNotBlank())
+                                Text("Packing list: " + order.packingListNumber, fontSize = 11.sp)
+                            if (order.packingListDate.isNotBlank())
+                                Text("Packing-list date: " + order.packingListDate, fontSize = 11.sp)
+                            if (order.billNumber.isNotBlank())
+                                Text("Bill number: " + order.billNumber, fontSize = 11.sp)
+                            if (order.department.isNotBlank())
+                                Text("Department: " + order.department, fontSize = 11.sp)
+                            Text("Enquiry order only: not automatically assigned " +
+                                "to a Custom Sheet result or PDF.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                        }
+                    }
+                }
+            }
+            if (subview != "Enquiry orders" && visibleFeed.isEmpty()) item {
                 Text("No investigations or source-index entries match these filters.",
                     color = Color(0xFF66788A))
             }
