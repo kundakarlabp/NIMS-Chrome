@@ -24,6 +24,7 @@ import javax.crypto.spec.GCMParameterSpec
 class ClinicalSnapshotCache(context: Context) {
     private val prefs = context.getSharedPreferences("nims_clinical_cache_v1", Context.MODE_PRIVATE)
 
+    @Synchronized
     fun save(data: ClinicalBundle): Boolean = runCatching {
         require(Regex("""\d{15}""").matches(data.patient.crNo))
         require(data.results.isNotEmpty())
@@ -150,6 +151,7 @@ class ClinicalSnapshotCache(context: Context) {
         )
     }.getOrNull()
 
+    @Synchronized
     fun clear() { prefs.edit().clear().commit() }
 
     private fun key(): SecretKey {
