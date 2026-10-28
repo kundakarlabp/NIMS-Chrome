@@ -222,6 +222,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (bundle == null && activeRequestId.isBlank()) {
                     bundle = previous
                     crInput = previous.patient.crNo
+                    apiStage = "encrypted_cache_not_live_verified"
+                    apiReportCount = previous.reports.size
+                    pdfTotalCount = previous.reports.map { it.url }
+                        .filter(String::isNotBlank).distinct().size
+                    historyStatus = "Cached " + previous.results.size + " result fields · " +
+                        previous.reports.size + " source-index rows · refresh for live data"
                     selectedTab = ResultsTab.OVERVIEW
                     loadStage = LoadStage.READY
                     statusText = "Encrypted local snapshot · refresh before clinical use."
