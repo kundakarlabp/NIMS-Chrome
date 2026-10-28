@@ -1302,21 +1302,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun RecentScreen(current: ClinicalBundle, scroll: LazyListState) {
-        // Clock is device-local. Do not use fetch date in place of laboratory date.
+        // No PDF-to-result matching. Device-local seven-day selection.
         val today = LocalDate.now()
         var filter by remember(current.patient.crNo) { mutableStateOf("All") }
         var expandedKey by remember(current.patient.crNo) { mutableStateOf("") }
         val recent = remember(current.results, current.reports, today, reportTitleEpoch) {
             val group = current.results.groupBy {
-                Triple(it.test, it.date, it.labNumber)
+                Triple(it.test, it.date, it.labNumber + "|" + it.sampleNumber + "|" + it.reportStage)
             }
             val covered = mutableSetOf<String>()
             val structured = group.mapNotNull { (identity, rows) ->
                 val (date, type) = RecentReportDates.dateFor(rows)
                 if (!RecentReportDates.isLastWeek(date, today)) null
                 else {
-                    val exact = ReportLinkResolver.candidates(rows,
-                        current.reports, current.patient.crNo).verified
+                    val exact: ReportRef? = null // no automatic result-to-PDF linking
                     if (exact != null) covered.add(exact.url)
                     RecentEntry(
                         key = "structured|" + identity.toString(),
@@ -1682,7 +1681,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     var showSources by remember(patientCr, test, date) {
                         mutableStateOf(false)
                     }
-                    val sourceLinks = ReportLinkResolver.candidates(dateRows, inventory, patientCr)
+                    val sourceLinks = ReportCandidates(null, emptyList())
                     HorizontalDivider()
                     Text("Result date: " + date, fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold, color = Color(0xFF486581))
@@ -2223,8 +2222,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
-                val mapping = ReportLinkResolver.candidates(
-                    rows, current.reports, current.patient.crNo)
+                val mapping = ReportCandidates(null, emptyList())
                 val exact = mapping.verified
                 var chooseSource by remember(current.patient.crNo, key) {
                     mutableStateOf(false)
