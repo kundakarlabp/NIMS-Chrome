@@ -29,7 +29,7 @@ class ClinicalSnapshotCache(context: Context) {
         require(Regex("""\d{15}""").matches(data.patient.crNo))
         require(data.results.isNotEmpty())
         val root = JSONObject().apply {
-            put("version", 1)
+            put("version", 2)
             put("storedAt", System.currentTimeMillis())
             put("retrievedAt", data.retrievedAt)
             put("patient", JSONObject().apply {
@@ -61,6 +61,24 @@ class ClinicalSnapshotCache(context: Context) {
                         put("accessionNumber", row.accessionNumber)
                         put("requisitionDateTime", row.requisitionDateTime)
                         put("laboratory", row.laboratory)
+                    })
+                }
+            })
+            // Save source-index identifiers separately; never relabel the
+            // Custom Sheet result date as a collection/reporting timestamp.
+            put("reports", JSONArray().apply {
+                data.reports.forEach { report ->
+                    put(JSONObject().apply {
+                        put("id", report.id); put("title", report.title)
+                        put("date", report.date); put("department", report.department)
+                        put("url", report.url); put("sentDate", report.sentDate)
+                        put("reportedDate", report.reportedDate); put("labNumber", report.labNumber)
+                        put("orderDate", report.orderDate); put("sampleNumber", report.sampleNumber)
+                        put("reportNumber", report.reportNumber); put("reportStage", report.reportStage)
+                        put("sourceOrderId", report.sourceOrderId)
+                        put("documentReference", report.documentReference)
+                        put("packingListNumber", report.packingListNumber)
+                        put("sourceRow", report.sourceRow)
                     })
                 }
             })
@@ -107,7 +125,7 @@ class ClinicalSnapshotCache(context: Context) {
             output.toString("UTF-8")
         }
         val root = JSONObject(raw)
-        require(root.optInt("version") == 1)
+        require(root.optInt("version") in 1..2)
         val storedAt = root.getLong("storedAt")
         require(System.currentTimeMillis() - storedAt in 0..MAX_AGE_MS)
         val p = root.getJSONObject("patient")
@@ -143,9 +161,24 @@ class ClinicalSnapshotCache(context: Context) {
             RawInvestigationRow(item.optInt("groupIndex"), item.optInt("rowIndex"),
                 item.optString("investigation"), item.optString("sourceJson"))
         }
+        val inventory = root.optJSONArray("reports") ?: JSONArray()
+        val reports = (0 until inventory.length()).map { i ->
+            val item = inventory.getJSONObject(i)
+            fun field(key: String) = item.optString(key, "")
+            ReportRef(
+                id=field("id"), title=field("title"), date=field("date"),
+                department=field("department"), url=field("url"),
+                sentDate=field("sentDate"), reportedDate=field("reportedDate"),
+                labNumber=field("labNumber"), orderDate=field("orderDate"),
+                sampleNumber=field("sampleNumber"), reportNumber=field("reportNumber"),
+                reportStage=field("reportStage"), sourceOrderId=field("sourceOrderId"),
+                documentReference=field("documentReference"),
+                packingListNumber=field("packingListNumber"), sourceRow=field("sourceRow")
+            )
+        }
         ClinicalBundle(
             patient=PatientInfo(p.optString("name"), cr, p.optString("age"), p.optString("sex")),
-            results=rows, reports=emptyList(),
+            results=rows, reports=reports,
             source="nims_encrypted_offline_cache", retrievedAt=root.optLong("retrievedAt"),
             rawRows=rawRows
         )
