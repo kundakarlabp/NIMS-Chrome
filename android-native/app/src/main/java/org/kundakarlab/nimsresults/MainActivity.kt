@@ -2770,6 +2770,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             if (ordered.isNotBlank()) Text("Ordered: $ordered", fontSize = 10.sp)
                             if (expanded) {
+                                val unlinkedSources = remember(rows, current.reports) {
+                                    SourceMetadataReview.candidates(rows, current.reports)
+                                }
+                                if (unlinkedSources.isNotEmpty()) {
+                                    HorizontalDivider()
+                                    Text("Possible source-index records (" +
+                                        unlinkedSources.size + ") · NOT specimen-verified",
+                                        fontSize = 11.sp, color = Color(0xFF875B22),
+                                        fontWeight = FontWeight.SemiBold)
+                                    unlinkedSources.take(4).forEach { source ->
+                                        Text("Lab: " + source.labNumber.ifBlank { "unknown" } +
+                                            " · Sample: " + source.sampleNumber.ifBlank { "unknown" } +
+                                            " · Collected: " +
+                                            source.collectionDateTime.ifBlank { source.sentDate }
+                                                .ifBlank { "unknown" } +
+                                            " · Report No: " +
+                                            source.reportNumber.ifBlank { "unknown" },
+                                            fontSize = 10.sp, color = Color(0xFF486581))
+                                    }
+                                    TextButton(onClick = {
+                                        subview = "Report index / PDFs"
+                                        query = entry.title
+                                    }) { Text("Review source-index records (no automatic linking)") }
+                                }
                                 HorizontalDivider()
                                 // Preserve even unclassified source values. Codes are
                                 // labelled, never falsely interpreted or discarded.
