@@ -2636,6 +2636,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var subview by remember(current.patient.crNo) { mutableStateOf("Investigations") }
+        var expandedEnquiryRows by remember(current.patient.crNo) {
+            mutableStateOf(setOf<Int>())
+        }
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2734,7 +2737,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             fontSize = 11.sp)
                 }
                 items(current.enquiryOrders.mapIndexed { index, order -> index to order },
-                    key = { (index, _) -> "enquiry|$index" }) { (_, order) ->
+                    key = { (index, _) -> "enquiry|$index" }) { (index, order) ->
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -2758,9 +2761,37 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Bill number: " + order.billNumber, fontSize = 11.sp)
                             if (order.department.isNotBlank())
                                 Text("Department: " + order.department, fontSize = 11.sp)
+                            val decision = remember(order, current.reports) {
+                                EnquirySourceBridge.assess(order, current.reports)
+                            }
+                            if (decision.state == EnquirySourceBridge.State.VERIFIED_INDEX &&
+                                decision.source != null) {
+                                Text("Exact Sample/Lab identifier verified in report index",
+                                    fontSize = 10.sp, color = Color(0xFF276749))
+                                val source=decision.source
+                                if (source?.labNumber?.isNotBlank() == true)
+                                    Text("Report-index lab no.: " + source.labNumber,
+                                        fontSize = 11.sp)
+                                if (source?.collectionDateTime?.isNotBlank() == true)
+                                    Text("Report-index collection: " + source.collectionDateTime,
+                                        fontSize = 11.sp)
+                            } else {
+                                Text("Report-index relationship: " + decision.state.name,
+                                    fontSize = 10.sp, color = Color(0xFF875B22))
+                            }
                             Text("Enquiry order only: not automatically assigned " +
                                 "to a Custom Sheet result or PDF.",
                                 fontSize = 10.sp, color = Color(0xFF875B22))
+                            TextButton(onClick = {
+                                expandedEnquiryRows = if (index in expandedEnquiryRows)
+                                    expandedEnquiryRows - index else expandedEnquiryRows + index
+                            }) {
+                                Text(if (index in expandedEnquiryRows) "Hide original Enquiry fields"
+                                    else "Show original Enquiry fields")
+                            }
+                            if (index in expandedEnquiryRows)
+                                Text(order.sourceFieldsJson, fontSize = 10.sp,
+                                    color = Color(0xFF486581))
                         }
                     }
                 }
