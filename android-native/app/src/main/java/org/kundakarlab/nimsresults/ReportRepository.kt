@@ -369,7 +369,7 @@ object ReportPayloadParser {
             // column, but do not fabricate sample and lab identifiers.
             val sample = if (components.size == 2) components.first() else ""
             val lab = if (components.size == 2) components.last()
-                else if (knownLayout && OpaqueReportTitles.isCode(pair)) pair else ""
+                else if (knownLayout && !pair.contains('/') && OpaqueReportTitles.isCode(pair)) pair else ""
             val collected = if (knownLayout)
                 dateRegex.find(cells[3])?.value.orEmpty() else ""
             val date = collected.ifBlank {
