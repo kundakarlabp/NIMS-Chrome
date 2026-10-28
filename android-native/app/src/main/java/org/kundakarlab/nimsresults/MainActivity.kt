@@ -638,7 +638,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     return@runOnUiThread
                 val sources = inventory?.reports ?: seed
                 val current = bundle ?: return@runOnUiThread
-                bundle = current.copy(reports = sources)
+                val withInventory = current.copy(reports = sources)
+                bundle = withInventory
+                worker.execute {
+                    if (requestId == activeRequestId) snapshotCache.save(withInventory)
+                }
                 apiReportCount = sources.size
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
@@ -682,7 +686,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             it.sampleNumber).joinToString("|")
                         else "index|" + it.id + "|" + it.title + "|" + it.date
                     }
-                    bundle = prior.copy(reports = reconciled)
+                    val withInventory = prior.copy(reports = reconciled)
+                    bundle = withInventory
+                    worker.execute {
+                        if (requestId == activeRequestId) snapshotCache.save(withInventory)
+                    }
                     apiReportCount = reconciled.size
                     statusText = prior.results.size.toString() +
                         " structured values · " + reconciled.count { it.url.isNotBlank() } +
@@ -1294,7 +1302,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ResultsTab.entries.filter { it != ResultsTab.LABS }.forEach { tab ->
+            ResultsTab.entries.forEach { tab ->
                 FilterChip(
                     selected = selectedTab == tab,
                     onClick = { selectedTab = tab },
@@ -2611,7 +2619,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigation groups · $sourceCount original source reports",
+                Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("Investigations", "Source PDF List").forEach { name ->
@@ -2651,11 +2659,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
                 Text("Full investigations and the independent source PDF list are separate. " +
-                    "No automatic PDF-to-result links are inferred.",
+                    "Specimen identifiers from the report index are kept separate until verified.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
             if (visibleFeed.isEmpty()) item {
-                Text("No investigations or source PDFs match these filters.",
+                Text("No investigations or source-index entries match these filters.",
                     color = Color(0xFF66788A))
             }
             items(visibleFeed, key = { it.key }) { entry ->
@@ -2692,7 +2700,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (report != null) "Original NIMS PDF · " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString())
-                                    else rows.size.toString() + " result fields · " +
+                                    else rows.size.toString() + " result fields · column date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString()),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -2733,7 +2741,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     accession.ifBlank { "Not available in structured feed" },
                                     fontSize = 11.sp)
                                 Text("Collected/studied: " +
-                                    collected.ifBlank { "Not supplied by NIMS" }, fontSize = 11.sp)
+                                    collected.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
                                 if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
                                 rows.firstOrNull()?.let { first ->
                                     if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
@@ -2748,7 +2756,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
                                 }
                                 Text("Reported: " +
-                                    reported.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                                    reported.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
