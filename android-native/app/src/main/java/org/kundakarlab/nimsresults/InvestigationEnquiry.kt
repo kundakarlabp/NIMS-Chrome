@@ -55,7 +55,7 @@ object InvestigationEnquiryParser {
         require(Regex("""\d{15}""").matches(expectedCr))
         require(html.length <= 900_000) { "Enquiry page exceeds local capture limit." }
         val doc = Jsoup.parse(html)
-        doc.select("script,style,template,form,input,select,textarea").remove()
+        doc.select("script,style,template,input,select,textarea").remove()
         val visible = clean(doc.body()?.text().orEmpty())
         val declared = headerCrRegex.findAll(visible).map { it.groupValues[1] }.toSet()
         if (declared.isEmpty() || expectedCr !in declared || declared.any { it != expectedCr })
