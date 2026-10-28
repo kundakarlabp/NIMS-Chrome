@@ -53,7 +53,10 @@ object UnifiedResultsFeed {
                     ReportTitleCache.digest(report.url) else ""
                 if (digest.isNotBlank()) listOf("content", digest,
                     report.reportNumber, report.reportStage).joinToString("|")
-                else listOf("source", report.url, report.id, report.reportNumber,
+                else if (report.url.isNotBlank()) listOf("url",
+                    report.url, report.reportNumber, report.reportStage,
+                    report.labNumber, report.sampleNumber).joinToString("|")
+                else listOf("meta", report.id, report.reportNumber,
                     report.reportStage, report.labNumber, report.sampleNumber,
                     report.title, report.date, report.sourceRow.hashCode()).joinToString("|")
             }
