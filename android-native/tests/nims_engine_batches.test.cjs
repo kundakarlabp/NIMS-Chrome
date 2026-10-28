@@ -1,42 +1,57 @@
-const {test} = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+'use strict';
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/nims_engine.js'),'utf8');
 
-const srcPath = path.join(__dirname,'../app/src/main/assets/nims_engine.js');
-const source = fs.readFileSync(srcPath,'utf8');
-const original = 'window.NativeNimsEngine = { probe, run, continueRun };';
-assert.ok(source.includes(original),'staged JavaScript export missing');
-const instrumented = source.replace(original,
-  'window.NativeNimsEngine = { probe, run, continueRun, __planDateBatches: planDateBatches };');
-const context={window:{},document:{},setTimeout,clearTimeout};
-vm.runInNewContext(instrumented,context);
-const plan=context.window.NativeNimsEngine.__planDateBatches;
-const input = value => ({
-  value,
-  getAttribute: () => null,
-  closest: () => null,
-  parentElement: {textContent:value}
+test('native engine contains no date-window batching or second Apply',()=>{
+  assert.doesNotMatch(source,/planDateBatches|applyNextBatch|fetching_older_results/);
+  assert.match(source,/bulk_selection:/);
+  assert.match(source,/staged\.requestId/);
 });
-const native = result => JSON.parse(JSON.stringify(result));
-
-test('newest 14 days first, older history afterwards without skipped dates',()=>{
-  const dates=[
-    input('05-Sep-2026'),input('26-Oct-2026'),input('24-Oct-2026'),
-    input('04-Sep-2026')
-  ];
-  const batches=native(plan(dates));
-  assert.deepEqual(batches,[[1,2],[0,3]]);
-  assert.deepEqual(batches.flat().sort(),[0,1,2,3]);
-});
-test('unknown NIMS date markup uses single complete fetch rather than discarding history',()=>{
-  assert.deepEqual(native(plan([input('some unknown day'),input('26-Oct-2026')])),[null]);
-  assert.deepEqual(native(plan([])),[null]);
-});
-test('a large 14-day window is split into memory-bounded batches',()=>{
-  const dates=Array.from({length:52},(_,i)=>input(i%2?'25-Oct-2026':'26-Oct-2026'));
-  const batches=native(plan(dates));
-  assert.deepEqual(batches.map(b=>b.length),[24,24,4]);
-  assert.equal(batches.flat().length,52);
+test('native engine: all dates and tests, one request, one accepted response',async()=>{
+  const stub=source
+    .replace(/  async function openTrends\(\) \{[\s\S]*?\n  \}\n\n  function bodyIsBulk/, 
+      "  async function openTrends() {return document.getElementById('mock-frame');}\n\n  function bodyIsBulk")
+    .replace(/  function probe\(\) \{[\s\S]*?\n  \}\n\n  function parsePatient/,
+      "  function probe(){return {authenticated:true};}\n\n  function parsePatient");
+  assert.notEqual(stub,source);
+  let requests=0,applies=0,receipts=0,patient=0,selection='',errors=[];
+  const checkbox=()=>({checked:false,click(){this.checked=true;}});
+  const tests=[checkbox(),checkbox()],dates=[checkbox(),checkbox(),checkbox()];
+  const patientBar={textContent:'Name: Synthetic CR No: 111111111111111'};
+  const win={fetch:async()=>{
+    requests++;
+    return {clone(){return {text:async()=>JSON.stringify({
+      status:1,crNo:'111111111111111',
+      groups:[{testName:'CBC',rows:[{parameterName:'WBC',valuesByDate:{'15-Oct-2026':'8.1'}}]}]
+    })}}};
+  }};
+  const apply={textContent:'Apply',click(){applies++;void win.fetch('?hmode=GETMETABOLICDATA');}};
+  const panel={querySelectorAll:()=>[apply]};
+  const input={dispatchEvent(){}};
+  const button={textContent:'Go',click(){}};
+  const custom={textContent:'Custom Sheet',click(){}};
+  const doc={body:{innerText:'Name: Synthetic CR No: 111111111111111'},
+    querySelector:q=>({'#patCrNo':input,'#labTrendsPatientBar':patientBar,
+      '#labTrendsCustomBtn':custom,'#labTrendsMetabolicPanel':panel})[q]||null,
+    querySelectorAll:q=>q.includes('labTrendsMetaTestChk')?tests:
+      q.includes('labTrendsMetaDateChk')?dates:q==='button'?[button]:[]};
+  const frame={contentDocument:doc,contentWindow:win};
+  const runtime={window:{},document:{getElementById:()=>frame},
+    AndroidNimsBridge:{onPatient:()=>patient++,onStage:(_id,v)=>{if(v.startsWith('bulk_selection:'))selection=v;},
+      onBulk:()=>receipts++,onError:(_id,e)=>errors.push(e)},
+    Event:class {},setTimeout,clearTimeout,URLSearchParams,FormData:class{},console};
+  vm.createContext(runtime);vm.runInContext(stub,runtime);
+  await runtime.window.NativeNimsEngine.run('111111111111111','request-1');
+  await new Promise(r=>setTimeout(r,40));
+  assert.deepEqual(errors,[]);
+  assert.equal(patient,1);
+  assert.equal(selection,'bulk_selection:2/2/3/3');
+  assert.equal(applies,1);
+  assert.equal(requests,1);
+  assert.equal(receipts,1);
+  assert(tests.every(x=>x.checked)&&dates.every(x=>x.checked));
 });

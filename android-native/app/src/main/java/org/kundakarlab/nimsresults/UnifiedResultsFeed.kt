@@ -30,47 +30,36 @@ object UnifiedResultsFeed {
      * bundle or verified source evidence actually changes. */
     fun baseEntries(bundle: ClinicalBundle): List<UnifiedResultEntry> {
         val structured = bundle.results
-            .groupBy { Triple(it.test, it.date, it.labNumber.trim()) }
+            // Keep repeated same-day samples and reported stages distinct.
+            .groupBy { listOf(it.test, it.date, it.labNumber.trim(),
+                it.sampleNumber.trim(), it.reportStage.trim(), it.sourceOrderId.trim()) }
             .map { (identity, rows) ->
                 val resultDate = RecentReportDates.parse(
                     ClinicalPresentation.reportedDate(rows)
-                ) ?: RecentReportDates.parse(identity.second) ?: LocalDate.MIN
+                ) ?: RecentReportDates.parse(identity[1]) ?: LocalDate.MIN
                 UnifiedResultEntry(
-                    key = "study|" + identity.first + "|" + identity.second + "|" +
-                        identity.third,
-                    title = identity.first,
+                    key = "study|" + identity.joinToString("|"),
+                    title = identity[0],
                     date = resultDate,
                     rows = rows
                 )
             }
-        // An accession-verified document is attached to the corresponding
-        // investigation card. Standalone PDF entries are kept only for
-        // unmatched sources, so the timeline does not duplicate results.
-        val linkedUrls = structured.mapNotNull { study ->
-            ReportLinkResolver.candidates(study.rows, bundle.reports,
-                bundle.patient.crNo).verified?.url
-        }.toSet()
-        val linkedDigests = linkedUrls.map { ReportTitleCache.digest(it) }
-            .filter(String::isNotBlank).toSet()
+        // Documents remain an independent source list: no eager identity
+        // matching, hashing, PDF loading or interpretation during lab viewing.
         val documents = bundle.reports
             .filter { it.url.isNotBlank() }
-            .distinctBy { ReportTitleCache.digest(it.url).ifBlank { it.url } }
-            .filterNot { it.url in linkedUrls ||
-                ReportTitleCache.digest(it.url).let { hash ->
-                    hash.isNotBlank() && hash in linkedDigests
-                } }
-            .map { report ->
-                val header = ReportTitleCache.header(report.url)
-                    ?.takeIf { it.crNo == bundle.patient.crNo }
-                val name = if (OpaqueReportTitles.isCode(report.title) ||
-                    report.title == "Investigation title unavailable")
-                    ReportTitleCache.get(report.url).orEmpty()
-                        .ifBlank { report.title } else report.title
+            .distinctBy { report ->
+                val digest = ReportTitleCache.digest(report.url)
+                if (digest.isNotBlank()) listOf("content", digest,
+                    report.reportNumber, report.reportStage).joinToString("|")
+                else listOf("source", report.url, report.reportNumber,
+                    report.reportStage, report.labNumber, report.sampleNumber).joinToString("|")
+            }
+            .mapIndexed { index, report ->
                 UnifiedResultEntry(
-                    key = "pdf|" + report.url,
-                    title = name,
-                    date = RecentReportDates.parse(header?.reportedDate.orEmpty())
-                        ?: RecentReportDates.dateFor(report).first ?: LocalDate.MIN,
+                    key = "pdf|" + index + "|" + report.id + "|" + report.reportNumber,
+                    title = report.title,
+                    date = RecentReportDates.dateFor(report).first ?: LocalDate.MIN,
                     report = report
                 )
             }

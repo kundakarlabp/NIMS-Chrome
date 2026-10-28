@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private lateinit var engine: NimsEngine
     private lateinit var vault: SessionVault
     private lateinit var patientShelf: PatientShelf
+    private val snapshotCache by lazy { ClinicalSnapshotCache(this) }
     private var shelfEntries by mutableStateOf<List<PatientBookmark>>(emptyList())
     private var shelfOpen by mutableStateOf(false)
     private val reportRepository by lazy { ReportRepository() }
@@ -126,7 +127,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var unlockPromptActive = false
     @Volatile private var activeRequestId = ""
     @Volatile private var activeCr = ""
-    private var pendingPatient = PatientInfo()
+    @Volatile private var pendingPatient = PatientInfo()
+    @Volatile private var patientHeaderRequestId = ""
+    @Volatile private var selectedBulkCounts: List<Int>? = null
     private var pendingCrAfterLogin = ""
     private var verifiedRestReports: List<ReportRef> = emptyList()
     @Volatile private var accumulatedBulk: ClinicalBundle? = null
@@ -212,6 +215,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        // Restore encrypted results without network access; visibly mark as cached.
+        worker.execute {
+            val previous = snapshotCache.load()
+            if (previous != null) runOnUiThread {
+                if (bundle == null && activeRequestId.isBlank()) {
+                    bundle = previous
+                    crInput = previous.patient.crNo
+                    selectedTab = ResultsTab.OVERVIEW
+                    loadStage = LoadStage.READY
+                    statusText = "Encrypted local snapshot · refresh before clinical use."
+                }
+            }
+        }
         if (appLockEnabled) handler.post { requestDeviceUnlock() }
     }
 
@@ -345,95 +361,42 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             return
         }
         cancelTimeout()
-        pdfIndexSelection = ""
-        accumulatedBulk = null
-        bulkBatchCount = 0
-        indexRequested = false
-        historyStatus = ""
-        historyMode = "unknown"
-        pdfInspectedCount = 0
-        pdfConfirmedCount = 0
-        pdfTotalCount = 0
-        if (bundle?.patient?.crNo != cr) {
-            // Cached source metadata is patient-specific, even when the HIS
-            // uses the same PRINTREPORT URL across different sessions.
-            ReportTitleCache.clear()
-            ReportLinkResolver.clear()
-            bundle = null
-        }
         activeCr = cr
         rememberCrLocally(cr)
         shelfOpen = false
         activeRequestId = "native-" + UUID.randomUUID()
         val requestId = activeRequestId
+        if (bundle?.patient?.crNo != cr) {
+            ReportTitleCache.clear()
+            ReportLinkResolver.clear()
+            bundle = null
+        }
         pendingPatient = PatientInfo(crNo = cr)
+        patientHeaderRequestId = ""
+        selectedBulkCounts = null
         verifiedRestReports = emptyList()
-        apiReportCount = 0
-        apiStage = "rest_checking"
-        ReportInventoryTrace.reset()
+        accumulatedBulk = null
+        bulkBatchCount = 0
+        indexRequested = false
+        historyStatus = ""
+        historyMode = "single_bulk"
+        pdfIndexSelection = ""
+        pdfInspectedCount = 0
+        pdfConfirmedCount = 0
+        pdfTotalCount = 0
+        apiStage = "structured_checking"
         loadStage = LoadStage.CHECKING_SESSION
-        statusText = "API first · checking NIMS REST report index…"
-
-        worker.execute {
-            val started = SystemClock.elapsedRealtime()
-            val restAttempt = runCatching { reportRepository.loadRestIndex(cr) }
-            val durationMs = SystemClock.elapsedRealtime() - started
+        statusText = "Checking NIMS session for complete Custom Sheet retrieval…"
+        if (sessionState == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
+        else engine.checkSession { state ->
             runOnUiThread {
                 if (requestId != activeRequestId) return@runOnUiThread
-                apiAttemptMs = durationMs
-                val inventory = restAttempt.getOrNull()
-                if (inventory != null) {
-                    verifiedRestReports = inventory.reports
-                    apiReportCount = inventory.reports.size
-                    apiStage = "rest_verified"
-                    // Report index alone is not a complete laboratory result.
-                    // Show verified source reports while the structured API loads.
-                    bundle = ClinicalBundle(
-                        patient = PatientInfo(crNo = cr),
-                        results = emptyList(),
-                        reports = inventory.reports,
-                        source = "nims_rest_report_list"
-                    )
-
-                    selectedTab = ResultsTab.ALL
-                    statusText = "REST verified · " + inventory.reports.size +
-                        " source reports · loading structured labs…"
-                } else if (restAttempt.exceptionOrNull() is IdentityMismatchException) {
-                    apiStage = "identity_mismatch"
-                    loadStage = LoadStage.ERROR
-                    statusText = "NIMS REST returned a different CR. No results loaded."
-                    return@runOnUiThread
-                } else {
-                    apiStage = when (restAttempt.exceptionOrNull()) {
-                        is AuthenticationRequiredException -> "rest_auth_required"
-                        else -> "rest_unavailable"
-                    }
-                    statusText = "REST unavailable · trying authenticated structured API…"
-                }
-                if (sessionState == SessionState.CONNECTED) {
-                    startStructuredFetch(cr, requestId)
-                } else {
-                    // A login URL or stale shell is not proof that the
-                    // authenticated REST data is unavailable.
-                    engine.checkSession { state ->
-                        runOnUiThread {
-                            if (requestId != activeRequestId) return@runOnUiThread
-                            if (state == SessionState.CONNECTED) {
-                                startStructuredFetch(cr, requestId)
-                            } else if (verifiedRestReports.isNotEmpty()) {
-                                // A successfully authenticated REST response can precede
-                                // WebView frameset detection. Attempt Custom Sheet once,
-                                // without opening another hospital login window.
-                                statusText = "REST authorized; attempting structured NIMS API…"
-                                startStructuredFetch(cr, requestId)
-                            } else {
-                                loadStage = LoadStage.IDLE
-                                pendingCrAfterLogin = cr
-                                statusText = "NIMS authentication required for structured lab retrieval."
-                                openLogin()
-                            }
-                        }
-                    }
+                if (state == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
+                else {
+                    loadStage = LoadStage.IDLE
+                    pendingCrAfterLogin = cr
+                    statusText = "NIMS login required for structured results."
+                    openLogin()
                 }
             }
         }
@@ -455,7 +418,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
         }
         currentTimeout = timeout
-        handler.postDelayed(timeout, 75_000L)
+        handler.postDelayed(timeout, 120_000L)
     }
 
     private fun refreshCurrent() {
@@ -472,6 +435,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private fun logout() {
         cancelTimeout()
         vault.clear()
+        snapshotCache.clear()
         pdfIndexSelection = ""
         cacheDir.listFiles { file ->
             file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
@@ -498,6 +462,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         currentTimeout = null
     }
 
+    override fun onRendererGone(didCrash: Boolean) {
+        handler.post {
+            cancelTimeout()
+            activeRequestId = ""
+            patientHeaderRequestId = ""
+            selectedBulkCounts = null
+            DiagnosticEvents.record(if (didCrash) "WEBVIEW_RENDERER_CRASH" else "WEBVIEW_RENDERER_GONE")
+            loadStage = if (bundle?.results?.isNotEmpty() == true) LoadStage.READY else LoadStage.ERROR
+            statusText = if (bundle?.results?.isNotEmpty() == true)
+                "NIMS browser renderer restarted. Loaded clinical results remain visible."
+            else "NIMS browser renderer restarted. Retry the patient request."
+            engine = NimsEngine(this, root, vault, this)
+        }
+    }
+
     override fun onSession(state: SessionState) {
         runOnUiThread {
             sessionState = state
@@ -516,11 +495,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     override fun onStage(requestId: String, stage: String) {
+        if (stage.startsWith("bulk_selection:")) {
+            val counts = stage.substringAfter(":").split("/").mapNotNull(String::toIntOrNull)
+            selectedBulkCounts = counts.takeIf { it.size == 4 }
+            return
+        }
         if (requestId != activeRequestId) return
         runOnUiThread {
             if (stage == "bulk_mode_single") {
                 historyMode = "single_bulk"
-                historyStatus = "The NIMS date selector could not be paged; fetching available dates together."
+                historyStatus = "All available Custom Sheet tests and dates requested together."
                 return@runOnUiThread
             }
             if (stage.startsWith("bulk_mode_staged:")) {
@@ -566,66 +550,63 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     override fun onPatient(requestId: String, patient: PatientInfo) {
         if (requestId != activeRequestId) return
-        pendingPatient = patient.copy(crNo = activeCr)
+        if (patient.crNo != activeCr) return
+        pendingPatient = patient
+        patientHeaderRequestId = requestId
     }
 
     override fun onBulk(requestId: String, rawJson: String) {
         if (requestId != activeRequestId) return
-        cancelTimeout()
         val cr = activeCr
         val patient = pendingPatient
-        // Acknowledgment-based pagination: only parse one Custom Sheet
-        // payload at a time, then allow the next NIMS date window.
+        val selection = selectedBulkCounts
+        // A request CR typed in the app is not proof the HIS actually displayed
+        // that patient. Require the independently observed patient header.
+        if (patientHeaderRequestId != requestId || patient.crNo != cr ||
+            selection == null || selection.size != 4 ||
+            selection[0] <= 0 || selection[0] != selection[1] ||
+            selection[2] != selection[3]) {
+            cancelTimeout()
+            loadStage = LoadStage.ERROR
+            statusText = "Patient identity or complete Custom Sheet selection not verified."
+            return
+        }
         worker.execute {
             try {
                 if (requestId != activeRequestId) return@execute
-                val parsed = BulkParser.parse(rawJson, cr, patient, verifiedRestReports)
+                val parsed = BulkParser.parse(rawJson, cr, patient, emptyList())
                 if (requestId != activeRequestId) return@execute
-                val pageNumber = bulkBatchCount + 1
-                val combined = BulkAccumulator.append(accumulatedBulk, parsed, pageNumber)
-                if (requestId != activeRequestId) return@execute
-                accumulatedBulk = combined
-                bulkBatchCount = pageNumber
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    val existingReports = bundle?.takeIf {
-                        it.patient.crNo == cr
-                    }?.reports.orEmpty()
-                    bundle = combined.copy(reports = existingReports
-                        .ifEmpty { verifiedRestReports })
-                    if (pageNumber == 1) {
-                        if (combined.patient.name.isNotBlank())
-                            updateShelf { patientShelf.confirmedPatient(cr, combined.patient.name) }
-                        crInput = cr
-                        selectedTab = ResultsTab.OVERVIEW
-                        reportQueryPrefill = ""
-                        loadStage = LoadStage.READY
-                        ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
-                            selectedTab.name, combined.results.size, combined.reports.size)
-                        if (!indexRequested) {
-                            indexRequested = true
-                            loadSourceInventory(requestId, cr, verifiedRestReports)
-                        }
-                    }
-                    apiStage = "structured_verified"
-                    historyStatus = "Loaded " + combined.results.size +
-                        " fields across " + pageNumber + " date batch(es). Fetching older dates…"
+                    cancelTimeout()
+                    bundle = parsed
+                    worker.execute { if (requestId == activeRequestId) snapshotCache.save(parsed) }
+                    bulkBatchCount = 1
+                    accumulatedBulk = null
+                    crInput = cr
+                    selectedTab = ResultsTab.OVERVIEW
+                    loadStage = LoadStage.READY
+                    apiStage = "structured_captured_not_reconciled"
+                    historyStatus = "Complete Custom Sheet request accepted · " +
+                        parsed.results.size + " populated result fields · Enquiry not reconciled"
                     statusText = historyStatus
-                    engine.continueBulk(requestId)
+                    if (parsed.patient.name.isNotBlank())
+                        updateShelf { patientShelf.confirmedPatient(cr, parsed.patient.name) }
+                    ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
+                        selectedTab.name, parsed.results.size, 0)
+                    if (!indexRequested) {
+                        indexRequested = true
+                        loadSourceInventory(requestId, cr, emptyList())
+                    }
                 }
             } catch (_: Exception) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
-                        loadStage = LoadStage.READY
-                        historyStatus = "Older history paused after " + bulkBatchCount +
-                            " batch(es); previously loaded results are preserved."
-                        statusText = historyStatus
-                    } else {
-                        loadStage = LoadStage.ERROR
-                        statusText = "NIMS could not normalize the first Custom Sheet batch."
-                    }
+                    cancelTimeout()
+                    loadStage = LoadStage.ERROR
+                    apiStage = "structured_rejected"
+                    statusText = "NIMS structured response could not be safely normalized."
                 }
             }
         }
@@ -635,7 +616,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // A slow PDF index must not block new structured laboratory batches.
         inventoryWorker.execute {
             val inventory = try {
-                reportRepository.load(cr, seed, restAlreadyAttempted = true)
+                reportRepository.load(cr, seed, restAlreadyAttempted = false)
             } catch (_: IdentityMismatchException) {
                 DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                 runOnUiThread {
@@ -657,7 +638,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
-                } else startPdfIndex(requestId, cr, sources)
+                } else ReportInventoryTrace.event("inventory_only", sources.size)
             }
         }
     }
@@ -1308,7 +1289,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ResultsTab.entries.forEach { tab ->
+            ResultsTab.entries.filter { it != ResultsTab.LABS }.forEach { tab ->
                 FilterChip(
                     selected = selectedTab == tab,
                     onClick = { selectedTab = tab },
@@ -1321,21 +1302,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun RecentScreen(current: ClinicalBundle, scroll: LazyListState) {
-        // Clock is device-local. Do not use fetch date in place of laboratory date.
+        // No PDF-to-result matching. Device-local seven-day selection.
         val today = LocalDate.now()
         var filter by remember(current.patient.crNo) { mutableStateOf("All") }
         var expandedKey by remember(current.patient.crNo) { mutableStateOf("") }
         val recent = remember(current.results, current.reports, today, reportTitleEpoch) {
             val group = current.results.groupBy {
-                Triple(it.test, it.date, it.labNumber)
+                Triple(it.test, it.date, it.labNumber + "|" + it.sampleNumber + "|" + it.reportStage)
             }
             val covered = mutableSetOf<String>()
             val structured = group.mapNotNull { (identity, rows) ->
                 val (date, type) = RecentReportDates.dateFor(rows)
                 if (!RecentReportDates.isLastWeek(date, today)) null
                 else {
-                    val exact = ReportLinkResolver.candidates(rows,
-                        current.reports, current.patient.crNo).verified
+                    val exact: ReportRef? = null // no automatic result-to-PDF linking
                     if (exact != null) covered.add(exact.url)
                     RecentEntry(
                         key = "structured|" + identity.toString(),
@@ -1531,7 +1511,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("Positive cultures (" + positives.size + ")", fontSize = 11.sp)
                     }
                     OutlinedButton(modifier = Modifier.weight(1f),
-                        onClick = { selectedTab = ResultsTab.LABS }) {
+                        onClick = { allResultsSourceFilter = "Labs"; selectedTab = ResultsTab.ALL }) {
                         Text("Lab timeline", fontSize = 11.sp)
                     }
                 }
@@ -1701,7 +1681,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     var showSources by remember(patientCr, test, date) {
                         mutableStateOf(false)
                     }
-                    val sourceLinks = ReportLinkResolver.candidates(dateRows, inventory, patientCr)
+                    val sourceLinks = ReportCandidates(null, emptyList())
                     HorizontalDivider()
                     Text("Result date: " + date, fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold, color = Color(0xFF486581))
@@ -2242,8 +2222,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
-                val mapping = ReportLinkResolver.candidates(
-                    rows, current.reports, current.patient.crNo)
+                val mapping = ReportCandidates(null, emptyList())
                 val exact = mapping.verified
                 var chooseSource by remember(current.patient.crNo, key) {
                     mutableStateOf(false)
@@ -2591,6 +2570,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
+        var subview by remember(current.patient.crNo) { mutableStateOf("Investigations") }
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2616,6 +2596,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
+        val visibleFeed = feed.filter { if (subview == "Source PDF List")
+            it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
@@ -2624,8 +2606,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigations · $sourceCount unlinked original PDFs · one timeline",
+                Text("$studyCount investigation groups · $sourceCount original source reports",
                     fontSize = 11.sp, color = Color(0xFF66788A))
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf("Investigations", "Source PDF List").forEach { name ->
+                        FilterChip(selected = subview == name,
+                            onClick = { subview = name; query = "" },
+                            label = { Text(name, fontSize = 11.sp) })
+                    }
+                }
                 if (pdfTotalCount > 0) Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -2656,16 +2645,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                Text("Each investigation retains its own values and provenance. " +
-                    "A bundled PDF can be linked to several lab accessions; " +
-                    "date or title alone is not proof of a match.",
+                Text("Full investigations and the independent source PDF list are separate. " +
+                    "No automatic PDF-to-result links are inferred.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            if (feed.isEmpty()) item {
+            if (visibleFeed.isEmpty()) item {
                 Text("No investigations or source PDFs match these filters.",
                     color = Color(0xFF66788A))
             }
-            items(feed, key = { it.key }) { entry ->
+            items(visibleFeed, key = { it.key }) { entry ->
                 var expanded by remember(current.patient.crNo, entry.key) {
                     mutableStateOf(false)
                 }
@@ -2677,9 +2665,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val report = entry.report
                 val rows = entry.rows
-                val resultLinks = if (report == null)
-                    ReportLinkResolver.candidates(rows, current.reports, current.patient.crNo)
-                    else ReportCandidates(null, emptyList())
+                val resultLinks = ReportCandidates(null, emptyList())
                 val verifiedReport = resultLinks.verified
                 val accession = ClinicalPresentation.accession(rows)
                 val linkedPart = verifiedReport?.url?.let { url ->
@@ -2725,22 +2711,37 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             else if (!expanded) Text(
                                 "Only source-coded or technical fields; expand to review.",
                                 fontSize = 10.sp, color = Color(0xFF66788A))
-                            val collected = ClinicalPresentation.sentDate(rows)
-                                .ifBlank { linkedPart?.header?.collectionDate.orEmpty() }
+                            val collected = rows.firstOrNull { it.collectionDateTime.isNotBlank() }
+                                ?.collectionDateTime.orEmpty()
+                            val sent = rows.firstOrNull { it.sentDate.isNotBlank() }?.sentDate.orEmpty()
                             val reported = ClinicalPresentation.reportedDate(rows)
                                 .ifBlank { linkedPart?.header?.reportedDate.orEmpty() }
                             if (!expanded) {
                                 Text(
                                     "Lab: " + accession.ifBlank { "—" } +
-                                        "  ·  Collected: " + collected.ifBlank { "—" } +
-                                        "  ·  Reported: " + reported.ifBlank { "—" },
+                                        " · Sample: " + rows.firstOrNull()?.sampleNumber.orEmpty().ifBlank { "—" } +
+                                        " · Collected: " + collected.ifBlank { "—" } +
+                                        " · Reported: " + reported.ifBlank { "—" },
                                     fontSize = 10.sp, color = Color(0xFF486581))
                             } else {
                                 Text("Lab/study no.: " +
                                     accession.ifBlank { "Not available in structured feed" },
                                     fontSize = 11.sp)
                                 Text("Collected/studied: " +
-                                    collected.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
+                                    collected.ifBlank { "Not supplied by NIMS" }, fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
+                                rows.firstOrNull()?.let { first ->
+                                    if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
+                                    if (first.accessionNumber.isNotBlank()) Text("Accession: " + first.accessionNumber, fontSize=11.sp)
+                                    if (first.specimenType.isNotBlank()) Text("Specimen: " + first.specimenType, fontSize=11.sp)
+                                    if (first.laboratory.isNotBlank()) Text("Laboratory: " + first.laboratory, fontSize=11.sp)
+                                    if (first.receivedDateTime.isNotBlank()) Text("Received: " + first.receivedDateTime, fontSize=11.sp)
+                                    if (first.validationDateTime.isNotBlank()) Text("Validated: " + first.validationDateTime, fontSize=11.sp)
+                                    if (first.requisitionDateTime.isNotBlank()) Text("Requisition: " + first.requisitionDateTime, fontSize=11.sp)
+                                    if (first.sourceOrderId.isNotBlank()) Text("Order: " + first.sourceOrderId, fontSize=11.sp)
+                                    if (first.reportNumber.isNotBlank()) Text("Report No: " + first.reportNumber, fontSize=11.sp)
+                                    if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
+                                }
                                 Text("Reported: " +
                                     reported.ifBlank { "Not yet reconciled" }, fontSize = 11.sp)
                             }
@@ -2767,6 +2768,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         color = abnormalColor(result.abnormal))
                                     if (result.refRange.isNotBlank()) Text(
                                         "Reference: " + result.refRange, fontSize = 10.sp)
+                                }
+                                if (category == "Raw") {
+                                    val rawForTest = remember(current.rawRows, entry.title) {
+                                        current.rawRows.filter { it.investigation == entry.title }
+                                    }
+                                    rawForTest.forEach { source ->
+                                        Text("Original source row " + source.rowIndex, fontSize = 11.sp)
+                                        Text(source.sourceJson, fontSize = 10.sp, color = Color(0xFF486581))
+                                    }
                                 }
                                 if (preferred.size < rows.size) Text(
                                     "Additional unclassified source fields are available " +

@@ -35,6 +35,7 @@ object BulkParser {
         }
 
         val results = mutableListOf<LabResult>()
+        val rawRows = mutableListOf<RawInvestigationRow>()
         val groups = bulk.optJSONArray("groups") ?: JSONArray()
         for (g in 0 until groups.length()) {
             val group = groups.optJSONObject(g) ?: continue
@@ -42,6 +43,7 @@ object BulkParser {
             val rows = group.optJSONArray("rows") ?: JSONArray()
             for (r in 0 until rows.length()) {
                 val row = rows.optJSONObject(r) ?: continue
+                rawRows += RawInvestigationRow(g, r, test, row.toString())
                 val parameter = clean(row.optString("parameterName"))
                 val unit = clean(row.optString("unit"))
                 val refRange = clean(row.optString("refRange"))
@@ -51,6 +53,7 @@ object BulkParser {
                 val values = row.optJSONObject("valuesByDate") ?: JSONObject()
                 val flags = firstObject(row, "flagsByDate", "abnormalByDate", "flagByDate")
                 val keys = values.keys()
+                var firstValueForRow = true
                 while (keys.hasNext()) {
                     val rawDate = keys.next()
                     val valueText = cleanValue(ResultTableFormats.format(values.opt(rawDate)?.toString().orEmpty()))
@@ -60,15 +63,17 @@ object BulkParser {
                     // date. Never copy an entire JSON object into a lab number
                     // or timestamp, and never relabel the chart date as a
                     // collection or report timestamp.
-                    val sent = metadataAt(row, group, rawDate,
+                    val collected = metadataAt(row, group, rawDate,
                         "collectionDate", "collection_date", "sampleCollectionDate",
-                        "sampleDate", "sample_date", "dateSent", "date_sent")
+                        "specimenCollectionDate", "collectedDate")
+                    val sent = metadataAt(row, group, rawDate,
+                        "dateSent", "date_sent", "sampleSentDate", "sentDate")
                     val ordered = metadataAt(row, group, rawDate,
                         "requisitionDate", "requisition_date", "orderDate", "order_date",
                         "orderedDate", "ordered_date")
                     val reported = metadataAt(row, group, rawDate,
                         "reportingDate", "reporting_date", "reportedDate", "reported_date",
-                        "validationDate", "validation_date")
+                        "reportDate", "report_date")
                     val lab = metadataAt(row, group, rawDate,
                         "labNo", "lab_no", "labNumber", "lab_number",
                         "labStudyNo", "labStudyNumber", "accessionNo", "accession_no")
@@ -96,8 +101,21 @@ object BulkParser {
                         reportStage = metadataAt(row, group, rawDate, "reportStage", "stage"),
                         documentReference = metadataAt(row, group, rawDate, "documentRef", "reportRef"),
                         packingListNumber = metadataAt(row, group, rawDate, "packingListNo", "packingListNumber"),
-                        sourceRow = row.toString()
+                        // Full original row is separately retained once in rawRows.
+                        sourceRow = if (firstValueForRow) row.toString() else "",
+                        collectionDateTime = collected,
+                        receivedDateTime = metadataAt(row, group, rawDate,
+                            "sampleReceivedDate", "receivedDate", "sampleReceivedDateTime"),
+                        validationDateTime = metadataAt(row, group, rawDate,
+                            "validationDate", "validation_date", "validatedDate"),
+                        specimenType = metadataAt(row, group, rawDate, "specimenType", "sampleType"),
+                        accessionNumber = metadataAt(row, group, rawDate,
+                            "accessionNo", "accession_no", "accessionNumber"),
+                        requisitionDateTime = metadataAt(row, group, rawDate,
+                            "requisitionDate", "requisition_date"),
+                        laboratory = metadataAt(row, group, rawDate, "labName", "laboratory", "department")
                     )
+                    firstValueForRow = false
                 }
             }
         }
@@ -110,7 +128,8 @@ object BulkParser {
         return ClinicalBundle(
             patient = mergedPatient,
             results = results.sortedWith(compareByDescending<LabResult> { dateKey(it.date) }.thenBy { it.test }.thenBy { it.parameter }),
-            reports = reports
+            reports = reports,
+            rawRows = rawRows
         )
     }
 
