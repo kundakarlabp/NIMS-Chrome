@@ -2668,8 +2668,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
         val visibleFeed = if (subview == "Enquiry orders") emptyList() else
-            feed.filter { if (subview == "Report index / PDFs")
-                it.report != null else it.report == null }
+            feed.filter {
+                when (subview) {
+                    "REST API" -> it.report?.sourceTag == "nims_rest_reportList"
+                    "Report index / PDFs" -> it.report != null
+                    else -> it.report == null
+                }
+            }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
@@ -2681,11 +2686,25 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Report index / PDFs", "Enquiry orders").forEach { name ->
+                    listOf("Investigations", "Report index / PDFs", "REST API", "Enquiry orders").forEach { name ->
                         FilterChip(selected = subview == name,
                             onClick = { subview = name; query = "" },
                             label = { Text(name, fontSize = 11.sp) })
                     }
+                }
+                if (subview == "REST API") {
+                    val apiCount = current.reports.count {
+                        it.sourceTag == "nims_rest_reportList"
+                    }
+                    Text("$apiCount verified REST reportList records retained. " +
+                        "Expand a record to inspect all original API fields, including " +
+                        "unrecognized nested details. These are not automatically " +
+                        "interpreted as structured measurements.",
+                        fontSize = 11.sp, color = Color(0xFF486581))
+                    Text("REST API status and field-coverage counts are in Copy diagnostics. " +
+                        "If the endpoint does not confirm the patient CR, its raw " +
+                        "records will not be assigned to this patient.",
+                        fontSize = 10.sp, color = Color(0xFF875B22))
                 }
                 if (pdfTotalCount > 0) Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
@@ -2834,7 +2853,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF102A43))
                                 Text(
-                                    if (report != null) (if (report.url.isNotBlank()) "Original NIMS PDF · " else "NIMS source index (PDF unavailable) · ") +
+                                    if (report != null) (if (report.sourceTag == "nims_rest_reportList") "REST reportList record · "
+                                        else if (report.url.isNotBlank()) "Original NIMS PDF · "
+                                        else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else entry.date.toString())
                                     else rows.size.toString() + " result fields · column date " +
@@ -3145,7 +3166,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 fontSize = 11.sp, color = Color(0xFF875B22))
                             if (expanded && report.sourceRow.isNotBlank()) {
                                 TextButton(onClick = { showEntireSource = !showEntireSource }) {
-                                    Text(if (showEntireSource) "Hide original index row"
+                                    Text(if (showEntireSource) "Hide complete original source record"
+                                        else if (report.sourceTag == "nims_rest_reportList")
+                                            "Show all REST source fields and nested details"
                                         else "Show complete source index row")
                                 }
                                 if (showEntireSource) Text(report.sourceRow,
