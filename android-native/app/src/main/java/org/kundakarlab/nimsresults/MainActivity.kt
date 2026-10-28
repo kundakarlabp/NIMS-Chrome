@@ -153,6 +153,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
         }
 
+    private val enquiryLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != RESULT_OK) return@registerForActivityResult
+            val current = bundle ?: return@registerForActivityResult
+            val payload = result.data?.getStringExtra(EnquiryReviewActivity.EXTRA_CAPTURE_JSON)
+                ?: return@registerForActivityResult
+            val capture = runCatching {
+                InvestigationEnquiryParser.fromJson(payload)
+            }.getOrNull() ?: return@registerForActivityResult
+            val updated = current.copy(
+                enquiryOrders = capture.rows,
+                enquiryCapturedAt = capture.capturedAt
+            )
+            bundle = updated
+            worker.execute {
+                if (bundle?.patient?.crNo == updated.patient.crNo)
+                    snapshotCache.save(updated)
+            }
+            statusText = "Imported " + capture.rows.size +
+                " verified Enquiry order/status rows; no result identity inferred."
+        }
+
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
             logout()
@@ -358,6 +380,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         crInput = cr
         shelfOpen = false
         requestFetch()
+    }
+
+    private fun openEnquiryReview() {
+        val cr = bundle?.patient?.crNo.orEmpty().ifBlank { crInput.filter(Char::isDigit) }
+        if (!cr.matches(Regex("""\d{15}"""))) {
+            statusText = "Enter and load a valid patient CR before Enquiry review."
+            return
+        }
+        enquiryLauncher.launch(Intent(this, EnquiryReviewActivity::class.java)
+            .putExtra(EnquiryReviewActivity.EXTRA_EXPECTED_CR, cr))
     }
 
     private fun requestFetch() {
@@ -590,8 +622,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     cancelTimeout()
-                    bundle = parsed
-                    worker.execute { if (requestId == activeRequestId) snapshotCache.save(parsed) }
+                    // Preserve earlier manually imported Enquiry for this CR.
+                    val prior = bundle?.takeIf { it.patient.crNo == cr }
+                    val withLedger = parsed.copy(
+                        enquiryOrders = prior?.enquiryOrders.orEmpty(),
+                        enquiryCapturedAt = prior?.enquiryCapturedAt ?: 0L
+                    )
+                    bundle = withLedger
+                    worker.execute {
+                        if (requestId == activeRequestId) snapshotCache.save(withLedger)
+                    }
                     bulkBatchCount = 1
                     accumulatedBulk = null
                     crInput = cr
@@ -2621,8 +2661,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
-        val visibleFeed = feed.filter { if (subview == "Report index / PDFs")
-            it.report != null else it.report == null }
+        val visibleFeed = if (subview == "Enquiry orders") emptyList() else
+            feed.filter { if (subview == "Report index / PDFs")
+                it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
@@ -2634,7 +2675,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Report index / PDFs").forEach { name ->
+                    listOf("Investigations", "Report index / PDFs", "Enquiry orders").forEach { name ->
                         FilterChip(selected = subview == name,
                             onClick = { subview = name; query = "" },
                             label = { Text(name, fontSize = 11.sp) })
