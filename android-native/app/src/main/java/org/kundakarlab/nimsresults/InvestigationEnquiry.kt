@@ -63,7 +63,11 @@ object InvestigationEnquiryParser {
         val tables = doc.select("table")
         val results = mutableListOf<EnquiryOrder>()
         for (table in tables) {
-            val tr = table.select("tr")
+            // Nested layout tables can expose the same row through ancestors.
+            // Own each row only in its nearest enclosing table.
+            val tr = table.select("tr").filter { row ->
+                row.parents().firstOrNull { it.tagName() == "table" } === table
+            }
             var headerIndex = -1
             var heads: List<String> = emptyList()
             for ((i, row) in tr.withIndex()) {
