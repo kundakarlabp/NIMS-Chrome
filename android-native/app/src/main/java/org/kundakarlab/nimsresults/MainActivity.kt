@@ -153,6 +153,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
         }
 
+    private val enquiryLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != RESULT_OK) return@registerForActivityResult
+            val current = bundle ?: return@registerForActivityResult
+            val capturedCr = result.data?.getStringExtra(EnquiryReviewActivity.EXTRA_CAPTURE_CR)
+            if (capturedCr != current.patient.crNo) return@registerForActivityResult
+            val payload = result.data?.getStringExtra(EnquiryReviewActivity.EXTRA_CAPTURE_JSON)
+                ?: return@registerForActivityResult
+            val capture = runCatching {
+                InvestigationEnquiryParser.fromJson(payload)
+            }.getOrNull() ?: return@registerForActivityResult
+            val updated = current.copy(
+                enquiryOrders = capture.rows,
+                enquiryCapturedAt = capture.capturedAt
+            )
+            bundle = updated
+            worker.execute {
+                if (bundle?.patient?.crNo == updated.patient.crNo)
+                    snapshotCache.save(updated)
+            }
+            statusText = "Imported " + capture.rows.size +
+                " verified Enquiry order/status rows; no result identity inferred."
+        }
+
     private val loginLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
             logout()
@@ -358,6 +382,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         crInput = cr
         shelfOpen = false
         requestFetch()
+    }
+
+    private fun openEnquiryReview() {
+        val cr = bundle?.patient?.crNo.orEmpty().ifBlank { crInput.filter(Char::isDigit) }
+        if (!cr.matches(Regex("""\d{15}"""))) {
+            statusText = "Enter and load a valid patient CR before Enquiry review."
+            return
+        }
+        enquiryLauncher.launch(Intent(this, EnquiryReviewActivity::class.java)
+            .putExtra(EnquiryReviewActivity.EXTRA_EXPECTED_CR, cr))
     }
 
     private fun requestFetch() {
@@ -590,8 +624,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
                     cancelTimeout()
-                    bundle = parsed
-                    worker.execute { if (requestId == activeRequestId) snapshotCache.save(parsed) }
+                    // Preserve earlier manually imported Enquiry for this CR.
+                    val prior = bundle?.takeIf { it.patient.crNo == cr }
+                    val withLedger = parsed.copy(
+                        enquiryOrders = prior?.enquiryOrders.orEmpty(),
+                        enquiryCapturedAt = prior?.enquiryCapturedAt ?: 0L
+                    )
+                    bundle = withLedger
+                    worker.execute {
+                        if (requestId == activeRequestId) snapshotCache.save(withLedger)
+                    }
                     bulkBatchCount = 1
                     accumulatedBulk = null
                     crInput = cr
@@ -2596,6 +2638,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var subview by remember(current.patient.crNo) { mutableStateOf("Investigations") }
+        var expandedEnquiryRows by remember(current.patient.crNo) {
+            mutableStateOf(setOf<Int>())
+        }
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
@@ -2621,8 +2666,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
-        val visibleFeed = feed.filter { if (subview == "Report index / PDFs")
-            it.report != null else it.report == null }
+        val visibleFeed = if (subview == "Enquiry orders") emptyList() else
+            feed.filter { if (subview == "Report index / PDFs")
+                it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
@@ -2634,7 +2680,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Report index / PDFs").forEach { name ->
+                    listOf("Investigations", "Report index / PDFs", "Enquiry orders").forEach { name ->
                         FilterChip(selected = subview == name,
                             onClick = { subview = name; query = "" },
                             label = { Text(name, fontSize = 11.sp) })
@@ -2674,7 +2720,85 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     "Specimen identifiers from the report index are kept separate until verified.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            if (visibleFeed.isEmpty()) item {
+            if (subview == "Enquiry orders") {
+                item {
+                    Text("NIMS CR-wise Enquiry is the source of orders and statuses, " +
+                        "not a second result-value feed.",
+                        fontSize = 11.sp, color = Color(0xFF486581))
+                    Text(current.enquiryOrders.size.toString() +
+                        " order rows · " +
+                        (if (current.enquiryCapturedAt > 0L) "Imported and locally cached"
+                         else "Not yet captured"),
+                        fontSize = 11.sp)
+                    Button(onClick = { openEnquiryReview() }) {
+                        Text("Open NIMS Enquiry / Import", fontSize = 12.sp)
+                    }
+                    if (current.enquiryOrders.isEmpty())
+                        Text("Use the normal NIMS CR-wise Enquiry form and import its visible " +
+                            "result table. No unverified Enquiry API requests are made.",
+                            fontSize = 11.sp)
+                }
+                items(current.enquiryOrders.mapIndexed { index, order -> index to order },
+                    key = { (index, _) -> "enquiry|$index" }) { (index, order) ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(order.testName, fontWeight = FontWeight.SemiBold)
+                            Text("NIMS status: " + order.status, fontSize = 11.sp)
+                            if (order.sampleNumber.isNotBlank())
+                                Text("Sample No.: " + order.sampleNumber, fontSize = 11.sp)
+                            if (order.labNumber.isNotBlank())
+                                Text("Lab/Study No.: " + order.labNumber, fontSize = 11.sp)
+                            if (order.requestDateTime.isNotBlank())
+                                Text("Requested: " + order.requestDateTime, fontSize = 11.sp)
+                            if (order.collectionDateTime.isNotBlank())
+                                Text("Collected: " + order.collectionDateTime, fontSize = 11.sp)
+                            if (order.requisitionNumber.isNotBlank())
+                                Text("Requisition: " + order.requisitionNumber, fontSize = 11.sp)
+                            if (order.packingListNumber.isNotBlank())
+                                Text("Packing list: " + order.packingListNumber, fontSize = 11.sp)
+                            if (order.packingListDate.isNotBlank())
+                                Text("Packing-list date: " + order.packingListDate, fontSize = 11.sp)
+                            if (order.billNumber.isNotBlank())
+                                Text("Bill number: " + order.billNumber, fontSize = 11.sp)
+                            if (order.department.isNotBlank())
+                                Text("Department: " + order.department, fontSize = 11.sp)
+                            val decision = remember(order, current.reports) {
+                                EnquirySourceBridge.assess(order, current.reports)
+                            }
+                            if (decision.state == EnquirySourceBridge.State.VERIFIED_INDEX &&
+                                decision.source != null) {
+                                Text("Exact Sample/Lab identifier verified in report index",
+                                    fontSize = 10.sp, color = Color(0xFF276749))
+                                val source=decision.source
+                                if (source?.labNumber?.isNotBlank() == true)
+                                    Text("Report-index lab no.: " + source.labNumber,
+                                        fontSize = 11.sp)
+                                if (source?.collectionDateTime?.isNotBlank() == true)
+                                    Text("Report-index collection: " + source.collectionDateTime,
+                                        fontSize = 11.sp)
+                            } else {
+                                Text("Report-index relationship: " + decision.state.name,
+                                    fontSize = 10.sp, color = Color(0xFF875B22))
+                            }
+                            Text("Enquiry order only: not automatically assigned " +
+                                "to a Custom Sheet result or PDF.",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                            TextButton(onClick = {
+                                expandedEnquiryRows = if (index in expandedEnquiryRows)
+                                    expandedEnquiryRows - index else expandedEnquiryRows + index
+                            }) {
+                                Text(if (index in expandedEnquiryRows) "Hide original Enquiry fields"
+                                    else "Show original Enquiry fields")
+                            }
+                            if (index in expandedEnquiryRows)
+                                Text(order.sourceFieldsJson, fontSize = 10.sp,
+                                    color = Color(0xFF486581))
+                        }
+                    }
+                }
+            }
+            if (subview != "Enquiry orders" && visibleFeed.isEmpty()) item {
                 Text("No investigations or source-index entries match these filters.",
                     color = Color(0xFF66788A))
             }

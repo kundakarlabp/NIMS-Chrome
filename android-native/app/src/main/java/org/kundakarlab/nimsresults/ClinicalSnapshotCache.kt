@@ -29,7 +29,7 @@ class ClinicalSnapshotCache(context: Context) {
         require(Regex("""\d{15}""").matches(data.patient.crNo))
         require(data.results.isNotEmpty())
         val root = JSONObject().apply {
-            put("version", 2)
+            put("version", 3)
             put("storedAt", System.currentTimeMillis())
             put("retrievedAt", data.retrievedAt)
             put("patient", JSONObject().apply {
@@ -84,6 +84,9 @@ class ClinicalSnapshotCache(context: Context) {
                     })
                 }
             })
+            put("enquiryCapture", JSONObject(InvestigationEnquiryParser.toJson(
+                EnquiryCapture(data.enquiryOrders, data.enquiryCapturedAt)
+            )))
             put("rawRows", JSONArray().apply {
                 data.rawRows.forEach { source ->
                     put(JSONObject().apply {
@@ -127,7 +130,7 @@ class ClinicalSnapshotCache(context: Context) {
             output.toString("UTF-8")
         }
         val root = JSONObject(raw)
-        require(root.optInt("version") in 1..2)
+        require(root.optInt("version") in 1..3)
         val storedAt = root.getLong("storedAt")
         require(System.currentTimeMillis() - storedAt in 0..MAX_AGE_MS)
         val p = root.getJSONObject("patient")
@@ -180,11 +183,20 @@ class ClinicalSnapshotCache(context: Context) {
                 sourceSampleLabText=field("sourceSampleLabText")
             )
         }
+        val enquiry = root.optJSONObject("enquiryCapture")?.let { capture ->
+            runCatching {
+                val records=capture.optJSONArray("rows") ?: JSONArray()
+                if (records.length() == 0) EnquiryCapture(emptyList(),capture.optLong("capturedAt"))
+                else InvestigationEnquiryParser.fromJson(capture.toString())
+            }.getOrNull()
+        }
         ClinicalBundle(
             patient=PatientInfo(p.optString("name"), cr, p.optString("age"), p.optString("sex")),
             results=rows, reports=reports,
             source="nims_encrypted_offline_cache", retrievedAt=root.optLong("retrievedAt"),
-            rawRows=rawRows
+            rawRows=rawRows,
+            enquiryOrders=enquiry?.rows.orEmpty(),
+            enquiryCapturedAt=enquiry?.capturedAt ?: 0L
         )
     }.getOrNull()
 

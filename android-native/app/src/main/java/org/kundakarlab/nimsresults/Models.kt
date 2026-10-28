@@ -73,7 +73,9 @@ data class ClinicalBundle(
     val reports: List<ReportRef>,
     val source: String = "nims_bulk_api",
     val retrievedAt: Long = System.currentTimeMillis(),
-    val rawRows: List<RawInvestigationRow> = emptyList()
+    val rawRows: List<RawInvestigationRow> = emptyList(),
+    val enquiryOrders: List<EnquiryOrder> = emptyList(),
+    val enquiryCapturedAt: Long = 0L
 )
 
 enum class SessionState { UNKNOWN, CHECKING, CONNECTED, LOGIN_REQUIRED, EXPIRED, ERROR }
