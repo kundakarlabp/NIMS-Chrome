@@ -97,7 +97,7 @@ class ReconciliationV117Test {
         ReportTitleCache.clear()
     }
 
-    @Test fun linkedPdfDoesNotAppearAsSeparateReportCard() {
+    @Test fun sourcePdfRemainsIndependentEvenWhenAStudyCouldBeLinked() {
         ReportTitleCache.clear()
         val pdf = report(7, "E9999", "STAINING")
         assertTrue(ReportTitleCache.learnPages(pdf.url,
@@ -105,8 +105,11 @@ class ReconciliationV117Test {
             cr))
         val feed = UnifiedResultsFeed.entries(ClinicalBundle(
             PatientInfo(crNo=cr), listOf(row("STAINING", "E9999")), listOf(pdf)))
-        assertEquals(1, feed.size)
-        assertNull(feed.single().report)
+        // Explicit design change: structured values and original source PDFs
+        // live in separate subviews; no report is automatically attached.
+        assertEquals(2, feed.size)
+        assertEquals(1, feed.count { it.report == null })
+        assertEquals(1, feed.count { it.report != null })
         ReportTitleCache.clear()
     }
 
