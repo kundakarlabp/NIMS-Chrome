@@ -37,6 +37,7 @@ class EnquiryReviewActivity : Activity() {
     companion object {
         const val EXTRA_EXPECTED_CR = "expected_cr"
         const val EXTRA_CAPTURE_JSON = "enquiry_capture"
+        const val EXTRA_CAPTURE_CR = "enquiry_capture_cr"
         private const val URL = "https://www.nimsts.edu.in/HISUtilities/dashboard/dashBoardACTION.cnt"
     }
 
@@ -161,7 +162,8 @@ class EnquiryReviewActivity : Activity() {
                 val capture=InvestigationEnquiryParser.parseHtml(html,expectedCr)
                 val payload=InvestigationEnquiryParser.toJson(capture)
                 require(payload.length < 650_000) { "Enquiry capture exceeds safe transfer size" }
-                setResult(RESULT_OK, Intent().putExtra(EXTRA_CAPTURE_JSON,payload))
+                setResult(RESULT_OK, Intent().putExtra(EXTRA_CAPTURE_JSON,payload)
+                    .putExtra(EXTRA_CAPTURE_CR,expectedCr))
                 finish()
             }.onFailure {
                 notice.text=it.message.orEmpty().take(260) +
