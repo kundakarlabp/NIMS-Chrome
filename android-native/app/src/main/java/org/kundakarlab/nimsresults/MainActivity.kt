@@ -2776,10 +2776,39 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             if (ordered.isNotBlank()) Text("Ordered: $ordered", fontSize = 10.sp)
                             if (expanded) {
+                                val sourceDecision = remember(rows, current.reports) {
+                                    SourceEventReconciliation.assess(rows, current.reports)
+                                }
+                                val verifiedIndex = sourceDecision.source
+                                    ?.takeIf { sourceDecision.verified }
+                                if (verifiedIndex != null) {
+                                    HorizontalDivider()
+                                    Text("Exact source-index identifiers verified",
+                                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF276749))
+                                    if (verifiedIndex.labNumber.isNotBlank())
+                                        Text("Lab/Study: " + verifiedIndex.labNumber,
+                                            fontSize = 11.sp)
+                                    if (verifiedIndex.sampleNumber.isNotBlank())
+                                        Text("Sample: " + verifiedIndex.sampleNumber,
+                                            fontSize = 11.sp)
+                                    if (verifiedIndex.collectionDateTime.isNotBlank())
+                                        Text("Source-index collection: " +
+                                            verifiedIndex.collectionDateTime, fontSize = 11.sp)
+                                    if (verifiedIndex.reportNumber.isNotBlank())
+                                        Text("Source report no.: " + verifiedIndex.reportNumber,
+                                            fontSize = 11.sp)
+                                    if (verifiedIndex.reportStage.isNotBlank())
+                                        Text("Source report stage: " + verifiedIndex.reportStage,
+                                            fontSize = 11.sp)
+                                    Text("Source-index match only. Report content is not verified; " +
+                                        "the original structured result is unchanged.",
+                                        fontSize = 10.sp, color = Color(0xFF486581))
+                                }
                                 val unlinkedSources = remember(rows, current.reports) {
                                     SourceMetadataReview.candidates(rows, current.reports)
                                 }
-                                if (unlinkedSources.isNotEmpty()) {
+                                if (verifiedIndex == null && unlinkedSources.isNotEmpty()) {
                                     HorizontalDivider()
                                     Text("Possible source-index records (" +
                                         unlinkedSources.size + ") · NOT specimen-verified",
