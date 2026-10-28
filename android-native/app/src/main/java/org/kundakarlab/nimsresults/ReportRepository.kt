@@ -235,7 +235,9 @@ class ReportRepository(
                 sourceOrderId = previous.sourceOrderId.ifBlank { report.sourceOrderId },
                 documentReference = previous.documentReference.ifBlank { report.documentReference },
                 packingListNumber = previous.packingListNumber.ifBlank { report.packingListNumber },
-                sourceRow = previous.sourceRow.ifBlank { report.sourceRow }
+                sourceRow = previous.sourceRow.ifBlank { report.sourceRow },
+                collectionDateTime = previous.collectionDateTime.ifBlank { report.collectionDateTime },
+                sourceSampleLabText = previous.sourceSampleLabText.ifBlank { report.sourceSampleLabText }
             )
         }
         return map.values.sortedByDescending { BulkParser.dateKey(BulkParser.isoDate(it.date)) }
@@ -309,7 +311,8 @@ object ReportPayloadParser {
                 sourceOrderId = first(row, orderIdKeys),
                 documentReference = first(row, documentKeys),
                 packingListNumber = first(row, packingKeys),
-                sourceRow = row.toString()
+                sourceRow = row.toString(),
+                collectionDateTime = first(row, listOf("collectionDate", "sampleCollectionDate", "collection_date"))
             )
         }
     }
@@ -386,7 +389,9 @@ object ReportPayloadParser {
                 labNumber = guessedLab, sampleNumber = sample,
                 reportNumber = if (knownLayout) cells[4] else "",
                 documentReference = token.ifBlank { url },
-                sourceRow = row.outerHtml())
+                sourceRow = row.outerHtml(),
+                collectionDateTime = collected,
+                sourceSampleLabText = pair)
         }
         // Keep separate report-stage URLs even when lab accession is shared.
         return reports.distinctBy {
