@@ -644,6 +644,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     if (requestId == activeRequestId) snapshotCache.save(withInventory)
                 }
                 apiReportCount = sources.size
+                if (sources.isNotEmpty()) historyStatus =
+                    current.results.size.toString() + " structured fields · " +
+                        sources.size + " NIMS source-index rows (separate identifiers)"
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -692,6 +695,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (requestId == activeRequestId) snapshotCache.save(withInventory)
                     }
                     apiReportCount = reconciled.size
+                    historyStatus = prior.results.size.toString() +
+                        " structured fields · " + reconciled.size +
+                        " source-index rows (not yet event-linked)"
                     statusText = prior.results.size.toString() +
                         " structured values · " + reconciled.count { it.url.isNotBlank() } +
                         " PDF links (" + reconciled.size + " index entries)"
@@ -2609,7 +2615,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
-        val visibleFeed = feed.filter { if (subview == "Source PDF List")
+        val visibleFeed = feed.filter { if (subview == "Report index / PDFs")
             it.report != null else it.report == null }
         val studyCount = feed.count { it.report == null }
         val sourceCount = feed.count { it.report != null }
@@ -2622,7 +2628,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("$studyCount investigation groups · $sourceCount source-index entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Source PDF List").forEach { name ->
+                    listOf("Investigations", "Report index / PDFs").forEach { name ->
                         FilterChip(selected = subview == name,
                             onClick = { subview = name; query = "" },
                             label = { Text(name, fontSize = 11.sp) })
