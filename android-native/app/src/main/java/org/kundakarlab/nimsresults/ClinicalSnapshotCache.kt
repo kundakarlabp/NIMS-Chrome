@@ -81,6 +81,7 @@ class ClinicalSnapshotCache(context: Context) {
                         put("sourceRow", report.sourceRow)
                         put("collectionDateTime", report.collectionDateTime)
                         put("sourceSampleLabText", report.sourceSampleLabText)
+                        put("sourceTag", report.sourceTag)
                     })
                 }
             })
