@@ -157,6 +157,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode != RESULT_OK) return@registerForActivityResult
             val current = bundle ?: return@registerForActivityResult
+            val capturedCr = result.data?.getStringExtra(EnquiryReviewActivity.EXTRA_CAPTURE_CR)
+            if (capturedCr != current.patient.crNo) return@registerForActivityResult
             val payload = result.data?.getStringExtra(EnquiryReviewActivity.EXTRA_CAPTURE_JSON)
                 ?: return@registerForActivityResult
             val capture = runCatching {
