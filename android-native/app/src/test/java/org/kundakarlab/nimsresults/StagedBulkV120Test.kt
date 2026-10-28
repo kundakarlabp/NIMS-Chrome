@@ -60,6 +60,6 @@ class StagedBulkV120Test {
         assertEquals("LAB02",rows.getValue("2026-10-15").labNumber)
         assertEquals("26-Oct-2026 11:40",rows.getValue("2026-10-26").reportedDate)
         assertEquals("",rows.getValue("2026-10-15").reportedDate)
-        assertEquals("15-Oct-2026 09:00",rows.getValue("2026-10-15").sentDate)
+        assertEquals("15-Oct-2026 09:00",rows.getValue("2026-10-15").collectionDateTime)
     }
 }
