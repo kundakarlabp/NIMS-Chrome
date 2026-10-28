@@ -56,7 +56,8 @@ data class ReportRef(
     val packingListNumber: String = "",
     val sourceRow: String = "",
     val collectionDateTime: String = "",
-    val sourceSampleLabText: String = ""
+    val sourceSampleLabText: String = "",
+    val sourceTag: String = ""
 )
 
 /** Raw source data, retained independently of populated cells and clinical filtering. */
