@@ -81,6 +81,7 @@ class ClinicalSnapshotCache(context: Context) {
                         put("sourceRow", report.sourceRow)
                         put("collectionDateTime", report.collectionDateTime)
                         put("sourceSampleLabText", report.sourceSampleLabText)
+                        put("sourceTag", report.sourceTag)
                     })
                 }
             })
@@ -180,7 +181,8 @@ class ClinicalSnapshotCache(context: Context) {
                 documentReference=field("documentReference"),
                 packingListNumber=field("packingListNumber"), sourceRow=field("sourceRow"),
                 collectionDateTime=field("collectionDateTime"),
-                sourceSampleLabText=field("sourceSampleLabText")
+                sourceSampleLabText=field("sourceSampleLabText"),
+                sourceTag=field("sourceTag")
             )
         }
         val enquiry = root.optJSONObject("enquiryCapture")?.let { capture ->

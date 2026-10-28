@@ -63,6 +63,11 @@ class ReportRepository(
             ReportInventoryTrace.event("rest_attempt")
             loadRest(crNo)
         }.getOrElse { error ->
+            RestReportDiagnostics.stage(when (error) {
+                is IdentityMismatchException -> "patient_identity_conflict"
+                is AuthenticationRequiredException -> "authentication_required"
+                else -> "request_or_schema_failed"
+            })
             if (error is IdentityMismatchException) throw error
             ReportInventoryTrace.event(
                 if (error is AuthenticationRequiredException) "rest_auth_required"
@@ -100,6 +105,9 @@ class ReportRepository(
     }
 
     private fun loadRest(crNo: String, apiClient: OkHttpClient = client): List<ReportRef> {
+        RestReportDiagnostics.reset()
+        RestReportDiagnostics.stage("requesting")
+        val started = System.nanoTime()
         val url = NimsUrls.REPORT_LIST_API.toHttpUrl().newBuilder()
             .addQueryParameter("crNo", crNo)
             .addQueryParameter("hosCode", NimsUrls.HOSPITAL_CODE)
@@ -111,15 +119,36 @@ class ReportRepository(
                 .get()
                 .build()
         ).execute().use { response ->
+            val responseHost = response.request.url.host.lowercase()
+            require(responseHost in NimsUrls.HOSTS) { "REST response redirected off NIMS hosts." }
             syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val text = response.body?.string().orEmpty()
-            if (isAuthPage(response.code, response.request.url.toString(), text)) throw AuthenticationRequiredException()
+            RestReportDiagnostics.status(
+                response.code, text.toByteArray(Charsets.UTF_8).size,
+                (System.nanoTime() - started) / 1_000_000,
+                response.header("Content-Type").orEmpty().substringBefore(';').take(60)
+            )
+            if (isAuthPage(response.code, response.request.url.toString(), text)) {
+                RestReportDiagnostics.stage("authentication_required")
+                throw AuthenticationRequiredException()
+            }
             if (!response.isSuccessful) {
+                RestReportDiagnostics.stage("http_error")
                 ReportInventoryTrace.event("rest_http_error")
                 error("NIMS report-list returned HTTP ${response.code}.")
             }
-            val payload: Any = if (text.trim().startsWith("[")) JSONArray(text) else JSONObject(text)
-            return ReportPayloadParser.parseRest(payload, crNo)
+            val payload: Any = try {
+                if (text.trimStart().startsWith("[")) JSONArray(text) else JSONObject(text)
+            } catch (e: Exception) {
+                RestReportDiagnostics.stage("not_json")
+                throw IllegalStateException("NIMS reportList did not return valid JSON.",e)
+            }
+            RestReportDiagnostics.inspect(payload,crNo)
+            val reports = ReportPayloadParser.parseRest(payload, crNo)
+            RestReportDiagnostics.stage(
+                if(reports.isEmpty()) "no_verified_report_rows" else "verified_report_rows"
+            )
+            return reports
         }
     }
 
@@ -236,6 +265,7 @@ class ReportRepository(
                 documentReference = previous.documentReference.ifBlank { report.documentReference },
                 packingListNumber = previous.packingListNumber.ifBlank { report.packingListNumber },
                 sourceRow = previous.sourceRow.ifBlank { report.sourceRow },
+                sourceTag = previous.sourceTag.ifBlank { report.sourceTag },
                 collectionDateTime = previous.collectionDateTime.ifBlank { report.collectionDateTime },
                 sourceSampleLabText = previous.sourceSampleLabText.ifBlank { report.sourceSampleLabText }
             )
@@ -253,7 +283,7 @@ object ReportPayloadParser {
     private val crKeys = listOf("crNo","cr_no","crNumber","cr_number","patientCrNo","patient_cr_no","patCrNo","pat_cr_no")
     private val titleKeys = listOf("reportName","report_name","investigationName","investigation_name","testName","test_name","investigation","test","name")
     private val dateKeys = listOf("dateSent","date_sent","sampleDate","sample_date","requisitionDate","requisition_date","reportDate","report_date","date")
-    private val sentKeys = listOf("collectionDate","collection_date","sampleCollectionDate","sampleDate","sample_date","dateSent","date_sent")
+    private val sentKeys = listOf("dateSent","date_sent","sampleSentDate","sample_sent_date","sentDate")
     private val orderKeys = listOf("requisitionDate","requisition_date","orderDate","order_date","orderedDate","ordered_date")
     private val reportedKeys = listOf("reportingDate","reporting_date","reportedDate","reported_date","reportDate","report_date","validationDate","validation_date")
     private val reportNumberKeys = listOf("reportNo", "reportNumber", "report_no", "report_number")
@@ -274,9 +304,9 @@ object ReportPayloadParser {
     private val printReportRegex = Regex("""(?i)printReport\s*\(\s*['"]([^'"]+)['"]\s*\)""")
 
     fun parseRest(payload: Any, expectedCr: String): List<ReportRef> {
-        val arrays = mutableListOf<JSONArray>()
-        collectArrays(payload, 0, arrays)
-        val rows = arrays.maxByOrNull(::score) ?: JSONArray()
+        // Use the same inspected array selection for parsing and diagnostics.
+        // Preserve raw objects independently; never assert values complete.
+        val rows = RestReportDiagnostics.bestArray(payload)
         val objects = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
 
         val root = payload as? JSONObject
@@ -314,7 +344,8 @@ object ReportPayloadParser {
                 documentReference = first(row, documentKeys),
                 packingListNumber = first(row, packingKeys),
                 sourceRow = row.toString(),
-                collectionDateTime = first(row, listOf("collectionDate", "sampleCollectionDate", "collection_date"))
+                collectionDateTime = first(row, listOf("collectionDate", "sampleCollectionDate", "collection_date")),
+                sourceTag = "nims_rest_reportList"
             )
         }
     }
@@ -466,7 +497,10 @@ object ReportPayloadParser {
 
     private fun first(row: JSONObject?, keys: List<String>): String {
         if (row == null) return ""
-        keys.forEach { key ->
+        // NIMS installations may use uppercase or mixed-case field names.
+        val actual = row.keys().asSequence().associateBy { it.lowercase() }
+        keys.forEach { preferred ->
+            val key = actual[preferred.lowercase()] ?: preferred
             val value = row.opt(key)
             if (value != null && value != JSONObject.NULL) {
                 val text = value.toString().trim()
