@@ -10,6 +10,10 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
+            android:name=".EnquiryReviewActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".ReportActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden" />
