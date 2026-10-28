@@ -24,14 +24,23 @@ object AppDiagnostics {
         if (bundle == null) return "audit.no_patient_bundle=true\n"
         val rows = bundle.results
         val reports = bundle.reports
-        val groups = rows.groupBy { Triple(it.test, it.date, it.labNumber) }
-        val mapping = groups.values.map { ReportLinkResolver.candidates(it, reports, bundle.patient.crNo) }
-        val matched = mapping.count { it.verified != null }
-        val ambiguous = mapping.count { it.verified == null && it.candidates.size > 1 }
-        val suggested = mapping.count { it.verified == null && it.candidates.size == 1 }
-        val noPdf = mapping.count { it.verified == null && it.candidates.isEmpty() }
+        val groups = rows.groupBy {
+            listOf(it.test, it.date, it.labNumber, it.sampleNumber,
+                it.reportStage, it.sourceOrderId)
+        }
+        // No PDF matching, PDF parsing or title/date-based specimen linking
+        // during diagnostics. Only explicit source ID matches are assessed.
+        val decisions = groups.values.map { SourceEventReconciliation.assess(it, reports).state }
+        val verified = decisions.count { it == SourceEventReconciliation.State.VERIFIED_INDEX }
+        val withoutId = decisions.count { it == SourceEventReconciliation.State.NO_RESULT_ID }
+        val ambiguous = decisions.count {
+            it == SourceEventReconciliation.State.AMBIGUOUS_INDEX ||
+                it == SourceEventReconciliation.State.CONFLICTING_RESULT_ID
+        }
+        val dateConflict = decisions.count { it == SourceEventReconciliation.State.DATE_CONFLICT }
+        val noIndexMatch = decisions.count { it == SourceEventReconciliation.State.NO_INDEX_MATCH }
         val sections = ResultSection.entries.associateWith { section ->
-            groups.count { (id, _) -> ResultSections.of(id.first) == section }
+            groups.count { (id, _) -> ResultSections.of(id[0]) == section }
         }
         val sourceIds = reports.map { it.url.ifBlank { "id:" + it.id } }.toSet()
         val completeHeaders = reports.count {
@@ -41,7 +50,7 @@ object AppDiagnostics {
         val technical = rows.count { ClinicalPresentation.isTechnical(it) }
         val panelGroups = groups.count { (id, _) ->
             Regex("""(?i)blood\s*group|antibody\s*screen|biofire|filmarray|\bbgt\b""")
-                .containsMatchIn(id.first)
+                .containsMatchIn(id[0])
         }
         val unparsableDates = groups.count { (_, v) ->
             RecentReportDates.parse(v.firstOrNull()?.date.orEmpty()) == null
@@ -53,10 +62,11 @@ object AppDiagnostics {
         val findings = buildList {
             if (reports.isEmpty()) add("SOURCE_INVENTORY_EMPTY")
             if (reports.any { it.url.isBlank() }) add("SOURCE_PDF_URL_MISSING")
-            if (noPdf > 0) add("RESULT_GROUPS_WITHOUT_VERIFIED_PDF")
-            if (ambiguous > 0) add("MULTIPLE_PDF_CANDIDATES")
+            if (withoutId > 0) add("STRUCTURED_SPECIMEN_ID_NOT_SUPPLIED")
+            if (ambiguous > 0) add("AMBIGUOUS_SOURCE_IDENTITY")
+            if (dateConflict > 0) add("SOURCE_DATE_DISAGREEMENT")
             if (medicalCodes > 0) add("UNMAPPED_SOURCE_CODES")
-            if (rows.isNotEmpty() && groups.any { (k, _) -> k.third.isBlank() })
+            if (rows.isNotEmpty() && groups.any { (k, _) -> k[2].isBlank() })
                 add("RESULT_ACCESSION_NOT_SUPPLIED")
             if (unparsableDates > 0) add("UNRECOGNIZED_RESULT_DATES")
             if (reports.any { OpaqueReportTitles.isCode(it.title) })
@@ -73,13 +83,19 @@ object AppDiagnostics {
             appendLine("audit.source_titles_opaque=" +
                 reports.count { OpaqueReportTitles.isCode(it.title) })
             appendLine("audit.result_groups_with_accession=" +
-                groups.count { (id, _) -> id.third.isNotBlank() })
+                groups.count { (id, _) -> id[2].isNotBlank() })
             appendLine("audit.result_groups_no_accession=" +
-                groups.count { (id, _) -> id.third.isBlank() })
-            appendLine("audit.pdf_match_auto_verified=" + matched)
-            appendLine("audit.pdf_match_one_unverified_candidate=" + suggested)
-            appendLine("audit.pdf_match_ambiguous=" + ambiguous)
-            appendLine("audit.pdf_match_no_candidate=" + noPdf)
+                groups.count { (id, _) -> id[2].isBlank() })
+            appendLine("audit.source_identity_verified=" + verified)
+            appendLine("audit.source_identity_no_result_id=" + withoutId)
+            appendLine("audit.source_identity_ambiguous=" + ambiguous)
+            appendLine("audit.source_identity_date_conflict=" + dateConflict)
+            appendLine("audit.source_identity_unmatched=" + noIndexMatch)
+            appendLine("audit.pdf_auto_mapping=disabled")
+            appendLine("audit.pdf_match_auto_verified=0")
+            appendLine("audit.pdf_match_one_unverified_candidate=0")
+            appendLine("audit.pdf_match_ambiguous=0")
+            appendLine("audit.pdf_match_no_candidate=" + groups.size)
             appendLine("audit.technical_fields=" + technical)
             appendLine("audit.opaque_or_unmapped_fields=" + medicalCodes)
             appendLine("audit.source_coded_panel_groups=" + panelGroups)
