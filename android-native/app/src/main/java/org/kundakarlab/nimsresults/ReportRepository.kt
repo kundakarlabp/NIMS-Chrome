@@ -63,6 +63,11 @@ class ReportRepository(
             ReportInventoryTrace.event("rest_attempt")
             loadRest(crNo)
         }.getOrElse { error ->
+            RestReportDiagnostics.stage(when (error) {
+                is IdentityMismatchException -> "patient_identity_conflict"
+                is AuthenticationRequiredException -> "authentication_required"
+                else -> "request_or_schema_failed"
+            })
             if (error is IdentityMismatchException) throw error
             ReportInventoryTrace.event(
                 if (error is AuthenticationRequiredException) "rest_auth_required"
