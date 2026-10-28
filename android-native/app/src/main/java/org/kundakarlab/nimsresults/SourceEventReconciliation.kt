@@ -73,26 +73,4 @@ object SourceEventReconciliation {
         return Decision(State.VERIFIED_INDEX, source)
     }
 
-    data class Coverage(
-        val groups: Int,
-        val verified: Int,
-        val withoutSourceId: Int,
-        val ambiguous: Int,
-        val dateConflicts: Int,
-        val noIndexMatch: Int
-    )
-    fun coverage(bundle: ClinicalBundle): Coverage {
-        val groups = UnifiedResultsFeed.baseEntries(bundle).filter { it.report == null }
-        val decisions = groups.map { assess(it.rows, bundle.reports).state }
-        return Coverage(
-            groups = decisions.size,
-            verified = decisions.count { it == State.VERIFIED_INDEX },
-            withoutSourceId = decisions.count { it == State.NO_RESULT_ID },
-            ambiguous = decisions.count {
-                it == State.CONFLICTING_RESULT_ID || it == State.AMBIGUOUS_INDEX
-            },
-            dateConflicts = decisions.count { it == State.DATE_CONFLICT },
-            noIndexMatch = decisions.count { it == State.NO_INDEX_MATCH }
-        )
-    }
 }
