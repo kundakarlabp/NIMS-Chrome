@@ -126,7 +126,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var unlockPromptActive = false
     @Volatile private var activeRequestId = ""
     @Volatile private var activeCr = ""
-    private var pendingPatient = PatientInfo()
+    @Volatile private var pendingPatient = PatientInfo()
+    @Volatile private var patientHeaderRequestId = ""
+    @Volatile private var selectedBulkCounts: List<Int>? = null
     private var pendingCrAfterLogin = ""
     private var verifiedRestReports: List<ReportRef> = emptyList()
     @Volatile private var accumulatedBulk: ClinicalBundle? = null
@@ -345,95 +347,42 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             return
         }
         cancelTimeout()
-        pdfIndexSelection = ""
-        accumulatedBulk = null
-        bulkBatchCount = 0
-        indexRequested = false
-        historyStatus = ""
-        historyMode = "unknown"
-        pdfInspectedCount = 0
-        pdfConfirmedCount = 0
-        pdfTotalCount = 0
-        if (bundle?.patient?.crNo != cr) {
-            // Cached source metadata is patient-specific, even when the HIS
-            // uses the same PRINTREPORT URL across different sessions.
-            ReportTitleCache.clear()
-            ReportLinkResolver.clear()
-            bundle = null
-        }
         activeCr = cr
         rememberCrLocally(cr)
         shelfOpen = false
         activeRequestId = "native-" + UUID.randomUUID()
         val requestId = activeRequestId
+        if (bundle?.patient?.crNo != cr) {
+            ReportTitleCache.clear()
+            ReportLinkResolver.clear()
+            bundle = null
+        }
         pendingPatient = PatientInfo(crNo = cr)
+        patientHeaderRequestId = ""
+        selectedBulkCounts = null
         verifiedRestReports = emptyList()
-        apiReportCount = 0
-        apiStage = "rest_checking"
-        ReportInventoryTrace.reset()
+        accumulatedBulk = null
+        bulkBatchCount = 0
+        indexRequested = false
+        historyStatus = ""
+        historyMode = "single_bulk"
+        pdfIndexSelection = ""
+        pdfInspectedCount = 0
+        pdfConfirmedCount = 0
+        pdfTotalCount = 0
+        apiStage = "structured_checking"
         loadStage = LoadStage.CHECKING_SESSION
-        statusText = "API first · checking NIMS REST report index…"
-
-        worker.execute {
-            val started = SystemClock.elapsedRealtime()
-            val restAttempt = runCatching { reportRepository.loadRestIndex(cr) }
-            val durationMs = SystemClock.elapsedRealtime() - started
+        statusText = "Checking NIMS session for complete Custom Sheet retrieval…"
+        if (sessionState == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
+        else engine.checkSession { state ->
             runOnUiThread {
                 if (requestId != activeRequestId) return@runOnUiThread
-                apiAttemptMs = durationMs
-                val inventory = restAttempt.getOrNull()
-                if (inventory != null) {
-                    verifiedRestReports = inventory.reports
-                    apiReportCount = inventory.reports.size
-                    apiStage = "rest_verified"
-                    // Report index alone is not a complete laboratory result.
-                    // Show verified source reports while the structured API loads.
-                    bundle = ClinicalBundle(
-                        patient = PatientInfo(crNo = cr),
-                        results = emptyList(),
-                        reports = inventory.reports,
-                        source = "nims_rest_report_list"
-                    )
-
-                    selectedTab = ResultsTab.ALL
-                    statusText = "REST verified · " + inventory.reports.size +
-                        " source reports · loading structured labs…"
-                } else if (restAttempt.exceptionOrNull() is IdentityMismatchException) {
-                    apiStage = "identity_mismatch"
-                    loadStage = LoadStage.ERROR
-                    statusText = "NIMS REST returned a different CR. No results loaded."
-                    return@runOnUiThread
-                } else {
-                    apiStage = when (restAttempt.exceptionOrNull()) {
-                        is AuthenticationRequiredException -> "rest_auth_required"
-                        else -> "rest_unavailable"
-                    }
-                    statusText = "REST unavailable · trying authenticated structured API…"
-                }
-                if (sessionState == SessionState.CONNECTED) {
-                    startStructuredFetch(cr, requestId)
-                } else {
-                    // A login URL or stale shell is not proof that the
-                    // authenticated REST data is unavailable.
-                    engine.checkSession { state ->
-                        runOnUiThread {
-                            if (requestId != activeRequestId) return@runOnUiThread
-                            if (state == SessionState.CONNECTED) {
-                                startStructuredFetch(cr, requestId)
-                            } else if (verifiedRestReports.isNotEmpty()) {
-                                // A successfully authenticated REST response can precede
-                                // WebView frameset detection. Attempt Custom Sheet once,
-                                // without opening another hospital login window.
-                                statusText = "REST authorized; attempting structured NIMS API…"
-                                startStructuredFetch(cr, requestId)
-                            } else {
-                                loadStage = LoadStage.IDLE
-                                pendingCrAfterLogin = cr
-                                statusText = "NIMS authentication required for structured lab retrieval."
-                                openLogin()
-                            }
-                        }
-                    }
+                if (state == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
+                else {
+                    loadStage = LoadStage.IDLE
+                    pendingCrAfterLogin = cr
+                    statusText = "NIMS login required for structured results."
+                    openLogin()
                 }
             }
         }
@@ -455,7 +404,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
         }
         currentTimeout = timeout
-        handler.postDelayed(timeout, 75_000L)
+        handler.postDelayed(timeout, 120_000L)
     }
 
     private fun refreshCurrent() {
@@ -498,6 +447,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         currentTimeout = null
     }
 
+    override fun onRendererGone(didCrash: Boolean) {
+        handler.post {
+            cancelTimeout()
+            activeRequestId = ""
+            patientHeaderRequestId = ""
+            selectedBulkCounts = null
+            DiagnosticEvents.record(if (didCrash) "WEBVIEW_RENDERER_CRASH" else "WEBVIEW_RENDERER_GONE")
+            loadStage = if (bundle?.results?.isNotEmpty() == true) LoadStage.READY else LoadStage.ERROR
+            statusText = if (bundle?.results?.isNotEmpty() == true)
+                "NIMS browser renderer restarted. Loaded clinical results remain visible."
+            else "NIMS browser renderer restarted. Retry the patient request."
+            engine = NimsEngine(this, root, vault, this)
+        }
+    }
+
     override fun onSession(state: SessionState) {
         runOnUiThread {
             sessionState = state
@@ -516,11 +480,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     override fun onStage(requestId: String, stage: String) {
+        if (stage.startsWith("bulk_selection:")) {
+            val counts = stage.substringAfter(":").split("/").mapNotNull(String::toIntOrNull)
+            selectedBulkCounts = counts.takeIf { it.size == 4 }
+            return
+        }
         if (requestId != activeRequestId) return
         runOnUiThread {
             if (stage == "bulk_mode_single") {
                 historyMode = "single_bulk"
-                historyStatus = "The NIMS date selector could not be paged; fetching available dates together."
+                historyStatus = "All available Custom Sheet tests and dates requested together."
                 return@runOnUiThread
             }
             if (stage.startsWith("bulk_mode_staged:")) {
@@ -566,66 +535,62 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     override fun onPatient(requestId: String, patient: PatientInfo) {
         if (requestId != activeRequestId) return
-        pendingPatient = patient.copy(crNo = activeCr)
+        if (patient.crNo != activeCr) return
+        pendingPatient = patient
+        patientHeaderRequestId = requestId
     }
 
     override fun onBulk(requestId: String, rawJson: String) {
         if (requestId != activeRequestId) return
-        cancelTimeout()
         val cr = activeCr
         val patient = pendingPatient
-        // Acknowledgment-based pagination: only parse one Custom Sheet
-        // payload at a time, then allow the next NIMS date window.
+        val selection = selectedBulkCounts
+        // A request CR typed in the app is not proof the HIS actually displayed
+        // that patient. Require the independently observed patient header.
+        if (patientHeaderRequestId != requestId || patient.crNo != cr ||
+            selection == null || selection.size != 4 ||
+            selection[0] <= 0 || selection[0] != selection[1] ||
+            selection[2] != selection[3]) {
+            cancelTimeout()
+            loadStage = LoadStage.ERROR
+            statusText = "Patient identity or complete Custom Sheet selection not verified."
+            return
+        }
         worker.execute {
             try {
                 if (requestId != activeRequestId) return@execute
-                val parsed = BulkParser.parse(rawJson, cr, patient, verifiedRestReports)
+                val parsed = BulkParser.parse(rawJson, cr, patient, emptyList())
                 if (requestId != activeRequestId) return@execute
-                val pageNumber = bulkBatchCount + 1
-                val combined = BulkAccumulator.append(accumulatedBulk, parsed, pageNumber)
-                if (requestId != activeRequestId) return@execute
-                accumulatedBulk = combined
-                bulkBatchCount = pageNumber
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    val existingReports = bundle?.takeIf {
-                        it.patient.crNo == cr
-                    }?.reports.orEmpty()
-                    bundle = combined.copy(reports = existingReports
-                        .ifEmpty { verifiedRestReports })
-                    if (pageNumber == 1) {
-                        if (combined.patient.name.isNotBlank())
-                            updateShelf { patientShelf.confirmedPatient(cr, combined.patient.name) }
-                        crInput = cr
-                        selectedTab = ResultsTab.OVERVIEW
-                        reportQueryPrefill = ""
-                        loadStage = LoadStage.READY
-                        ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
-                            selectedTab.name, combined.results.size, combined.reports.size)
-                        if (!indexRequested) {
-                            indexRequested = true
-                            loadSourceInventory(requestId, cr, verifiedRestReports)
-                        }
-                    }
-                    apiStage = "structured_verified"
-                    historyStatus = "Loaded " + combined.results.size +
-                        " fields across " + pageNumber + " date batch(es). Fetching older dates…"
+                    cancelTimeout()
+                    bundle = parsed
+                    bulkBatchCount = 1
+                    accumulatedBulk = null
+                    crInput = cr
+                    selectedTab = ResultsTab.OVERVIEW
+                    loadStage = LoadStage.READY
+                    apiStage = "structured_captured_not_reconciled"
+                    historyStatus = "Complete Custom Sheet request accepted · " +
+                        parsed.results.size + " populated result fields · Enquiry not reconciled"
                     statusText = historyStatus
-                    engine.continueBulk(requestId)
+                    if (parsed.patient.name.isNotBlank())
+                        updateShelf { patientShelf.confirmedPatient(cr, parsed.patient.name) }
+                    ProcessHealth.checkpoint(this@MainActivity, loadStage.name,
+                        selectedTab.name, parsed.results.size, 0)
+                    if (!indexRequested) {
+                        indexRequested = true
+                        loadSourceInventory(requestId, cr, emptyList())
+                    }
                 }
             } catch (_: Exception) {
                 DiagnosticEvents.record("STRUCTURED_FAILURE")
                 runOnUiThread {
                     if (requestId != activeRequestId) return@runOnUiThread
-                    if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
-                        loadStage = LoadStage.READY
-                        historyStatus = "Older history paused after " + bulkBatchCount +
-                            " batch(es); previously loaded results are preserved."
-                        statusText = historyStatus
-                    } else {
-                        loadStage = LoadStage.ERROR
-                        statusText = "NIMS could not normalize the first Custom Sheet batch."
-                    }
+                    cancelTimeout()
+                    loadStage = LoadStage.ERROR
+                    apiStage = "structured_rejected"
+                    statusText = "NIMS structured response could not be safely normalized."
                 }
             }
         }
@@ -635,7 +600,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // A slow PDF index must not block new structured laboratory batches.
         inventoryWorker.execute {
             val inventory = try {
-                reportRepository.load(cr, seed, restAlreadyAttempted = true)
+                reportRepository.load(cr, seed, restAlreadyAttempted = false)
             } catch (_: IdentityMismatchException) {
                 DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                 runOnUiThread {
@@ -657,7 +622,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
-                } else startPdfIndex(requestId, cr, sources)
+                } else ReportInventoryTrace.event("inventory_only", sources.size)
             }
         }
     }
