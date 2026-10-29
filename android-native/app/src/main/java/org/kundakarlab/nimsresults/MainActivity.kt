@@ -3012,8 +3012,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     color = Color(0xFF102A43))
                                 Text(
                                     if (report != null) (if (report.sourceTag.startsWith("nims_rest_reportList"))
-                                            "REST reportList · "
-                                        else if (report.url.isNotBlank()) "Original NIMS PDF · "
+                                            "REST catalogue · "
+                                        else if (report.url.isNotBlank()) "Original PDF · "
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else LabPanelMatrix.displayDate(entry.date.toString()))
@@ -3047,12 +3047,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val reported = ClinicalPresentation.reportedDate(rows)
                                 .ifBlank { linkedPart?.header?.reportedDate.orEmpty() }
                             if (!expanded) {
-                                Text(
-                                    "Lab: " + accession.ifBlank { "—" } +
-                                        " · Sample: " + rows.firstOrNull()?.sampleNumber.orEmpty().ifBlank { "—" } +
-                                        " · Collected: " + collected.ifBlank { "—" } +
-                                        " · Reported: " + reported.ifBlank { "—" },
-                                    fontSize = 10.sp, color = Color(0xFF486581))
+                                val known = listOfNotNull(
+                                    accession.takeIf(String::isNotBlank)?.let { "Lab $it" },
+                                    rows.firstOrNull()?.sampleNumber
+                                        ?.takeIf(String::isNotBlank)?.let { "Sample $it" },
+                                    collected.takeIf(String::isNotBlank)?.let {
+                                        "Collected " + LabPanelMatrix.displayDateTime(it)
+                                    },
+                                    reported.takeIf(String::isNotBlank)?.let {
+                                        "Reported " + LabPanelMatrix.displayDateTime(it)
+                                    }
+                                )
+                                if (known.isNotEmpty()) Text(known.joinToString(" · "),
+                                    fontSize = 10.sp, color = Color(0xFF486581),
+                                    maxLines = 2)
                             } else {
                                 if (accession.isNotBlank()) Text(
                                     "Lab/study no.: " + accession, fontSize = 11.sp)
@@ -3265,39 +3273,46 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 .ifBlank { report.reportedDate }
                             val restOnly =
                                 report.sourceTag.startsWith("nims_rest_reportList")
-                            if (restOnly && !expanded) {
-                                Text("REST source reportDate: " +
-                                    LabPanelMatrix.displayDate(report.reportedDate.ifBlank {
-                                        report.date
-                                    }) + " · tap Expand for complete source fields",
-                                    fontSize = 11.sp, color = Color(0xFF486581))
+                            if (!expanded) {
+                                if (restOnly) Text(
+                                    "Reported " + LabPanelMatrix.displayDateTime(
+                                        report.reportedDate.ifBlank { report.date }),
+                                    fontSize = 11.sp, color = Color(0xFF486581),
+                                    maxLines = 1)
+                                else if (report.url.isBlank()) Text(
+                                    "Source index only · PDF not supplied",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             } else {
-                            Text("Lab/study no.: " + lab.ifBlank {
-                                if (parts.isNotEmpty()) "Multiple studies / see sections"
-                                else if (restOnly) "Not present in REST record"
-                                else "Not yet extracted"
-                            }, fontSize = 11.sp)
-                            if (report.sampleNumber.isNotBlank()) Text(
-                                "Sample No.: " + report.sampleNumber, fontSize = 11.sp)
-                            if (report.sourceSampleLabText.isNotBlank()) Text(
-                                "Original Sample No/Lab No: " + report.sourceSampleLabText,
-                                fontSize = 11.sp)
-                            if (report.department.isNotBlank()) Text(
-                                "Source laboratory: " + report.department, fontSize = 11.sp)
-                            if (report.reportNumber.isNotBlank()) Text(
-                                "Report No.: " + report.reportNumber, fontSize = 11.sp)
-                            if (report.reportStage.isNotBlank()) Text(
-                                "Report stage: " + report.reportStage, fontSize = 11.sp)
-                            Text("Collection date (report index / verified PDF): " +
-                                (collected.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
-                                    ?: "Not supplied"), fontSize = 11.sp)
-                            Text(
-                                (if (report.sourceTag.startsWith("nims_rest_reportList"))
-                                    "REST source reportDate (not collection time): "
-                                 else "Report-index/PDF reporting timestamp: ") +
-                                (reported.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
-                                    ?: "Not supplied by this source"),
-                                fontSize = 11.sp)
+                                if (restOnly) {
+                                    Text("REST catalogue: only test name and report date are " +
+                                        "available in the captured response. Not a specimen ID.",
+                                        fontSize = 11.sp, color = Color(0xFF66788A))
+                                }
+                                if (lab.isNotBlank()) Text("Lab/study: " + lab,
+                                    fontSize = 11.sp)
+                                if (report.sampleNumber.isNotBlank()) Text(
+                                    "Sample: " + report.sampleNumber, fontSize = 11.sp)
+                                if (report.sourceSampleLabText.isNotBlank()) Text(
+                                    "Original sample/lab: " + report.sourceSampleLabText,
+                                    fontSize = 11.sp)
+                                if (report.department.isNotBlank()) Text(
+                                    "Laboratory: " + report.department, fontSize = 11.sp)
+                                if (report.reportNumber.isNotBlank()) Text(
+                                    "Report no.: " + report.reportNumber, fontSize = 11.sp)
+                                if (report.reportStage.isNotBlank()) Text(
+                                    "Stage: " + report.reportStage, fontSize = 11.sp)
+                                if (collected.isNotBlank()) Text(
+                                    "Collected: " + LabPanelMatrix.displayDateTime(collected),
+                                    fontSize = 11.sp)
+                                if (reported.isNotBlank()) Text(
+                                    (if (restOnly) "REST report date: " else "Reported: ") +
+                                        LabPanelMatrix.displayDateTime(reported),
+                                    fontSize = 11.sp)
+                                if (!restOnly && lab.isBlank() && collected.isBlank() &&
+                                    reported.isBlank()) Text(
+                                    "No accession or timing metadata in this index row. " +
+                                        "Open the original PDF when available.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                             if (expanded && restOnly) {
                                 val catalogCandidates = remember(report.id, current.reports) {
@@ -3323,7 +3338,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if (expanded) {
+                            if (expanded && !restOnly) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
                                     it.header.labNumber
