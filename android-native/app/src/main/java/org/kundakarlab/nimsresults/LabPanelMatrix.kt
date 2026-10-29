@@ -172,8 +172,15 @@ object LabPanelMatrix {
                 params.flatMap { it.byDate.keys }.distinct()
                     .filter { RecentReportDates.parse(it) != null }.sortedDescending()
             else dates
-            Table(panel,visibleDates,params,presentation.size,
-                presentation.count { RecentReportDates.parse(it.date)==null })
+            val visibleObservations = if (clinical)
+                params.sumOf { p -> p.byDate.values.sumOf { it.size } }
+            else source.size
+            val visibleUndated = if (clinical)
+                params.sumOf { p -> p.byDate.filterKeys {
+                    RecentReportDates.parse(it)==null
+                }.values.sumOf { it.size } }
+            else source.count { RecentReportDates.parse(it.date)==null }
+            Table(panel,visibleDates,params,visibleObservations,visibleUndated)
         }
     }
 }
