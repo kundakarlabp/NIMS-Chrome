@@ -4,8 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.android.gms.codescanner.GmsBarcodeScanning
-import com.google.android.gms.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Bundle
