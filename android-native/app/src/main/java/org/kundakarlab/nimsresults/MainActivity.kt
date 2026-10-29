@@ -3008,9 +3008,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     // REST catalogue rows are integrated into the source list
                     // only when no plausible source PDF already represents
                     // that test/date. Raw REST rows remain in diagnostics.
-                    val meaningful = !restOnly ||
-                        SourceMetadataReview.catalogCandidates(
-                            report, current.reports).isEmpty()
+                    val meaningful = (report.url.isNotBlank() ||
+                        report.title.isNotBlank() &&
+                        !report.title.equals("Investigation title unavailable", true)) &&
+                        (!restOnly || SourceMetadataReview.catalogCandidates(
+                            report, current.reports).isEmpty())
                     meaningful && (query.isBlank() ||
                         UnifiedResultsFeed.filterEntries(
                             listOf(entry), query, "All", null).isNotEmpty())
@@ -3561,9 +3563,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             } else {
                                 if (restOnly) {
-                                    Text("REST catalogue: only test name and report date are " +
-                                        "available in the captured response. Not a specimen ID.",
-                                        fontSize = 11.sp, color = Color(0xFF66788A))
+                                    Text("NIMS REST catalogue · not specimen verified",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                    if (report.sourceOrderId.isNotBlank()) Text(
+                                        "Requisition ID: " + report.sourceOrderId,
+                                        fontSize = 11.sp, color = Color(0xFF486581))
                                 }
                                 if (lab.isNotBlank()) Text("Lab/study: " + lab,
                                     fontSize = 11.sp)
@@ -3642,9 +3646,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     "Linked investigations: " + associated.joinToString(" · "),
                                     fontSize = 11.sp, color = Color(0xFF102A43))
                                 if (parts.isEmpty()) {
-                                    Text("Open this PDF to index all readable pages. " +
-                                        "Unverified PDF text is never assigned to another specimen.",
-                                        fontSize = 11.sp, color = Color(0xFF875B22))
+                                    Text("Source PDF not indexed yet.",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
                                 } else {
                                     val visibleParts = if (showEntireSource) parts else parts.take(3)
                                     visibleParts.forEach { part ->
@@ -3690,9 +3693,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if (report.url.isNotBlank()) {
+                            if (expanded && report.url.isNotBlank()) {
                                 TextButton(onClick = { openReport(report.url) }) {
-                                    Text("Open complete original PDF")
+                                    Text("View original PDF", fontSize = 11.sp)
                                 }
                             }
                             if (expanded && report.sourceRow.isNotBlank()) {
