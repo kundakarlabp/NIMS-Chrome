@@ -2988,11 +2988,21 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     (query.isBlank() || UnifiedResultsFeed.filterEntries(
                         listOf(it), query, "All", null).isNotEmpty())
             }
-            "Report index / PDFs" -> baseFeed.filter {
-                it.report != null &&
-                    !it.report.sourceTag.startsWith("nims_rest_reportList") &&
-                    (query.isBlank() || UnifiedResultsFeed.filterEntries(
-                        listOf(it), query, "All", null).isNotEmpty())
+            "Report index / PDFs" -> baseFeed.filter { entry ->
+                val report = entry.report
+                if (report == null) false
+                else {
+                    val restOnly = report.sourceTag.startsWith("nims_rest_reportList")
+                    // REST catalogue rows are integrated into the source list
+                    // only when no plausible source PDF already represents
+                    // that test/date. Raw REST rows remain in diagnostics.
+                    val meaningful = !restOnly ||
+                        SourceMetadataReview.catalogCandidates(
+                            report, current.reports).isEmpty()
+                    meaningful && (query.isBlank() ||
+                        UnifiedResultsFeed.filterEntries(
+                            listOf(entry), query, "All", null).isNotEmpty())
+                }
             }
             else -> feed.filter { it.report == null }
             }
@@ -3030,8 +3040,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("Investigations" to "Results",
-                        "Report index / PDFs" to "Original PDFs",
-                        "REST API" to "REST catalogue",
+                        "Report index / PDFs" to "Source reports",
                         "Enquiry orders" to "Orders").forEach { (name, label) ->
                         FilterChip(selected = subview == name,
                             onClick = {
