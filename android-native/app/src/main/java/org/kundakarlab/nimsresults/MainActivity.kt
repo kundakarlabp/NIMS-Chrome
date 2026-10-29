@@ -3456,14 +3456,34 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val restOnly =
                                 report.sourceTag.startsWith("nims_rest_reportList")
                             if (!expanded) {
-                                if (restOnly) Text(
-                                    "REST report date " + LabPanelMatrix.displayDateTime(
+                                if (restOnly) {
+                                    Text("REST report date · " + LabPanelMatrix.displayDateTime(
                                         report.reportedDate.ifBlank { report.date }),
-                                    fontSize = 11.sp, color = Color(0xFF486581),
-                                    maxLines = 1)
-                                else if (report.url.isBlank()) Text(
-                                    "Source index only · PDF not supplied",
-                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                        fontSize = 11.sp, color = Color(0xFF486581),
+                                        maxLines = 1)
+                                } else {
+                                    val reportSummary = listOfNotNull(
+                                        report.orderDate.takeIf { it.isNotBlank() }?.let {
+                                            "Requisition " + LabPanelMatrix.displayDateTime(it)
+                                        },
+                                        reported.takeIf { it.isNotBlank() }?.let {
+                                            "Report " + LabPanelMatrix.displayDateTime(it)
+                                        },
+                                        report.department.takeIf { it.isNotBlank() }?.let {
+                                            "Lab " + it
+                                        },
+                                        report.labNumber.takeIf { it.isNotBlank() }?.let {
+                                            "Study " + it
+                                        }
+                                    )
+                                    if (reportSummary.isNotEmpty()) Text(
+                                        reportSummary.joinToString(" · "), fontSize = 10.sp,
+                                        color = Color(0xFF486581), maxLines = 3)
+                                    if (report.url.isNotBlank()) TextButton(
+                                        onClick = { openReport(report.url) }) {
+                                        Text("View original report", fontSize = 11.sp)
+                                    }
+                                }
                             } else {
                                 if (restOnly) {
                                     Text("REST catalogue: only test name and report date are " +
@@ -3599,9 +3619,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 TextButton(onClick = { openReport(report.url) }) {
                                     Text("Open complete original PDF")
                                 }
-                            } else if (!restOnly && expanded) Text(
-                                "No PDF link is present in this source-index row.",
-                                fontSize = 11.sp, color = Color(0xFF875B22))
+                            }
                             if (expanded && report.sourceRow.isNotBlank()) {
                                 TextButton(onClick = { showEntireSource = !showEntireSource }) {
                                     Text(if (showEntireSource) "Hide complete original source record"
