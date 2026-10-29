@@ -50,6 +50,21 @@ class ReportActivity : Activity() {
     private lateinit var horizontalScroll: HorizontalScrollView
     private var zoom = 1f
     private var restoredPage = 0
+    private var pinchDetector: ScaleGestureDetector? = null
+    private var swipeDetector: GestureDetector? = null
+
+    // Receive swipe/pinch even if a nested ScrollView intercepts MOVE events.
+    // Preserve normal taps, scrolling, and all accessible PDF controls.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val pinch=pinchDetector
+        if (pinch != null) {
+            pinch.onTouchEvent(event)
+            val flung = if (!pinch.isInProgress)
+                swipeDetector?.onTouchEvent(event) == true else false
+            if (pinch.isInProgress || flung) return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
     private var sourceUrl = ""
     private var expectedCr = ""
     private lateinit var readTextButton: Button
@@ -165,11 +180,8 @@ class ReportActivity : Activity() {
                     return true
                 }
             })
-        image.setOnTouchListener { _, event ->
-            pinch.onTouchEvent(event)
-            val swiped = if (!pinch.isInProgress) swipe.onTouchEvent(event) else false
-            pinch.isInProgress || swiped
-        }
+        pinchDetector = pinch
+        swipeDetector = swipe
 
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
