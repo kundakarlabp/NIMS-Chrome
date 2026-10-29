@@ -2991,6 +2991,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var showEntireSource by remember(current.patient.crNo, entry.key) {
                     mutableStateOf(false)
                 }
+                var showRawJson by remember(current.patient.crNo, entry.key) {
+                    mutableStateOf(false)
+                }
                 val report = entry.report
                 val rows = entry.rows
                 // No matching work while scrolling collapsed cards. On expansion,
@@ -3094,11 +3097,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (reported.isNotBlank()) Text(
                                     "Reported: " + LabPanelMatrix.displayDateTime(reported),
                                     fontSize = 11.sp)
-                                if (accession.isBlank() || collected.isBlank() ||
-                                    reported.isBlank()) Text(
-                                    "Some lab/specimen or timing metadata is absent in the " +
-                                        "structured feed; original report review may be required.",
-                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                // Missing metadata stays absent; avoid a repeated
+                                // warning on every card. The PDF action below
+                                // provides the independent provenance route.
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
@@ -3140,16 +3141,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (verifiedIndex == null && unlinkedSources.isNotEmpty()) {
                                     HorizontalDivider()
-                                    Text("Candidate source reports · identity NOT verified",
+                                    Text("Possible source PDF · verify specimen",
                                         fontSize = 11.sp, color = Color(0xFF875B22),
                                         fontWeight = FontWeight.SemiBold)
-                                    Text("A matching title/date is not proof of the same specimen. " +
-                                        "Confirm the CR, accession and sample in the PDF.",
-                                        fontSize = 10.sp, color = Color(0xFF66788A))
                                     unlinkedSources.take(3).forEach { source ->
                                         Text(source.title + " · " +
                                             LabPanelMatrix.displayDate(source.date),
-                                            fontSize = 11.sp,
+                                            fontSize = 11.sp, maxLines = 2,
                                             fontWeight = FontWeight.Medium)
                                         val verifiedFields = listOfNotNull(
                                             source.labNumber.takeIf { it.isNotBlank() }?.let {
@@ -3159,7 +3157,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 "Sample: " + it
                                             },
                                             source.collectionDateTime.takeIf { it.isNotBlank() }?.let {
-                                                "Collected: " + it
+                                                "Collected: " + LabPanelMatrix.displayDateTime(it)
                                             },
                                             source.reportNumber.takeIf { it.isNotBlank() }?.let {
                                                 "Report: " + it
@@ -3170,7 +3168,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontSize = 10.sp, color = Color(0xFF486581))
                                         if (source.url.isNotBlank()) TextButton(
                                             onClick = { openReport(source.url) }) {
-                                            Text("Open candidate PDF · verify specimen",
+                                            Text("Open original PDF · unverified",
                                                 fontSize = 11.sp)
                                         }
                                     }
@@ -3189,24 +3187,55 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 val display = if (category == "Raw" || preferred.isEmpty())
                                     rows else preferred
                                 display.forEach { result ->
-                                    Text(result.parameter.ifBlank { "Result" } +
-                                        if (result.unit.isNotBlank()) " (" + result.unit + ")"
-                                        else "", fontSize = 11.sp,
-                                        color = Color(0xFF486581),
-                                        fontWeight = FontWeight.SemiBold)
-                                    Text(ClinicalPresentation.displayValue(result),
-                                        fontSize = 12.sp,
-                                        color = abnormalColor(result.abnormal))
-                                    if (result.refRange.isNotBlank()) Text(
-                                        "Reference: " + result.refRange, fontSize = 10.sp)
+                                    val compact = result.numericValue?.isFinite() == true &&
+                                        result.valueText.length <= 35
+                                    if (compact) {
+                                        Row(Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically) {
+                                            Text(result.parameter.ifBlank { result.test },
+                                                modifier = Modifier.weight(1f),
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF486581), maxLines = 2)
+                                            Text(ClinicalPresentation.displayValue(result) +
+                                                (if (result.unit.isBlank()) ""
+                                                 else " " + result.unit),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = abnormalColor(result.abnormal))
+                                        }
+                                        if (result.refRange.isNotBlank())
+                                            Text("Ref: " + result.refRange,
+                                                fontSize = 10.sp, color = Color(0xFF66788A))
+                                    } else {
+                                        Text(result.parameter.ifBlank { result.test },
+                                            fontSize = 11.sp, color = Color(0xFF486581),
+                                            fontWeight = FontWeight.SemiBold)
+                                        Text(ClinicalPresentation.displayValue(result),
+                                            fontSize = 12.sp,
+                                            color = abnormalColor(result.abnormal),
+                                            maxLines = if (showEntireSource) Int.MAX_VALUE else 7)
+                                        if (result.refRange.isNotBlank())
+                                            Text("Ref: " + result.refRange, fontSize = 10.sp)
+                                    }
                                 }
                                 if (category == "Raw") {
-                                    val rawForTest = remember(current.rawRows, entry.title) {
-                                        current.rawRows.filter { it.investigation == entry.title }
+                                    TextButton(onClick = { showRawJson = !showRawJson }) {
+                                        Text(if (showRawJson) "Hide raw JSON"
+                                            else "Show original source JSON",
+                                            fontSize = 11.sp)
                                     }
-                                    rawForTest.forEach { source ->
-                                        Text("Original source row " + source.rowIndex, fontSize = 11.sp)
-                                        Text(source.sourceJson, fontSize = 10.sp, color = Color(0xFF486581))
+                                    if (showRawJson) {
+                                        val rawForTest = remember(current.rawRows, entry.title) {
+                                            current.rawRows.filter {
+                                                it.investigation == entry.title
+                                            }
+                                        }
+                                        rawForTest.forEach { source ->
+                                            Text("Source row " + source.rowIndex, fontSize = 10.sp)
+                                            Text(source.sourceJson, fontSize = 10.sp,
+                                                color = Color(0xFF486581))
+                                        }
                                     }
                                 }
                                 if (preferred.size < rows.size) Text(
