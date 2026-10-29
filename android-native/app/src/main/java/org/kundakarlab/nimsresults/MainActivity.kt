@@ -3152,8 +3152,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 "Report stage: " + report.reportStage, fontSize = 11.sp)
                             Text("Collection date (report index / verified PDF): " +
                                 collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
-                            Text("Reporting date/time (verified PDF only): " +
-                                reported.ifBlank { "Not in this report-index row" }, fontSize = 11.sp)
+                            Text(
+                                (if (report.sourceTag.startsWith("nims_rest_reportList"))
+                                    "REST source reportDate (not collection time): "
+                                 else "Report-index/PDF reporting timestamp: ") +
+                                reported.ifBlank { "Not supplied by this source" },
+                                fontSize = 11.sp)
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
