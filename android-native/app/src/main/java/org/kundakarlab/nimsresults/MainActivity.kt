@@ -697,7 +697,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 worker.execute {
                     if (requestId == activeRequestId) snapshotCache.save(withInventory)
                 }
-                apiReportCount = sources.size
+                val htmlCount = sources.count {
+                    !it.sourceTag.startsWith("nims_rest_reportList")
+                }
+                val restCount = sources.size - htmlCount
+                apiReportCount = htmlCount
                 apiStage = if (sources.any {
                     it.sourceTag == "nims_rest_reportList_context"
                 }) "rest_context_bound_metadata_not_specimen_linked"
@@ -705,7 +709,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 else "source_inventory_missing"
                 if (sources.isNotEmpty()) historyStatus =
                     current.results.size.toString() + " structured fields · " +
-                        sources.size + " NIMS source-index rows (separate identifiers)"
+                        htmlCount + " report-index rows · " +
+                        restCount + " REST metadata records (identities separate)"
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -2689,13 +2694,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             }
             "Report index / PDFs" -> baseFeed.filter {
                 it.report != null &&
+                    !it.report.sourceTag.startsWith("nims_rest_reportList") &&
                     (query.isBlank() || UnifiedResultsFeed.filterEntries(
                         listOf(it), query, "All", null).isNotEmpty())
             }
             else -> feed.filter { it.report == null }
         }
         val studyCount = feed.count { it.report == null }
-        val sourceCount = baseFeed.count { it.report != null }
+        val sourceCount = baseFeed.count {
+            it.report != null &&
+                !it.report.sourceTag.startsWith("nims_rest_reportList")
+        }
+        val restCount = baseFeed.count {
+            it.report?.sourceTag?.startsWith("nims_rest_reportList") == true
+        }
         LaunchedEffect(subview) { scroll.scrollToItem(0) }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
@@ -2703,7 +2715,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigation groups · $sourceCount source-index entries",
+                Text("$studyCount investigation groups · $sourceCount report-index rows · " +
+                    "$restCount REST entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2734,7 +2747,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         "come from Custom Sheet.",
                         fontSize = 10.sp, color = Color(0xFF875B22))
                 }
-                if (pdfTotalCount > 0) Text(
+                if (pdfTotalCount > 0 && subview == "Report index / PDFs") Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
@@ -2765,9 +2778,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                Text("Source results and report metadata remain separate until " +
-                    "investigation identity is independently verified.",
-                    fontSize = 10.sp, color = Color(0xFF66788A))
+                if (subview == "Investigations") {
+                    Text("Source values remain independent of report metadata until " +
+                        "event identity can be verified.", fontSize = 10.sp,
+                        color = Color(0xFF66788A))
+                }
                 }
             }
             if (subview == "Enquiry orders") {
@@ -2849,7 +2864,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
             }
             if (subview != "Enquiry orders" && visibleFeed.isEmpty()) item {
-                Text("No investigations or source-index entries match these filters.",
+                Text(if (subview == "REST API")
+                    "No REST records retained. Check REST diagnostics for status and patient context."
+                else if (subview == "Report index / PDFs")
+                    "No report-index entries match this search."
+                else "No investigations match these filters.",
                     color = Color(0xFF66788A))
             }
             items(visibleFeed, key = { it.key }) { entry ->
