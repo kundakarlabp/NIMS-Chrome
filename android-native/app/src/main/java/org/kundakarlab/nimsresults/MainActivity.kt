@@ -3206,7 +3206,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         resultLinks.candidates.forEach { candidate ->
                                             TextButton(onClick = { openReport(candidate.url) }) {
                                                 Text(candidate.title + " · " +
-                                                    candidate.date, fontSize = 11.sp)
+                                                    LabPanelMatrix.displayDate(candidate.date), fontSize = 11.sp)
                                             }
                                         }
                                     }
@@ -3253,12 +3253,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if (report.reportStage.isNotBlank()) Text(
                                 "Report stage: " + report.reportStage, fontSize = 11.sp)
                             Text("Collection date (report index / verified PDF): " +
-                                collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
+                                collected.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
+                                    ?: "Not supplied", fontSize = 11.sp)
                             Text(
                                 (if (report.sourceTag.startsWith("nims_rest_reportList"))
                                     "REST source reportDate (not collection time): "
                                  else "Report-index/PDF reporting timestamp: ") +
-                                reported.ifBlank { "Not supplied by this source" },
+                                reported.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
+                                    ?: "Not supplied by this source",
                                 fontSize = 11.sp)
                             }
                             if (expanded) {
