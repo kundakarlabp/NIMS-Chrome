@@ -353,10 +353,11 @@ class ReportActivity : Activity() {
                     }
                     return
                 }
-                if (pages.any { it.isNotBlank() } &&
+                if (pages.any { it.isNotBlank() }) {
+                    // One bounded PDF source cache is enough for navigation.
+                    // Avoid retaining a second 160k-char copy in this Activity.
                     ReportTitleCache.learnPages(sourceUrl, pages, expectedCr,
-                        digestFile(file))) {
-                    cachedExtractedText = pages.joinToString("\n\n").take(160000)
+                        digestFile(file))
                 }
             }
             PdfPerformanceTrace.record("identity_and_extract_ms",
