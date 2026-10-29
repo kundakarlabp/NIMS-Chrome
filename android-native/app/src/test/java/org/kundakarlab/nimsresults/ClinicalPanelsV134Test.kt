@@ -55,7 +55,9 @@ class ClinicalPanelsV134Test {
         val other=clinical.single()
         assertEquals(LabPanelMatrix.Panel.OTHERS,other.panel)
         assertEquals(listOf("TSH"),other.parameters.map { it.title })
-        assertEquals(5,other.observationCount)
+        // Clinical view counts only actually displayed repeated numeric values;
+        // the full raw report remains independently available.
+        assertEquals(2,other.observationCount)
         // The comprehensive source view has not lost singleton values.
         assertEquals(4,LabPanelMatrix.build(rows).single().parameters.size)
     }
