@@ -2201,6 +2201,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var showPdfChoices by remember(episode.key) {
                     mutableStateOf(false)
                 }
+                var expandCulture by remember(episode.key) {
+                    mutableStateOf(false)
+                }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2236,10 +2239,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 maxLines = 3)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = {
-                                microFilter = "All"
-                                selectedTab = ResultsTab.MICROBIOLOGY
-                            }) { Text("Full culture", fontSize = 11.sp) }
+                            TextButton(onClick = { expandCulture=!expandCulture }) {
+                                Text(if(expandCulture) "Close details" else "Full culture",
+                                    fontSize=11.sp)
+                            }
                             if (candidatePdfs.size == 1) {
                                 TextButton(onClick = { openReport(candidatePdfs[0].url) }) {
                                     Text("Open PDF · verify", fontSize = 11.sp)
@@ -2248,6 +2251,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 TextButton(onClick = { showPdfChoices = !showPdfChoices }) {
                                     Text("PDFs (${candidatePdfs.size})", fontSize = 11.sp)
                                 }
+                            }
+                        }
+                        if(expandCulture) {
+                            val informative=ClinicalReportRenderer.preferredRows(episode.rows)
+                            informative.forEach { result ->
+                                if(result.parameter.isNotBlank() &&
+                                    !result.parameter.equals("Result",true)) Text(
+                                    result.parameter,fontSize=11.sp,
+                                    fontWeight=FontWeight.SemiBold,
+                                    color=Color(0xFF486581))
+                                Text(ClinicalChronology.clinicalText(result.valueText),
+                                    fontSize=12.sp,color=Color(0xFF102A43))
                             }
                         }
                         if (showPdfChoices) {
@@ -2272,12 +2287,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         fontSize = 12.sp)
                 }
             }
-            item {
-                OutlinedButton(onClick = { selectedTab = ResultsTab.MICROBIOLOGY },
-                    modifier = Modifier.fillMaxWidth()) {
-                    Text("Full microbiology and source reports", fontSize = 11.sp)
-                }
-            }
+
         }
     }
 
@@ -2771,7 +2781,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text(if (isCulture) "Culture finding" else "Laboratory finding",
                                 color = Color(0xFF486581),
                                 fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            Text(parts.culture, fontSize = 13.sp,
+                            Text(ClinicalChronology.clinicalText(parts.culture), fontSize = 13.sp,
                                 maxLines = if (expanded) Int.MAX_VALUE else 5)
                             Spacer(Modifier.height(7.dp))
                         }
@@ -2805,7 +2815,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         clinical.filterNot { it in reportRows }.forEach { row ->
                             Text(row.parameter, fontSize = 11.sp,
                                 color = Color(0xFF486581), fontWeight = FontWeight.SemiBold)
-                            Text(row.valueText, fontSize = 13.sp,
+                            Text(ClinicalChronology.clinicalText(row.valueText), fontSize = 13.sp,
                                 maxLines = if (expanded) Int.MAX_VALUE else 5)
                         }
                         if (clinical.any { it.valueText.length > 120 }) {
