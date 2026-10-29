@@ -15,7 +15,15 @@ object SourceMetadataReview {
         val value = key(name)
         return when {
             value == "cbc" || value.startsWith("cbc") ||
-                value == "completebloodcount" || value == "completehemogram" -> "cbc"
+                value.startsWith("cbp") || value == "completebloodcount" ||
+                value == "completebloodpicture" || value.startsWith("hemogram") ||
+                value.startsWith("haemogram") || value == "completehemogram" -> "cbc"
+            value.startsWith("electrolyte") -> "electrolytes"
+            value.startsWith("liverfunctiontest") || value == "lft" -> "lft"
+            value.startsWith("renalfunctiontest") || value.startsWith("kidneyfunctiontest") ||
+                value == "rft" || value == "kft" -> "rft"
+            value == "serumcreatinine" || value == "creatinine" -> "creatinine"
+            value == "serumurea" || value == "urea" -> "urea"
             else -> value
         }
     }
