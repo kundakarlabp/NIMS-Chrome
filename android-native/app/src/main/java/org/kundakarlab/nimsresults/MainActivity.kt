@@ -1469,7 +1469,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     listOf("All", "Source PDFs", "Results", "Microbiology").forEach { name ->
                         FilterChip(selected = filter == name,
                             onClick = { filter = name },
-                            label = { Text(label, fontSize = 11.sp) })
+                            label = { Text(name, fontSize = 11.sp) })
                     }
                 }
                 Text(shown.size.toString() + " entries · " +
