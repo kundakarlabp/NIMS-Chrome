@@ -25,6 +25,15 @@ object LabPanelMatrix {
 
     fun canonicalDate(raw: String): String =
         RecentReportDates.parse(raw)?.toString() ?: raw.trim()
+    /** Display verified source dates as DD-MM-YYYY, preserving any clock time.
+     * A timestamp's provenance remains that of its source field. */
+    fun displayDateTime(raw: String): String {
+        val date = RecentReportDates.parse(raw) ?: return raw
+        val clock = Regex("""\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\b""")
+            .find(raw)?.value
+        return date.format(formatter) + (clock?.let { " " + it } ?: "")
+    }
+
 
     private fun clean(value:String)=value.lowercase(Locale.US)
         .replace(Regex("[^a-z0-9]"),"")
