@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults"
         minSdk = 26
         targetSdk = 35
-        versionCode = 35
-        versionName = "1.0.34-native"
+        versionCode = 36
+        versionName = "1.0.35-native"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
@@ -45,6 +45,8 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
+    // Resolve an AndroidX Fragment version compatible with Activity Result APIs.
+    implementation("androidx.fragment:fragment:1.8.9")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
@@ -52,6 +54,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("org.jsoup:jsoup:1.18.3")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 

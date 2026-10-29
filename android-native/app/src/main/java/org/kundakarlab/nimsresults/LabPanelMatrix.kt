@@ -106,6 +106,29 @@ object LabPanelMatrix {
             it.valueText.length <= 40 }
             .mapNotNull { RecentReportDates.parse(it.date) }.distinct().size >= 2
 
+    private val missingValues = setOf("", "-", "--", "na", "n/a", "nil",
+        "not reported", "not reported in structured feed", "not available",
+        "not done", "no result", "null", "none")
+
+    /** Clinical sheets contain measurements, not raw administrative placeholders.
+     * All excluded observations remain in All Results / Raw. */
+    fun clinicallyUseful(row: LabResult, group: Panel = panel(row)): Boolean {
+        val value = row.valueText.trim()
+        if (value.lowercase(Locale.US) in missingValues ||
+            value.contains("not reported in structured", ignoreCase = true) ||
+            ClinicalPresentation.isTechnical(row) ||
+            ClinicalReportRenderer.isUninterpretedCode(row)) return false
+        if (row.numericValue?.isFinite() == true && value.length <= 40) return true
+        if (group != Panel.HEMOGRAM || value.length > 180) return false
+        val parameter = clean(row.parameter)
+        val report = clean(row.test)
+        val smear = report.contains("smear") || parameter.contains("smear") ||
+            parameter in setOf("rbcs","wbcs","platelets","rbcsmorphology",
+                "wbcmorphology","plateletmorphology")
+        return smear && value.length in 2..180 &&
+            !value.equals("others",true) && !value.equals("result",true)
+    }
+
     /** Clinical mode hides singleton/narrative Others without changing source records.
      * Raw mode uses the original comprehensive model for audit/research. */
     fun build(rows: List<LabResult>, clinical: Boolean = false): List<Table> {
@@ -114,13 +137,16 @@ object LabPanelMatrix {
         return Panel.entries.mapNotNull { panel ->
             val source=separated[panel].orEmpty()
             if(source.isEmpty()) return@mapNotNull null
-            val dates=source.map { canonicalDate(it.date) }
+            val presentation = if (clinical)
+                source.filter { clinicallyUseful(it, panel) } else source
+            if (presentation.isEmpty()) return@mapNotNull null
+            val dates=presentation.map { canonicalDate(it.date) }
                 .filter { RecentReportDates.parse(it)!=null }
                 .distinct().sortedDescending()
             val keys=linkedMapOf<String, MutableList<LabResult>>()
             val labels=linkedMapOf<String,String>()
             val units=linkedMapOf<String,String>()
-            for (row in source) {
+            for (row in presentation) {
                 val name=row.parameter.ifBlank { row.test }.trim()
                 // A generic 'Result' under different named tests is not the
                 // same measurement, especially in the Other panel.
@@ -146,8 +172,15 @@ object LabPanelMatrix {
                 params.flatMap { it.byDate.keys }.distinct()
                     .filter { RecentReportDates.parse(it) != null }.sortedDescending()
             else dates
-            Table(panel,visibleDates,params,source.size,
-                source.count { RecentReportDates.parse(it.date)==null })
+            val visibleObservations = if (clinical)
+                params.sumOf { p -> p.byDate.values.sumOf { it.size } }
+            else source.size
+            val visibleUndated = if (clinical)
+                params.sumOf { p -> p.byDate.filterKeys {
+                    RecentReportDates.parse(it)==null
+                }.values.sumOf { it.size } }
+            else source.count { RecentReportDates.parse(it.date)==null }
+            Table(panel,visibleDates,params,visibleObservations,visibleUndated)
         }
     }
 }
