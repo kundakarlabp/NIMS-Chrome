@@ -24,6 +24,10 @@ object AppDiagnostics {
         if (bundle == null) return "audit.no_patient_bundle=true\n"
         val rows = bundle.results
         val reports = bundle.reports
+        val sourceReports = reports.filterNot {
+            it.sourceTag.startsWith("nims_rest_reportList")
+        }
+        val restRows = reports.size - sourceReports.size
         val enquiry = EnquirySourceBridge.coverage(bundle)
         val groups = rows.groupBy {
             listOf(it.test, it.date, it.labNumber, it.sampleNumber,
@@ -43,8 +47,8 @@ object AppDiagnostics {
         val sections = ResultSection.entries.associateWith { section ->
             groups.count { (id, _) -> ResultSections.of(id[0]) == section }
         }
-        val sourceIds = reports.map { it.url.ifBlank { "id:" + it.id } }.toSet()
-        val completeHeaders = reports.count {
+        val sourceIds = sourceReports.map { it.url.ifBlank { "id:" + it.id } }.toSet()
+        val completeHeaders = sourceReports.count {
             ReportTitleCache.header(it.url)?.crNo == bundle.patient.crNo
         }
         val medicalCodes = rows.count { ClinicalReportRenderer.isUninterpretedCode(it) }
@@ -57,12 +61,12 @@ object AppDiagnostics {
             RecentReportDates.parse(v.firstOrNull()?.date.orEmpty()) == null
         }
         val lastWeek = java.time.LocalDate.now()
-        val recentIndex = reports.count {
+        val recentIndex = sourceReports.count {
             RecentReportDates.isLastWeek(RecentReportDates.dateFor(it).first, lastWeek)
         }
         val findings = buildList {
-            if (reports.isEmpty()) add("SOURCE_INVENTORY_EMPTY")
-            if (reports.any { it.url.isBlank() }) add("SOURCE_PDF_URL_MISSING")
+            if (sourceReports.isEmpty()) add("SOURCE_INVENTORY_EMPTY")
+            if (sourceReports.any { it.url.isBlank() }) add("SOURCE_PDF_URL_MISSING")
             if (withoutId > 0) add("STRUCTURED_SPECIMEN_ID_NOT_SUPPLIED")
             if (ambiguous > 0) add("AMBIGUOUS_SOURCE_IDENTITY")
             if (dateConflict > 0) add("SOURCE_DATE_DISAGREEMENT")
@@ -70,7 +74,7 @@ object AppDiagnostics {
             if (rows.isNotEmpty() && groups.any { (k, _) -> k[2].isBlank() })
                 add("RESULT_ACCESSION_NOT_SUPPLIED")
             if (unparsableDates > 0) add("UNRECOGNIZED_RESULT_DATES")
-            if (reports.any { OpaqueReportTitles.isCode(it.title) })
+            if (sourceReports.any { OpaqueReportTitles.isCode(it.title) })
                 add("OPAQUE_REPORT_INDEX_LABELS")
         }
         return buildString {
@@ -92,12 +96,15 @@ object AppDiagnostics {
             appendLine("audit.enquiry_report_index_unmatched=" + enquiry.unmatched)
             appendLine("audit.enquiry_report_index_ambiguous=" + enquiry.ambiguous)
             appendLine("audit.enquiry_report_index_missing_ids=" + enquiry.missingIds)
-            appendLine("audit.source_index_entries=" + reports.size)
+            appendLine("audit.source_index_entries=" + sourceReports.size)
+            appendLine("audit.rest_metadata_entries=" + restRows)
+            appendLine("audit.rest_context_bound_entries=" +
+                reports.count { it.sourceTag == "nims_rest_reportList_context" })
             appendLine("audit.unique_source_documents=" + sourceIds.size)
-            appendLine("audit.source_PDF_links=" + reports.count { it.url.isNotBlank() })
+            appendLine("audit.source_PDF_links=" + sourceReports.count { it.url.isNotBlank() })
             appendLine("audit.source_PDF_headers_CR_checked=" + completeHeaders)
             appendLine("audit.source_titles_opaque=" +
-                reports.count { OpaqueReportTitles.isCode(it.title) })
+                sourceReports.count { OpaqueReportTitles.isCode(it.title) })
             appendLine("audit.result_groups_with_accession=" +
                 groups.count { (id, _) -> id[2].isNotBlank() })
             appendLine("audit.result_groups_no_accession=" +
