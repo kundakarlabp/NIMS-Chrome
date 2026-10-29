@@ -1335,6 +1335,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(subtitle, fontSize = 10.sp, maxLines = 1,
                         color = Color(0xFF486581),
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    if (apiStage == "encrypted_cache_not_live_verified") Text(
+                        "CACHED · tap ↻ for live NIMS results",
+                        fontSize = 10.sp, color = Color(0xFF875B22), maxLines = 1)
                 }
                 val favorite = shelfEntries.firstOrNull { it.cr == current.patient.crNo }
                     ?.lists?.contains("Favorites") == true
@@ -2374,6 +2377,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(value.reportedDate.isNotBlank()) Text(
                                     "Reported: "+LabPanelMatrix.displayDateTime(
                                         value.reportedDate),fontSize=10.sp)
+                            }
+                            val pdfChoices = remember(chosen, current.reports) {
+                                SourceMetadataReview.candidates(chosen, current.reports)
+                                    .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                            }
+                            if (pdfChoices.isNotEmpty()) {
+                                Text(if (pdfChoices.size == 1) "Possible source PDF" else
+                                    "${pdfChoices.size} possible source PDFs",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
+                                pdfChoices.take(5).forEach { candidate ->
+                                    TextButton(onClick={openReport(candidate.url)}) {
+                                        Text("Open PDF · " +
+                                            LabPanelMatrix.displayDate(candidate.date) +
+                                            if (candidate.labNumber.isBlank()) ""
+                                            else " · " + candidate.labNumber,
+                                            fontSize=11.sp)
+                                    }
+                                }
+                                Text("Source PDF candidate only · accession unverified",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
                             }
                             TextButton(onClick={chosen=emptyList()}) {
                                 Text("Close detail",fontSize=11.sp)
