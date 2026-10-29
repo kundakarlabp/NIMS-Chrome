@@ -27,7 +27,14 @@ object IdFocusIndex {
             ClinicalPresentation.isTechnical(row)) return -1
         val param=key(row.parameter)
         val test=key(row.test)
-        // Explicit parameter identity is strongest. Guard CRP from hsCRP.
+        // A report explicitly labelled high-sensitivity CRP must not be indexed
+        // as standard CRP merely because its inner row is labelled "CRP".
+        // hsCRP is a distinct assay, not an interchangeable measurement.
+        val highSensitivity = markers[1].aliases
+        if (param in highSensitivity || test in highSensitivity ||
+            highSensitivity.any { test == it + "quantitative" ||
+                test == it + "result" || test == it + "test" }) return 1
+        // Explicit parameter identity is strongest after assay specificity.
         for ((index, marker) in markers.withIndex()) {
             if (param in marker.aliases) return index
         }
