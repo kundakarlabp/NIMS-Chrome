@@ -247,7 +247,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     bundle = previous
                     crInput = previous.patient.crNo
                     apiStage = "encrypted_cache_not_live_verified"
-                    apiReportCount = previous.reports.size
+                    // Keep authenticated source-index rows separate from
+                    //  test/date-only REST metadata in restored snapshots.
+                    apiReportCount = previous.reports.count {
+                        !it.sourceTag.startsWith("nims_rest_reportList")
+                    }
                     pdfTotalCount = previous.reports.map { it.url }
                         .filter(String::isNotBlank).distinct().size
                     historyStatus = "Cached " + previous.results.size + " result fields · " +
