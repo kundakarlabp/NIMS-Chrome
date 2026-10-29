@@ -2119,7 +2119,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var period by remember(current.patient.crNo) { mutableStateOf("All") }
-        var perPage by remember(current.patient.crNo) { mutableStateOf(4) }
+        var perPage by remember(current.patient.crNo) { mutableStateOf(2) }
         val allRows = remember(current.results) {
             current.results.filterNot { isMicro(it) }
         }
@@ -2152,15 +2152,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         row.valueText + " " + row.date).contains(query,ignoreCase=true))
             }
         }
-        val tables = remember(filtered) { LabPanelMatrix.build(filtered) }
+        val tables = remember(filtered,kind) {
+            LabPanelMatrix.build(filtered, clinical = kind == "Clinical")
+        }
         LazyColumn(state=scroll, modifier=Modifier.fillMaxSize(),
             contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
             verticalArrangement=Arrangement.spacedBy(8.dp)) {
             item {
-                Text("Laboratory comparison", fontWeight=FontWeight.Bold,fontSize=17.sp)
-                Text("Combined source values in three clinical panels; each column is " +
-                    "a result date, not an inferred collection/reporting timestamp.",
-                    fontSize=11.sp,color=Color(0xFF66788A))
+                Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
+                    fontSize=14.sp)
+                if (kind == "Clinical") Text(
+                    "Renal → LFT → electrolytes · Hb → TLC → DLC → platelets → ESR → smear",
+                    fontSize=10.sp,color=Color(0xFF486581),maxLines=2)
                 OutlinedTextField(value=query,onValueChange={ query=it },
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
                     placeholder={ Text("Search test, parameter, result or date") })
@@ -2181,13 +2184,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Row(verticalAlignment=Alignment.CenterVertically,
                     horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     Text("Date columns:",fontSize=11.sp,color=Color(0xFF66788A))
-                    listOf(4,8).forEach { count ->
+                    listOf(2,4).forEach { count ->
                         FilterChip(selected=perPage==count,onClick={perPage=count},
                             label={Text(count.toString(),fontSize=11.sp)})
                     }
                 }
-                Text("${filtered.size} source values · ${tables.size} clinical panels",
-                    fontSize=11.sp,color=Color(0xFF486581))
+                Text("${tables.size} panels · ${filtered.size} source observations",
+                    fontSize=10.sp,color=Color(0xFF486581))
             }
             if(tables.isEmpty()) item {
                 Text("No matching source values. Try All dates or Raw.",
@@ -2205,8 +2208,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val first=page*perPage
                 val dates=table.dates.drop(first).take(perPage)
-                val parameterRows=if(showAllParameters) table.parameters
-                    else table.parameters.take(20)
+                // Hide rows blank across both displayed dates. Keep all dates
+                // reachable with Older/Newer and all raw fields in Raw/Results.
+                val parametersOnPage=if (kind == "Clinical" && dates.isNotEmpty())
+                    table.parameters.filter { param ->
+                        dates.any { !param.byDate[it].isNullOrEmpty() }
+                    } else table.parameters
+                val parameterRows=if(showAllParameters) parametersOnPage
+                    else parametersOnPage.take(20)
                 Card(colors=CardDefaults.cardColors(containerColor=Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp),
                         verticalArrangement=Arrangement.spacedBy(5.dp)) {
@@ -2235,7 +2244,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        val rowHeight=52.dp
+                        val rowHeight=46.dp
                         Row(modifier=Modifier.fillMaxWidth()) {
                             Column(modifier=Modifier.width(126.dp)) {
                                 Text("Parameter",fontSize=10.sp,fontWeight=FontWeight.Bold,
@@ -2283,10 +2292,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        if(table.parameters.size>20) {
+                        if(parametersOnPage.size>20) {
                             TextButton(onClick={showAllParameters=!showAllParameters}) {
                                 Text(if(showAllParameters) "Show first 20 parameters"
-                                    else "Show all ${table.parameters.size} parameters",
+                                    else "Show all ${parametersOnPage.size} parameters",
                                     fontSize=11.sp)
                             }
                         }
@@ -2308,9 +2317,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(value.sampleNumber.isNotBlank()) Text(
                                     "Source sample: "+value.sampleNumber,fontSize=10.sp)
                                 if(value.collectionDateTime.isNotBlank()) Text(
-                                    "Collected: "+value.collectionDateTime,fontSize=10.sp)
+                                    "Collected: "+LabPanelMatrix.displayDateTime(
+                                        value.collectionDateTime),fontSize=10.sp)
                                 if(value.reportedDate.isNotBlank()) Text(
-                                    "Reported: "+value.reportedDate,fontSize=10.sp)
+                                    "Reported: "+LabPanelMatrix.displayDateTime(
+                                        value.reportedDate),fontSize=10.sp)
                             }
                             TextButton(onClick={chosen=emptyList()}) {
                                 Text("Close detail",fontSize=11.sp)
