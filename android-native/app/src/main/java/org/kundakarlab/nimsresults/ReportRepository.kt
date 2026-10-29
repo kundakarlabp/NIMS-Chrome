@@ -638,9 +638,19 @@ object ReportTitleCache {
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
     private val revision = java.util.concurrent.atomic.AtomicInteger()
     private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger()
-    private const val MAX_MEMORY_PDFS = 8
+    // Keep only recently opened PDFs in RAM; complete originals remain
+    // available in the app-private on-disk cache or authenticated source.
+    private const val MAX_MEMORY_PDFS = 4
     private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
+    @Synchronized fun diagnosticFootprint(): String {
+        val rawChars = extractedByUrl.values.sumOf { it.length }
+        val sectionChars = sectionsByUrl.values.sumOf { parts ->
+            parts.sumOf { it.text.length }
+        }
+        return "memory.pdfEvidenceDocs=" + loadedUrls.size +
+            "\nmemory.pdfEvidenceCharacters=" + (rawChars + sectionChars)
+    }
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
         learnPages(url, listOf(extracted), expectedCr)
