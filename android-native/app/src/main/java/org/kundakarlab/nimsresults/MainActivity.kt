@@ -2281,6 +2281,93 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    /** Narrative/serology are clinical reports, not date-by-parameter matrices. */
+    @Composable
+    private fun LabReportList(
+        current: ClinicalBundle, scroll: LazyListState,
+        rows: List<LabResult>, kind: String, onClinical: () -> Unit
+    ) {
+        val visible = remember(rows,kind) {
+            (if(kind == "Raw") rows else
+                rows.filterNot { row ->
+                    ClinicalReportRenderer.isPlaceholder(row) ||
+                    ClinicalReportRenderer.isUninterpretedCode(row) ||
+                    row.valueText.contains("not reported in structured",true) ||
+                    row.valueText.trim() in setOf("-","—","--")
+                }).groupBy { listOf(it.test,it.date,it.labNumber,it.sampleNumber) }
+                .toList().sortedWith(compareByDescending<Pair<List<String>,List<LabResult>>> {
+                    BulkParser.dateKey(it.first[1])
+                }.thenBy { it.first[0] })
+        }
+        LazyColumn(state=scroll,modifier=Modifier.fillMaxSize(),
+            contentPadding=PaddingValues(10.dp),
+            verticalArrangement=Arrangement.spacedBy(6.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth(),
+                    horizontalArrangement=Arrangement.SpaceBetween,
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Text(kind+" reports",fontWeight=FontWeight.Bold,
+                        fontSize=15.sp,color=Color(0xFF102A43))
+                    TextButton(onClick=onClinical) { Text("Clinical tables") }
+                }
+            }
+            items(visible,key={it.first.joinToString("|")}) { (identity,source) ->
+                val clinical = if(kind=="Raw") source else
+                    ClinicalReportRenderer.preferredRows(source)
+                val choices=remember(source,current.reports) {
+                    SourceMetadataReview.candidates(source,current.reports)
+                        .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                }
+                var open by remember(identity) { mutableStateOf(false) }
+                var choose by remember(identity) { mutableStateOf(false) }
+                Card(colors=CardDefaults.cardColors(containerColor=Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(11.dp),
+                        verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement=Arrangement.SpaceBetween,
+                            verticalAlignment=Alignment.CenterVertically) {
+                            Text(identity[0],modifier=Modifier.weight(1f),
+                                fontSize=12.sp,fontWeight=FontWeight.SemiBold,
+                                maxLines=2)
+                            Text(LabPanelMatrix.displayDate(identity[1]),
+                                fontSize=10.sp,color=Color(0xFF66788A))
+                            TextButton(onClick={open=!open}) {
+                                Text(if(open) "Less" else "More",fontSize=10.sp)
+                            }
+                        }
+                        clinical.take(if(open) clinical.size else 2).forEach { r ->
+                            if(r.parameter.isNotBlank() &&
+                                !r.parameter.equals("Result",true)) Text(
+                                ClinicalChronology.parameterLabel(r),fontSize=10.sp,
+                                color=Color(0xFF66788A))
+                            Text(ClinicalChronology.clinicalText(r.valueText),
+                                fontSize=12.sp,color=Color(0xFF102A43),
+                                maxLines=if(open) Int.MAX_VALUE else 3)
+                        }
+                        if(choices.isNotEmpty()) TextButton(onClick={
+                            if(choices.size==1) openReport(choices[0].url)
+                            else choose=true
+                        }) { Text(if(choices.size==1) "Open PDF · verify"
+                            else "Choose source PDF",fontSize=11.sp) }
+                    }
+                }
+                if(choose) AlertDialog(onDismissRequest={choose=false},
+                    title={Text("Original source PDFs")},
+                    text={LazyColumn(Modifier.heightIn(max=350.dp)) {
+                        items(choices,key={it.url}) { report ->
+                            TextButton(onClick={
+                                choose=false;openReport(report.url)
+                            }) { Text(report.title+" · "+LabPanelMatrix.displayDate(
+                                report.date),fontSize=11.sp) }
+                        }
+                    }},
+                    confirmButton={TextButton(onClick={choose=false}) {
+                        Text("Close")
+                    }})
+            }
+        }
+    }
+
     @Composable
     private fun LabsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
@@ -2321,6 +2408,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         val tables = remember(filtered,kind) {
             LabPanelMatrix.build(filtered, clinical = kind == "Clinical")
+        }
+        if(kind != "Clinical") {
+            LabReportList(current,scroll,filtered,kind,onClinical={kind="Clinical"})
+            return
         }
         LazyColumn(state=scroll, modifier=Modifier.fillMaxSize(),
             contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
@@ -2363,8 +2454,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label={Text(count.toString(),fontSize=11.sp)})
                     }
                 }
-                Text("${tables.size} panels · ${filtered.size} source observations",
-                    fontSize=10.sp,color=Color(0xFF486581))
+
             }
             if(tables.isEmpty()) item {
                 Text("No matching source values. Try All dates or Raw.",
@@ -2395,10 +2485,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         verticalArrangement=Arrangement.spacedBy(5.dp)) {
                         Text(table.panel.label,fontWeight=FontWeight.Bold,
                             fontSize=14.sp,color=Color(0xFF102A43))
-                        Text("${table.observationCount} source values · " +
-                            "${table.parameters.size} parameters · " +
-                            "${table.dates.size} dates",
-                            fontSize=10.sp,color=Color(0xFF66788A))
+                        Text("Latest to oldest",fontSize=10.sp,
+                            color=Color(0xFF66788A))
                         if(table.undatedCount>0) Text(
                             "${table.undatedCount} source values have unrecognized or absent dates; " +
                                 "inspect in All Results.",
