@@ -303,13 +303,13 @@ object ReportPayloadParser {
     private val stageKeys = listOf("reportStage", "report_stage", "stage", "reportStatus")
     private val packingKeys = listOf("packingListNo", "packing_list_no", "packingListNumber")
     private val documentKeys = listOf("documentRef", "document_ref", "reportRef", "report_ref")
-    private val orderIdKeys = listOf("orderId", "order_id", "sourceOrderId", "requisitionNo", "reqNo")
+    private val orderIdKeys = listOf("orderId", "order_id", "sourceOrderId", "requisitionNo", "reqNo", "REQDNO")
     private val sampleKeys = listOf("sampleNo","sample_no","sampleNumber","sample_number","specimenNo","specimen_no")
     private val labKeys = listOf("labStudyNo","labStudyNumber","labNo","lab_no","labNumber","lab_number","accessionNo","accession_no")
     private val departmentKeys = listOf("department","dept","lab","laboratory","section")
     private val urlKeys = listOf("url","reportUrl","report_url","pdfUrl","pdf_url","href","downloadUrl","download_url")
     private val tokenKeys = listOf("fileName","filename","file_name","reportToken","report_token","token","reportFileName","report_file_name","pdfFileName","pdf_file_name")
-    private val idKeys = listOf("reportId","report_id","requisitionNo","requisition_no","reqNo","req_no","labNo","lab_no","accessionNo","accession_no","id")
+    private val idKeys = listOf("reportId","report_id","requisitionNo","requisition_no","reqNo","req_no","REQDNO","labNo","lab_no","accessionNo","accession_no","id")
     private val dateRegex = Regex(
         """(?:\b\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}\b|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b\d{4}-\d{1,2}-\d{1,2}\b)(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?"""
     )
