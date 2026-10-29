@@ -2775,7 +2775,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         // REST and report inventory have their own scopes: investigation
         // category filters and bulk result date filters must not hide them.
-        val visibleFeed = when (subview) {
+        val visibleFeed = remember(baseFeed, subview, query, feed) {
+            when (subview) {
             "Enquiry orders" -> emptyList()
             "REST API" -> baseFeed.filter {
                 it.report?.sourceTag?.startsWith("nims_rest_reportList") == true &&
@@ -2789,6 +2790,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         listOf(it), query, "All", null).isNotEmpty())
             }
             else -> feed.filter { it.report == null }
+            }
         }
         val studyCount = feed.count { it.report == null }
         val sourceCount = baseFeed.count {
@@ -2802,8 +2804,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         var restLimit by remember(current.patient.crNo, subview, query) {
             mutableStateOf(40)
         }
-        val shownFeed = if (subview == "REST API") visibleFeed.take(restLimit)
+        val shownFeed = remember(subview, visibleFeed, restLimit) {
+            if (subview == "REST API") visibleFeed.take(restLimit)
             else visibleFeed
+        }
         LaunchedEffect(subview) { scroll.scrollToItem(0) }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
