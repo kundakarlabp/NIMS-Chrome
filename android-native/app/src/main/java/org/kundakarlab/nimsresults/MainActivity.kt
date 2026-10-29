@@ -1923,6 +1923,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             } else cultures
         }
         val shownCultures = if (allCultures) selectedCultures else selectedCultures.take(8)
+        // Shared date columns are less expensive and easier to compare than six
+        // independent full-length result cards; missing values remain visible.
+        val markerDates = remember(markerRows) {
+            markerRows.flatMap { it.second }
+                .mapNotNull { RecentReportDates.parse(it.date) }
+                .distinct().sortedDescending().map { it.toString() }
+        }
+        var markerPage by remember(current.patient.crNo) { mutableStateOf(0) }
+        var markerSource by remember(current.patient.crNo) {
+            mutableStateOf<List<LabResult>>(emptyList())
+        }
+        val visibleMarkerDates = markerDates.drop(markerPage * 2).take(2)
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 12.dp, end = 20.dp, top = 10.dp,
                 bottom = 24.dp),
@@ -1944,40 +1956,103 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("CRP and hsCRP are not combined; values retain their source units.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            items(markerRows, key = { it.first }) { (name, rows) ->
-                var showAll by remember(current.patient.crNo,name) { mutableStateOf(false) }
+            item {
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(Modifier.fillMaxWidth().padding(11.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(),
+                    Column(Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
-                            Text(name, fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp, color = Color(0xFF102A43))
-                            if (rows.isNotEmpty()) Text("${rows.size} values",
-                                fontSize = 10.sp, color = Color(0xFF66788A))
+                            Text("Biomarker trends · source dates", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold)
+                            Text("${markerDates.size} dates", fontSize = 10.sp,
+                                color = Color(0xFF66788A))
                         }
-                        if (rows.isEmpty()) {
-                            Text("No verified numeric value in the retrieved structured data.",
-                                fontSize = 11.sp, color = Color(0xFF66788A))
-                        } else {
-                            rows.take(if (showAll) rows.size else 3).forEach { value ->
-                                Row(Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(LabPanelMatrix.displayDate(value.date), fontSize = 11.sp,
-                                        color = Color(0xFF486581))
-                                    Text(value.valueText +
-                                        if (value.unit.isNotBlank()) " " + value.unit else "",
-                                        fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                        color = abnormalColor(value.abnormal))
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text("DD-MM-YYYY · newest first", fontSize = 10.sp,
+                                color = Color(0xFF66788A))
+                            Row {
+                                TextButton(enabled = markerPage > 0,
+                                    onClick = { markerPage-- }) {
+                                    Text("Newer", fontSize = 10.sp)
+                                }
+                                TextButton(
+                                    enabled = (markerPage + 1) * 2 < markerDates.size,
+                                    onClick = { markerPage++ }) {
+                                    Text("Older", fontSize = 10.sp)
                                 }
                             }
-                            if (rows.size > 3) {
-                                TextButton(onClick = { showAll = !showAll }) {
-                                    Text(if (showAll) "Show latest 3"
-                                        else "Show all ${rows.size} source values",
-                                        fontSize = 11.sp)
+                        }
+                        if (markerDates.isEmpty()) {
+                            Text("No dated numeric biomarker values were retrieved.",
+                                fontSize = 11.sp, color = Color(0xFF66788A))
+                        } else {
+                            Row(Modifier.fillMaxWidth()) {
+                                Column(Modifier.width(105.dp)) {
+                                    Text("Marker", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.height(32.dp))
+                                    markerRows.forEach { (name, _) ->
+                                        Box(Modifier.height(43.dp).fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart) {
+                                            Text(name, fontSize = 11.sp, maxLines = 2)
+                                        }
+                                    }
                                 }
+                                Row(Modifier.weight(1f)
+                                    .horizontalScroll(rememberScrollState())) {
+                                    visibleMarkerDates.forEach { date ->
+                                        Column(Modifier.width(114.dp)) {
+                                            Text(LabPanelMatrix.displayDate(date),
+                                                fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.height(32.dp))
+                                            markerRows.forEach { (_, rows) ->
+                                                val cell = rows.filter {
+                                                    LabPanelMatrix.canonicalDate(it.date) == date
+                                                }
+                                                Box(Modifier.fillMaxWidth().height(43.dp)
+                                                    .clickable(enabled = cell.isNotEmpty()) {
+                                                        markerSource = cell
+                                                    }, contentAlignment = Alignment.CenterStart) {
+                                                    Text(when {
+                                                        cell.isEmpty() -> "—"
+                                                        cell.size > 1 -> "${cell.size} values"
+                                                        else -> cell.first().valueText +
+                                                            (if (cell.first().unit.isBlank()) ""
+                                                            else " " + cell.first().unit)
+                                                    }, fontSize = 11.sp, maxLines = 2,
+                                                        color = if (cell.size == 1)
+                                                            abnormalColor(cell.first().abnormal)
+                                                        else Color(0xFF486581))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        val undated = markerRows.sumOf { (_, rows) ->
+                            rows.count { RecentReportDates.parse(it.date) == null }
+                        }
+                        if (undated > 0) Text(
+                            "${undated} biomarker observations have unrecognized dates; review All Results.",
+                            fontSize = 10.sp, color = Color(0xFF875B22))
+                        if (markerSource.isNotEmpty()) {
+                            HorizontalDivider()
+                            markerSource.forEach { obs ->
+                                Text(obs.parameter + " · " +
+                                    LabPanelMatrix.displayDate(obs.date) + ": " +
+                                    obs.valueText +
+                                    (if (obs.unit.isBlank()) "" else " " + obs.unit),
+                                    fontSize = 11.sp)
+                                if (obs.refRange.isNotBlank())
+                                    Text("Reference: " + obs.refRange, fontSize = 10.sp)
+                                if (obs.labNumber.isNotBlank())
+                                    Text("Lab/study: " + obs.labNumber, fontSize = 10.sp)
+                            }
+                            TextButton(onClick = { markerSource = emptyList() }) {
+                                Text("Close details", fontSize = 11.sp)
                             }
                         }
                     }
