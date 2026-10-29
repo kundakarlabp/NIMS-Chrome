@@ -3,6 +3,9 @@ package org.kundakarlab.nimsresults
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.android.gms.codescanner.GmsBarcodeScanning
+import com.google.android.gms.codescanner.GmsBarcodeScannerOptions
 import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Bundle
@@ -1098,6 +1101,35 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    private fun scanCrBarcode() {
+        val options = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE, Barcode.FORMAT_CODE_128,
+                Barcode.FORMAT_CODE_39, Barcode.FORMAT_PDF417)
+            .enableAutoZoom()
+            .build()
+        GmsBarcodeScanning.getClient(this, options).startScan()
+            .addOnSuccessListener { barcode ->
+                val cr = CrScanParser.parse(barcode.rawValue.orEmpty())
+                if (cr == null) {
+                    DiagnosticEvents.record("CR_SCAN_UNRECOGNIZED")
+                    Toast.makeText(this,
+                        "Code does not contain a valid 15-digit NIMS CR",
+                        Toast.LENGTH_LONG).show()
+                } else {
+                    DiagnosticEvents.record("CR_SCAN_VALID")
+                    crInput = cr
+                    Toast.makeText(this,
+                        "CR entered. Review it, then tap Get results.",
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
+            .addOnFailureListener {
+                DiagnosticEvents.record("CR_SCAN_FAILED")
+                Toast.makeText(this, "Scanner unavailable; enter CR manually.",
+                    Toast.LENGTH_LONG).show()
+            }
+    }
+
     @Composable
     private fun CrPanel() {
         var localCr by remember(crInput) { mutableStateOf(crInput) }
@@ -1126,7 +1158,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 placeholder = { Text("15-digit CR number") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
-                            Spacer(Modifier.height(8.dp))
+                            TextButton(onClick = { scanCrBarcode() }) {
+                                Text("Scan QR / barcode", fontSize = 12.sp)
+                            }
+                            Spacer(Modifier.height(4.dp))
                             Button(
                                 onClick = {
                                     crInput = localCr
@@ -1157,6 +1192,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
                             Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { scanCrBarcode() }) {
+                                Text("Scan CR", fontSize = 11.sp)
+                            }
                             Button(
                                 onClick = {
                                     crInput = localCr
