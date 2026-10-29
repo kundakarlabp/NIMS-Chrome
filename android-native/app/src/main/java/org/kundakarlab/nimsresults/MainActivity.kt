@@ -1375,7 +1375,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             // Prioritize bedside review destinations; preserve all legacy screens.
             listOf(ResultsTab.OVERVIEW, ResultsTab.ALL, ResultsTab.LABS,
-                ResultsTab.MICROBIOLOGY, ResultsTab.ID, ResultsTab.RECENT,
+                ResultsTab.ID, ResultsTab.MICROBIOLOGY, ResultsTab.RECENT,
                 ResultsTab.TRENDS).forEach { tab ->
                 val short = when (tab) {
                     ResultsTab.OVERVIEW -> "Summary"
@@ -2816,10 +2816,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 end = 27.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
-                Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount results · $sourceCount source reports · " +
-                    "$restCount REST catalogue entries",
-                    fontSize = 11.sp, color = Color(0xFF66788A))
+                // Screen title and patient context live in the app navigation.
+                // Avoid repeating a multi-line technical counter on every tab.
+                Text(when (subview) {
+                    "Report index / PDFs" -> "$sourceCount source index records"
+                    "REST API" -> "$restCount catalogue entries"
+                    "Enquiry orders" -> "${current.enquiryOrders.size} enquiry orders"
+                    else -> "$studyCount investigations"
+                }, fontSize = 11.sp, color = Color(0xFF486581), maxLines = 1)
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("Investigations" to "Results",
@@ -2833,7 +2837,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 category = "All"
                                 range = "All"
                             },
-                            label = { Text(name, fontSize = 11.sp) })
+                            label = { Text(label, fontSize = 11.sp) })
                     }
                 }
                 if (subview == "REST API") {
@@ -2843,24 +2847,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val contextOnly = current.reports.count {
                         it.sourceTag == "nims_rest_reportList_context"
                     }
-                    Text("$apiCount REST reportList metadata entries · $contextOnly " +
-                        "accepted using independently verified patient context.",
-                        fontSize = 11.sp, color = Color(0xFF486581))
-                    Text("REST is a test/date catalogue, not a specimen or PDF API. " +
-                        "For source documents, expand a row to review matching " +
-                        "original PDFs; confirm the accession in the PDF. " +
-                        "Structured values come from Custom Sheet.",
-                        fontSize = 10.sp, color = Color(0xFF875B22))
+                    Text("Catalogue only · $contextOnly rows use verified patient context. " +
+                        "Open an entry to review possible source PDFs (not specimen-linked).",
+                        fontSize = 10.sp, color = Color(0xFF486581), maxLines = 2)
                 }
                 if (pdfTotalCount > 0 && subview == "Report index / PDFs") Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
-                OutlinedTextField(
+                if (subview != "Enquiry orders") OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    placeholder = { Text("Search test, result, lab number, report or date") }
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                    placeholder = { Text("Search tests, dates or reports", fontSize = 12.sp) }
                 )
                 if (subview == "Investigations") {
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -2883,30 +2883,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                if (subview == "Investigations") {
-                    Text("Source values remain independent of report metadata until " +
-                        "event identity can be verified.", fontSize = 10.sp,
-                        color = Color(0xFF66788A))
-                }
+                // Provenance details are shown on expanded studies, not repeated
+                // above the list where they displace clinical data.
                 }
             }
             if (subview == "Enquiry orders") {
                 item {
-                    Text("NIMS CR-wise Enquiry is the source of orders and statuses, " +
-                        "not a second result-value feed.",
-                        fontSize = 11.sp, color = Color(0xFF486581))
-                    Text(current.enquiryOrders.size.toString() +
-                        " order rows · " +
-                        (if (current.enquiryCapturedAt > 0L) "Imported and locally cached"
-                         else "Not yet captured"),
-                        fontSize = 11.sp)
+                    Text(if (current.enquiryOrders.isEmpty())
+                        "No enquiry orders captured. NIMS Enquiry provides order, " +
+                            "sample and accession details when available."
+                    else "${current.enquiryOrders.size} imported enquiry orders · " +
+                        "source identifiers preserved",
+                        fontSize = 12.sp, color = Color(0xFF486581))
                     Button(onClick = { openEnquiryReview() }) {
-                        Text("Open NIMS Enquiry / Import", fontSize = 12.sp)
+                        Text(if (current.enquiryOrders.isEmpty())
+                            "Import from NIMS Enquiry" else "Update enquiry orders",
+                            fontSize = 12.sp)
                     }
-                    if (current.enquiryOrders.isEmpty())
-                        Text("Use the normal NIMS CR-wise Enquiry form and import its visible " +
-                            "result table. No unverified Enquiry API requests are made.",
-                            fontSize = 11.sp)
                 }
                 items(current.enquiryOrders.mapIndexed { index, order -> index to order },
                     key = { (index, _) -> "enquiry|$index" }) { (index, order) ->
