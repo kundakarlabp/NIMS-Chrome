@@ -54,6 +54,8 @@ class LabPanelMatrixV131Test {
     @Test fun datesUseFullDayMonthYearAndRetainSourceOnBadFormat() {
         assertEquals("29-09-2026",LabPanelMatrix.displayDate("2026-09-29"))
         assertEquals("29-09-2026",LabPanelMatrix.displayDate("29-Sep-2026"))
+        assertEquals("29-09-2026",LabPanelMatrix.displayDate("29-09-2026"))
+        assertEquals("29-09-2026",LabPanelMatrix.displayDate("29/09/2026"))
         assertEquals("07-07-2026",LabPanelMatrix.displayDate("2026-07-07"))
         assertEquals("unknown-date",LabPanelMatrix.displayDate("unknown-date"))
     }
