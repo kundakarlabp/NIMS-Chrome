@@ -15,9 +15,39 @@ object SourceMetadataReview {
         val value = key(name)
         return when {
             value == "cbc" || value.startsWith("cbc") ||
-                value == "completebloodcount" || value == "completehemogram" -> "cbc"
+                value.startsWith("cbp") || value == "completebloodcount" ||
+                value == "completebloodpicture" || value.startsWith("hemogram") ||
+                value.startsWith("haemogram") || value == "completehemogram" -> "cbc"
+            value.startsWith("electrolyte") -> "electrolytes"
+            value.startsWith("liverfunctiontest") || value == "lft" -> "lft"
+            value.startsWith("renalfunctiontest") || value.startsWith("kidneyfunctiontest") ||
+                value == "rft" || value == "kft" -> "rft"
+            value == "serumcreatinine" || value == "creatinine" -> "creatinine"
+            value == "serumurea" || value == "urea" -> "urea"
             else -> value
         }
+    }
+
+    /** REST reportList is a catalogue, not a specimen-identifying source.
+     * Find *manual review choices* in the independently authenticated report
+     * inventory. Neither title nor any date delta establishes a source event.
+     */
+    fun catalogCandidates(rest: ReportRef, sourceIndex: List<ReportRef>): List<ReportRef> {
+        if (!rest.sourceTag.startsWith("nims_rest_reportList")) return emptyList()
+        val title = titleKey(rest.title)
+        val reported = RecentReportDates.parse(rest.reportedDate.ifBlank { rest.date })
+            ?: return emptyList()
+        if (title.isBlank()) return emptyList()
+        return sourceIndex.asSequence()
+            .filter { !it.sourceTag.startsWith("nims_rest_reportList") &&
+                it.url.isNotBlank() && titleKey(it.title) == title }
+            .filter { candidate ->
+                val indexDate = RecentReportDates.parse(
+                    candidate.collectionDateTime.ifBlank { candidate.sentDate }
+                        .ifBlank { candidate.date })
+                indexDate != null &&
+                    ChronoUnit.DAYS.between(indexDate, reported) in 0L..14L
+            }.distinctBy { it.url }.take(8).toList()
     }
 
     fun candidates(rows: List<LabResult>, sourceIndex: List<ReportRef>): List<ReportRef> {
