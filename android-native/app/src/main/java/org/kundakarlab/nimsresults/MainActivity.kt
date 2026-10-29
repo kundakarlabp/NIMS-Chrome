@@ -247,7 +247,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     bundle = previous
                     crInput = previous.patient.crNo
                     apiStage = "encrypted_cache_not_live_verified"
-                    apiReportCount = previous.reports.size
+                    // Keep authenticated source-index rows separate from
+                    //  test/date-only REST metadata in restored snapshots.
+                    apiReportCount = previous.reports.count {
+                        !it.sourceTag.startsWith("nims_rest_reportList")
+                    }
                     pdfTotalCount = previous.reports.map { it.url }
                         .filter(String::isNotBlank).distinct().size
                     historyStatus = "Cached " + previous.results.size + " result fields · " +
@@ -1335,6 +1339,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(subtitle, fontSize = 10.sp, maxLines = 1,
                         color = Color(0xFF486581),
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    if (apiStage == "encrypted_cache_not_live_verified") Text(
+                        "CACHED · tap ↻ for live NIMS results",
+                        fontSize = 10.sp, color = Color(0xFF875B22), maxLines = 1)
                 }
                 val favorite = shelfEntries.firstOrNull { it.cr == current.patient.crNo }
                     ?.lists?.contains("Favorites") == true
@@ -1948,9 +1955,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Infectious diseases · clinical overview", fontSize = 17.sp,
                     fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
-                Text("Source-reported inflammation markers, blood counts and culture " +
-                    "chronology. No diagnosis or treatment is inferred.",
-                    fontSize = 11.sp, color = Color(0xFF66788A))
                 Text("${markerRows.count { it.second.isNotEmpty() }} of 6 marker groups " +
                     "found · ${cultures.size} culture episodes · $positiveCount positive " +
                     "· $microPdfs microbiology PDF references",
@@ -1959,8 +1963,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Inflammatory markers and counts", fontWeight = FontWeight.Bold,
                     fontSize = 14.sp, color = Color(0xFF102A43))
-                Text("CRP and hsCRP are not combined; values retain their source units.",
-                    fontSize = 10.sp, color = Color(0xFF66788A))
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -2057,6 +2059,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (obs.labNumber.isNotBlank())
                                     Text("Lab/study: " + obs.labNumber, fontSize = 10.sp)
                             }
+                            val pdfChoices = remember(markerSource, current.reports) {
+                                SourceMetadataReview.candidates(markerSource, current.reports)
+                                    .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                            }
+                            when (pdfChoices.size) {
+                                1 -> TextButton(onClick = {
+                                    openReport(pdfChoices.single().url)
+                                }) {
+                                    Text("Open candidate PDF · verify accession",
+                                        fontSize = 11.sp)
+                                }
+                                0 -> Text("Original PDF not linked for this marker.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                else -> {
+                                    Text("${pdfChoices.size} possible PDFs · verify specimen",
+                                        fontSize = 10.sp, color = Color(0xFF875B22))
+                                    pdfChoices.take(5).forEach { pdf ->
+                                        TextButton(onClick = { openReport(pdf.url) }) {
+                                            Text(LabPanelMatrix.displayDate(pdf.date) + " · " +
+                                                pdf.title + if (pdf.labNumber.isBlank()) ""
+                                                else " · " + pdf.labNumber, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
                             TextButton(onClick = { markerSource = emptyList() }) {
                                 Text("Close details", fontSize = 11.sp)
                             }
@@ -2080,6 +2107,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     fontSize = 11.sp, color = Color(0xFF66788A))
             }
             items(shownCultures, key = { it.key }) { episode ->
+                // Reconcile only visible culture episodes. All source PDF
+                // choices remain unverified until their accession is checked.
+                val candidatePdfs = remember(episode.key, current.reports) {
+                    SourceMetadataReview.candidates(episode.rows, current.reports)
+                        .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                }
+                var showPdfChoices by remember(episode.key) {
+                    mutableStateOf(false)
+                }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2091,10 +2127,56 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (episode.rows.firstOrNull()?.reportStage?.isNotBlank() == true)
                             Text("Stage: " + episode.rows.first().reportStage,
                                 fontSize = 10.sp, color = Color(0xFF486581))
-                        TextButton(onClick = {
-                            microFilter = "All"
-                            selectedTab = ResultsTab.MICROBIOLOGY
-                        }) { Text("Review full culture findings", fontSize = 11.sp) }
+                        // This is source-index context only. It is not copied
+                        // into the structured culture event.
+                        if (candidatePdfs.size == 1) {
+                            val source = candidatePdfs.single()
+                            val evidence = listOfNotNull(
+                                source.labNumber.takeIf { it.isNotBlank() }
+                                    ?.let { "Lab " + it },
+                                source.sampleNumber.takeIf { it.isNotBlank() }
+                                    ?.let { "Sample " + it },
+                                source.collectionDateTime.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "Collected " + LabPanelMatrix.displayDateTime(it)
+                                    },
+                                source.reportedDate.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "Report " + LabPanelMatrix.displayDateTime(it)
+                                    }
+                            )
+                            if (evidence.isNotEmpty()) Text(
+                                "Possible source · " + evidence.joinToString(" · "),
+                                fontSize = 10.sp, color = Color(0xFF486581),
+                                maxLines = 3)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                microFilter = "All"
+                                selectedTab = ResultsTab.MICROBIOLOGY
+                            }) { Text("Full culture", fontSize = 11.sp) }
+                            if (candidatePdfs.size == 1) {
+                                TextButton(onClick = { openReport(candidatePdfs[0].url) }) {
+                                    Text("Open PDF · verify", fontSize = 11.sp)
+                                }
+                            } else if (candidatePdfs.size > 1) {
+                                TextButton(onClick = { showPdfChoices = !showPdfChoices }) {
+                                    Text("PDFs (${candidatePdfs.size})", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        if (showPdfChoices) {
+                            Text("Candidate reports · specimen identity unverified",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                            candidatePdfs.take(8).forEach { report ->
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text(report.title + " · " +
+                                        LabPanelMatrix.displayDate(report.date) +
+                                        if (report.labNumber.isBlank()) ""
+                                        else " · " + report.labNumber, fontSize = 11.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2119,7 +2201,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
         var period by remember(current.patient.crNo) { mutableStateOf("All") }
-        var perPage by remember(current.patient.crNo) { mutableStateOf(4) }
+        var perPage by remember(current.patient.crNo) { mutableStateOf(2) }
         val allRows = remember(current.results) {
             current.results.filterNot { isMicro(it) }
         }
@@ -2152,15 +2234,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         row.valueText + " " + row.date).contains(query,ignoreCase=true))
             }
         }
-        val tables = remember(filtered) { LabPanelMatrix.build(filtered) }
+        val tables = remember(filtered,kind) {
+            LabPanelMatrix.build(filtered, clinical = kind == "Clinical")
+        }
         LazyColumn(state=scroll, modifier=Modifier.fillMaxSize(),
             contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
             verticalArrangement=Arrangement.spacedBy(8.dp)) {
             item {
-                Text("Laboratory comparison", fontWeight=FontWeight.Bold,fontSize=17.sp)
-                Text("Combined source values in three clinical panels; each column is " +
-                    "a result date, not an inferred collection/reporting timestamp.",
-                    fontSize=11.sp,color=Color(0xFF66788A))
+                Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
+                    fontSize=14.sp)
+                if (kind == "Clinical") Text(
+                    "Renal → LFT → electrolytes · Hb → TLC → DLC → platelets → ESR → smear",
+                    fontSize=10.sp,color=Color(0xFF486581),maxLines=2)
                 OutlinedTextField(value=query,onValueChange={ query=it },
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
                     placeholder={ Text("Search test, parameter, result or date") })
@@ -2181,13 +2266,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Row(verticalAlignment=Alignment.CenterVertically,
                     horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     Text("Date columns:",fontSize=11.sp,color=Color(0xFF66788A))
-                    listOf(4,8).forEach { count ->
+                    listOf(2,4).forEach { count ->
                         FilterChip(selected=perPage==count,onClick={perPage=count},
                             label={Text(count.toString(),fontSize=11.sp)})
                     }
                 }
-                Text("${filtered.size} source values · ${tables.size} clinical panels",
-                    fontSize=11.sp,color=Color(0xFF486581))
+                Text("${tables.size} panels · ${filtered.size} source observations",
+                    fontSize=10.sp,color=Color(0xFF486581))
             }
             if(tables.isEmpty()) item {
                 Text("No matching source values. Try All dates or Raw.",
@@ -2205,8 +2290,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val first=page*perPage
                 val dates=table.dates.drop(first).take(perPage)
-                val parameterRows=if(showAllParameters) table.parameters
-                    else table.parameters.take(20)
+                // Hide rows blank across both displayed dates. Keep all dates
+                // reachable with Older/Newer and all raw fields in Raw/Results.
+                val parametersOnPage=if (kind == "Clinical" && dates.isNotEmpty())
+                    table.parameters.filter { param ->
+                        dates.any { !param.byDate[it].isNullOrEmpty() }
+                    } else table.parameters
+                val parameterRows=if(showAllParameters) parametersOnPage
+                    else parametersOnPage.take(20)
                 Card(colors=CardDefaults.cardColors(containerColor=Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp),
                         verticalArrangement=Arrangement.spacedBy(5.dp)) {
@@ -2235,7 +2326,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        val rowHeight=52.dp
+                        val rowHeight=46.dp
                         Row(modifier=Modifier.fillMaxWidth()) {
                             Column(modifier=Modifier.width(126.dp)) {
                                 Text("Parameter",fontSize=10.sp,fontWeight=FontWeight.Bold,
@@ -2283,10 +2374,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        if(table.parameters.size>20) {
+                        if(parametersOnPage.size>20) {
                             TextButton(onClick={showAllParameters=!showAllParameters}) {
                                 Text(if(showAllParameters) "Show first 20 parameters"
-                                    else "Show all ${table.parameters.size} parameters",
+                                    else "Show all ${parametersOnPage.size} parameters",
                                     fontSize=11.sp)
                             }
                         }
@@ -2308,9 +2399,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(value.sampleNumber.isNotBlank()) Text(
                                     "Source sample: "+value.sampleNumber,fontSize=10.sp)
                                 if(value.collectionDateTime.isNotBlank()) Text(
-                                    "Collected: "+value.collectionDateTime,fontSize=10.sp)
+                                    "Collected: "+LabPanelMatrix.displayDateTime(
+                                        value.collectionDateTime),fontSize=10.sp)
                                 if(value.reportedDate.isNotBlank()) Text(
-                                    "Reported: "+value.reportedDate,fontSize=10.sp)
+                                    "Reported: "+LabPanelMatrix.displayDateTime(
+                                        value.reportedDate),fontSize=10.sp)
+                            }
+                            val pdfChoices = remember(chosen, current.reports) {
+                                SourceMetadataReview.candidates(chosen, current.reports)
+                                    .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                            }
+                            if (pdfChoices.isNotEmpty()) {
+                                Text(if (pdfChoices.size == 1) "Possible source PDF" else
+                                    "${pdfChoices.size} possible source PDFs",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
+                                pdfChoices.take(5).forEach { candidate ->
+                                    TextButton(onClick={openReport(candidate.url)}) {
+                                        Text("Open PDF · " +
+                                            LabPanelMatrix.displayDate(candidate.date) +
+                                            if (candidate.labNumber.isBlank()) ""
+                                            else " · " + candidate.labNumber,
+                                            fontSize=11.sp)
+                                    }
+                                }
+                                Text("Source PDF candidate only · accession unverified",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
                             }
                             TextButton(onClick={chosen=emptyList()}) {
                                 Text("Close detail",fontSize=11.sp)
@@ -2980,6 +3093,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var showEntireSource by remember(current.patient.crNo, entry.key) {
                     mutableStateOf(false)
                 }
+                var showRawJson by remember(current.patient.crNo, entry.key) {
+                    mutableStateOf(false)
+                }
                 val report = entry.report
                 val rows = entry.rows
                 // No matching work while scrolling collapsed cards. On expansion,
@@ -3083,11 +3199,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (reported.isNotBlank()) Text(
                                     "Reported: " + LabPanelMatrix.displayDateTime(reported),
                                     fontSize = 11.sp)
-                                if (accession.isBlank() || collected.isBlank() ||
-                                    reported.isBlank()) Text(
-                                    "Some lab/specimen or timing metadata is absent in the " +
-                                        "structured feed; original report review may be required.",
-                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                // Missing metadata stays absent; avoid a repeated
+                                // warning on every card. The PDF action below
+                                // provides the independent provenance route.
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
@@ -3129,16 +3243,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (verifiedIndex == null && unlinkedSources.isNotEmpty()) {
                                     HorizontalDivider()
-                                    Text("Candidate source reports · identity NOT verified",
+                                    Text("Possible source PDF · verify specimen",
                                         fontSize = 11.sp, color = Color(0xFF875B22),
                                         fontWeight = FontWeight.SemiBold)
-                                    Text("A matching title/date is not proof of the same specimen. " +
-                                        "Confirm the CR, accession and sample in the PDF.",
-                                        fontSize = 10.sp, color = Color(0xFF66788A))
                                     unlinkedSources.take(3).forEach { source ->
                                         Text(source.title + " · " +
                                             LabPanelMatrix.displayDate(source.date),
-                                            fontSize = 11.sp,
+                                            fontSize = 11.sp, maxLines = 2,
                                             fontWeight = FontWeight.Medium)
                                         val verifiedFields = listOfNotNull(
                                             source.labNumber.takeIf { it.isNotBlank() }?.let {
@@ -3148,7 +3259,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 "Sample: " + it
                                             },
                                             source.collectionDateTime.takeIf { it.isNotBlank() }?.let {
-                                                "Collected: " + it
+                                                "Collected: " + LabPanelMatrix.displayDateTime(it)
                                             },
                                             source.reportNumber.takeIf { it.isNotBlank() }?.let {
                                                 "Report: " + it
@@ -3159,7 +3270,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontSize = 10.sp, color = Color(0xFF486581))
                                         if (source.url.isNotBlank()) TextButton(
                                             onClick = { openReport(source.url) }) {
-                                            Text("Open candidate PDF · verify specimen",
+                                            Text("Open original PDF · unverified",
                                                 fontSize = 11.sp)
                                         }
                                     }
@@ -3178,24 +3289,55 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 val display = if (category == "Raw" || preferred.isEmpty())
                                     rows else preferred
                                 display.forEach { result ->
-                                    Text(result.parameter.ifBlank { "Result" } +
-                                        if (result.unit.isNotBlank()) " (" + result.unit + ")"
-                                        else "", fontSize = 11.sp,
-                                        color = Color(0xFF486581),
-                                        fontWeight = FontWeight.SemiBold)
-                                    Text(ClinicalPresentation.displayValue(result),
-                                        fontSize = 12.sp,
-                                        color = abnormalColor(result.abnormal))
-                                    if (result.refRange.isNotBlank()) Text(
-                                        "Reference: " + result.refRange, fontSize = 10.sp)
+                                    val compact = result.numericValue?.isFinite() == true &&
+                                        result.valueText.length <= 35
+                                    if (compact) {
+                                        Row(Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically) {
+                                            Text(result.parameter.ifBlank { result.test },
+                                                modifier = Modifier.weight(1f),
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF486581), maxLines = 2)
+                                            Text(ClinicalPresentation.displayValue(result) +
+                                                (if (result.unit.isBlank()) ""
+                                                 else " " + result.unit),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = abnormalColor(result.abnormal))
+                                        }
+                                        if (result.refRange.isNotBlank())
+                                            Text("Ref: " + result.refRange,
+                                                fontSize = 10.sp, color = Color(0xFF66788A))
+                                    } else {
+                                        Text(result.parameter.ifBlank { result.test },
+                                            fontSize = 11.sp, color = Color(0xFF486581),
+                                            fontWeight = FontWeight.SemiBold)
+                                        Text(ClinicalPresentation.displayValue(result),
+                                            fontSize = 12.sp,
+                                            color = abnormalColor(result.abnormal),
+                                            maxLines = if (showEntireSource) Int.MAX_VALUE else 7)
+                                        if (result.refRange.isNotBlank())
+                                            Text("Ref: " + result.refRange, fontSize = 10.sp)
+                                    }
                                 }
                                 if (category == "Raw") {
-                                    val rawForTest = remember(current.rawRows, entry.title) {
-                                        current.rawRows.filter { it.investigation == entry.title }
+                                    TextButton(onClick = { showRawJson = !showRawJson }) {
+                                        Text(if (showRawJson) "Hide raw JSON"
+                                            else "Show original source JSON",
+                                            fontSize = 11.sp)
                                     }
-                                    rawForTest.forEach { source ->
-                                        Text("Original source row " + source.rowIndex, fontSize = 11.sp)
-                                        Text(source.sourceJson, fontSize = 10.sp, color = Color(0xFF486581))
+                                    if (showRawJson) {
+                                        val rawForTest = remember(current.rawRows, entry.title) {
+                                            current.rawRows.filter {
+                                                it.investigation == entry.title
+                                            }
+                                        }
+                                        rawForTest.forEach { source ->
+                                            Text("Source row " + source.rowIndex, fontSize = 10.sp)
+                                            Text(source.sourceJson, fontSize = 10.sp,
+                                                color = Color(0xFF486581))
+                                        }
                                     }
                                 }
                                 if (preferred.size < rows.size) Text(
@@ -3277,7 +3419,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 report.sourceTag.startsWith("nims_rest_reportList")
                             if (!expanded) {
                                 if (restOnly) Text(
-                                    "Reported " + LabPanelMatrix.displayDateTime(
+                                    "REST report date " + LabPanelMatrix.displayDateTime(
                                         report.reportedDate.ifBlank { report.date }),
                                     fontSize = 11.sp, color = Color(0xFF486581),
                                     maxLines = 1)

@@ -7,9 +7,9 @@ import java.util.Locale
 /** Presentation-only panels. No value, specimen or source event is discarded. */
 object LabPanelMatrix {
     enum class Panel(val label: String) {
-        METABOLIC("Metabolic · Renal, Electrolytes, LFT"),
-        HEMOGRAM("Hemogram · CBP, CBC and Differential"),
-        OTHERS("Other laboratory investigations")
+        METABOLIC("Metabolic · Renal → LFT → Electrolytes"),
+        HEMOGRAM("Hematology · Hb → TLC → DLC → Platelets → ESR → Smear"),
+        OTHERS("Other repeated numeric results")
     }
     data class Parameter(
         val key: String, val title: String, val unit: String,
@@ -46,15 +46,69 @@ object LabPanelMatrix {
     )
     fun panel(row: LabResult): Panel {
         val test=row.test
-        // Never classify from narratives. Panels are based on report/test titles.
+        // ESR can be ordered separately from CBC; peripheral smear stays with
+        // hematology. Never classify a culture by a phrase in the narrative.
+        val cleanedTest=clean(test)
         return when {
-            hemogram.containsMatchIn(test) -> Panel.HEMOGRAM
+            hemogram.containsMatchIn(test) || cleanedTest == "esr" ||
+                cleanedTest.startsWith("erythrocytesedimentationrate") ||
+                cleanedTest.startsWith("sedimentationrate") -> Panel.HEMOGRAM
             metabolic.containsMatchIn(test) -> Panel.METABOLIC
             else -> Panel.OTHERS
         }
     }
 
-    fun build(rows: List<LabResult>): List<Table> {
+    /** Stable clinical order, unlike alphabetical source columns.
+     * Additional tests and CBC indices are retained after priority rows. */
+    fun clinicalPriority(panel: Panel, name: String): Int {
+        val v=clean(name)
+        return when (panel) {
+            Panel.METABOLIC -> when {
+                v.contains("creatinine") && !v.contains("urine") -> 0
+                v.contains("urea") || v == "bun" || v.contains("bloodureanitrogen") -> 1
+                v.contains("bilirubin") -> 10
+                v.contains("ast") || v.contains("sgot") -> 11
+                v.contains("alt") || v.contains("sgpt") -> 12
+                v.contains("alkalinephosphatase") || v == "alp" -> 13
+                v.contains("albumin") -> 14
+                v.contains("totalprotein") || v.contains("globulin") -> 15
+                v.contains("sodium") -> 20
+                v.contains("potassium") -> 21
+                v.contains("chloride") -> 22
+                v.contains("bicarbonate") -> 23
+                else -> 40
+            }
+            Panel.HEMOGRAM -> when {
+                v == "hb" || v.contains("hemoglobin") || v.contains("haemoglobin") -> 0
+                v.contains("totalleuco") || v.contains("totalleuko") ||
+                    v.contains("totalwhite") || v == "tlc" ||
+                    v.contains("whitebloodcellcount") || v == "wbc" -> 1
+                v.contains("neutrophil") && !v.contains("absolute") -> 2
+                v.contains("lymphocyte") && !v.contains("absolute") -> 3
+                v.contains("monocyte") && !v.contains("absolute") -> 4
+                v.contains("eosinophil") && !v.contains("absolute") -> 5
+                v.contains("basophil") && !v.contains("absolute") -> 6
+                v.contains("bandform") || v.contains("immaturegranulocyte") -> 7
+                v.contains("platelet") -> 10
+                v == "esr" || v.contains("erythrocytesedimentationrate") -> 11
+                v.contains("smear") || v == "rbcs" || v == "wbcs" ||
+                    v.contains("peripheralbloodpicture") -> 12
+                else -> 30
+            }
+            Panel.OTHERS -> 0
+        }
+    }
+
+    private fun repeatedNumeric(values: List<LabResult>): Boolean =
+        values.count { it.numericValue?.isFinite() == true &&
+            it.valueText.length <= 40 && RecentReportDates.parse(it.date) != null } >= 2 &&
+        values.filter { it.numericValue?.isFinite() == true &&
+            it.valueText.length <= 40 }
+            .mapNotNull { RecentReportDates.parse(it.date) }.distinct().size >= 2
+
+    /** Clinical mode hides singleton/narrative Others without changing source records.
+     * Raw mode uses the original comprehensive model for audit/research. */
+    fun build(rows: List<LabResult>, clinical: Boolean = false): List<Table> {
         // group only the presentation. Raw observations remain untouched.
         val separated=rows.groupBy(::panel)
         return Panel.entries.mapNotNull { panel ->
@@ -78,12 +132,21 @@ object LabPanelMatrix {
                     if(generic) row.test.trim() else name)
                 units.putIfAbsent(identity,row.unit)
             }
-            val params=keys.map { (identity,values) ->
+            val params=keys.mapNotNull { (identity,values) ->
+                if (clinical && panel == Panel.OTHERS && !repeatedNumeric(values))
+                    return@mapNotNull null
                 Parameter(identity,labels[identity].orEmpty(),units[identity].orEmpty(),
                     values.groupBy { canonicalDate(it.date) })
-            }.sortedWith(compareBy<Parameter> { it.title.lowercase(Locale.US) }
-                .thenBy { it.unit })
-            Table(panel,dates,params,source.size,
+            }.sortedWith(compareBy<Parameter> {
+                clinicalPriority(panel,it.title)
+            }.thenBy { it.title.lowercase(Locale.US) }.thenBy { it.unit })
+            if (clinical && params.isEmpty()) return@mapNotNull null
+            // Clinical Others only has dates with repeated numeric observations.
+            val visibleDates = if (clinical && panel == Panel.OTHERS)
+                params.flatMap { it.byDate.keys }.distinct()
+                    .filter { RecentReportDates.parse(it) != null }.sortedDescending()
+            else dates
+            Table(panel,visibleDates,params,source.size,
                 source.count { RecentReportDates.parse(it.date)==null })
         }
     }
