@@ -77,6 +77,14 @@ object ProcessHealth {
             true
         }.getOrDefault(false)
         val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024 * 1024)
+        fun statMb(key: String): Long = if (pssReady) runCatching {
+            appMem.getMemoryStat(key)?.toLongOrNull()?.div(1024) ?: -1L
+        }.getOrDefault(-1L) else -1L
+        // PDF files occupy disk; list their footprint separately from RAM.
+        val pdfFiles = context.cacheDir.listFiles { file ->
+            file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
+        }.orEmpty()
+        val pdfDiskBytes = pdfFiles.sumOf { it.length() }
         return listOf(
             "process.launches=" + pref.getInt(STARTS, 0),
             "process.previousExit=" + recentExit(context),
@@ -92,6 +100,11 @@ object ProcessHealth {
             "memory.nativePssMb=" + if (pssReady) appMem.nativePss / 1024 else -1,
             "memory.dalvikPssMb=" + if (pssReady) appMem.dalvikPss / 1024 else -1,
             "memory.otherPssMb=" + if (pssReady) appMem.otherPss / 1024 else -1,
+            "memory.pssGraphicsMb=" + statMb("summary.graphics"),
+            "memory.pssPrivateOtherMb=" + statMb("summary.private-other"),
+            "memory.pssCodeMb=" + statMb("summary.code"),
+            "memory.pdfDiskCacheFiles=" + pdfFiles.size,
+            "memory.pdfDiskCacheMb=" + pdfDiskBytes / (1024 * 1024),
             "memory.pdfBitmapBytes=" + PdfPerformanceTrace.currentBitmapBytes(),
             ReportTitleCache.diagnosticFootprint(),
             "memory.systemLow=" + m.lowMemory,

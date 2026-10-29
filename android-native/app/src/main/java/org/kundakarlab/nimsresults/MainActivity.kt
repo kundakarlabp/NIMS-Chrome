@@ -1487,7 +1487,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Column(Modifier.weight(1f)) {
                                 Text(entry.title, fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp, color = Color(0xFF102A43))
-                                Text(entry.dateLabel + ": " + entry.date.toString() +
+                                Text(entry.dateLabel + ": " + LabPanelMatrix.displayDate(entry.date.toString()) +
                                     " · " + if (entry.rows.isNotEmpty())
                                         "Structured result" else "Source report index",
                                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -1612,7 +1612,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                                     Text(row.parameter, modifier = Modifier.weight(1f),
                                         fontSize = 12.sp, maxLines = 1)
-                                    Text(row.valueText + " " + row.unit + " · " + row.date,
+                                    Text(row.valueText + " " + row.unit + " · " +
+                                        LabPanelMatrix.displayDate(row.date),
                                         fontSize = 11.sp, color = abnormalColor(row.abnormal))
                                 }
                             }
@@ -1690,7 +1691,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     color = abnormalColor(row.abnormal),
                     maxLines = 1
                 )
-                Text(row.date, fontSize = 11.sp, color = Color(0xFF829AB1))
+                Text(LabPanelMatrix.displayDate(row.date),
+                    fontSize = 11.sp, color = Color(0xFF829AB1))
             }
         }
     }
@@ -1921,6 +1923,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             } else cultures
         }
         val shownCultures = if (allCultures) selectedCultures else selectedCultures.take(8)
+        // Shared date columns are less expensive and easier to compare than six
+        // independent full-length result cards; missing values remain visible.
+        val markerDates = remember(markerRows) {
+            markerRows.flatMap { it.second }
+                .mapNotNull { RecentReportDates.parse(it.date) }
+                .distinct().sortedDescending().map { it.toString() }
+        }
+        var markerPage by remember(current.patient.crNo) { mutableStateOf(0) }
+        var markerSource by remember(current.patient.crNo) {
+            mutableStateOf<List<LabResult>>(emptyList())
+        }
+        val visibleMarkerDates = markerDates.drop(markerPage * 2).take(2)
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 12.dp, end = 20.dp, top = 10.dp,
                 bottom = 24.dp),
@@ -1942,40 +1956,103 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("CRP and hsCRP are not combined; values retain their source units.",
                     fontSize = 10.sp, color = Color(0xFF66788A))
             }
-            items(markerRows, key = { it.first }) { (name, rows) ->
-                var showAll by remember(current.patient.crNo,name) { mutableStateOf(false) }
+            item {
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(Modifier.fillMaxWidth().padding(11.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(),
+                    Column(Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically) {
-                            Text(name, fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp, color = Color(0xFF102A43))
-                            if (rows.isNotEmpty()) Text("${rows.size} values",
-                                fontSize = 10.sp, color = Color(0xFF66788A))
+                            Text("Biomarker trends · source dates", fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold)
+                            Text("${markerDates.size} dates", fontSize = 10.sp,
+                                color = Color(0xFF66788A))
                         }
-                        if (rows.isEmpty()) {
-                            Text("No verified numeric value in the retrieved structured data.",
-                                fontSize = 11.sp, color = Color(0xFF66788A))
-                        } else {
-                            rows.take(if (showAll) rows.size else 3).forEach { value ->
-                                Row(Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(value.date, fontSize = 11.sp,
-                                        color = Color(0xFF486581))
-                                    Text(value.valueText +
-                                        if (value.unit.isNotBlank()) " " + value.unit else "",
-                                        fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                        color = abnormalColor(value.abnormal))
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text("DD-MM-YYYY · newest first", fontSize = 10.sp,
+                                color = Color(0xFF66788A))
+                            Row {
+                                TextButton(enabled = markerPage > 0,
+                                    onClick = { markerPage-- }) {
+                                    Text("Newer", fontSize = 10.sp)
+                                }
+                                TextButton(
+                                    enabled = (markerPage + 1) * 2 < markerDates.size,
+                                    onClick = { markerPage++ }) {
+                                    Text("Older", fontSize = 10.sp)
                                 }
                             }
-                            if (rows.size > 3) {
-                                TextButton(onClick = { showAll = !showAll }) {
-                                    Text(if (showAll) "Show latest 3"
-                                        else "Show all ${rows.size} source values",
-                                        fontSize = 11.sp)
+                        }
+                        if (markerDates.isEmpty()) {
+                            Text("No dated numeric biomarker values were retrieved.",
+                                fontSize = 11.sp, color = Color(0xFF66788A))
+                        } else {
+                            Row(Modifier.fillMaxWidth()) {
+                                Column(Modifier.width(105.dp)) {
+                                    Text("Marker", fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.height(32.dp))
+                                    markerRows.forEach { (name, _) ->
+                                        Box(Modifier.height(43.dp).fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart) {
+                                            Text(name, fontSize = 11.sp, maxLines = 2)
+                                        }
+                                    }
                                 }
+                                Row(Modifier.weight(1f)
+                                    .horizontalScroll(rememberScrollState())) {
+                                    visibleMarkerDates.forEach { date ->
+                                        Column(Modifier.width(114.dp)) {
+                                            Text(LabPanelMatrix.displayDate(date),
+                                                fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.height(32.dp))
+                                            markerRows.forEach { (_, rows) ->
+                                                val cell = rows.filter {
+                                                    LabPanelMatrix.canonicalDate(it.date) == date
+                                                }
+                                                Box(Modifier.fillMaxWidth().height(43.dp)
+                                                    .clickable(enabled = cell.isNotEmpty()) {
+                                                        markerSource = cell
+                                                    }, contentAlignment = Alignment.CenterStart) {
+                                                    Text(when {
+                                                        cell.isEmpty() -> "—"
+                                                        cell.size > 1 -> "${cell.size} values"
+                                                        else -> cell.first().valueText +
+                                                            (if (cell.first().unit.isBlank()) ""
+                                                            else " " + cell.first().unit)
+                                                    }, fontSize = 11.sp, maxLines = 2,
+                                                        color = if (cell.size == 1)
+                                                            abnormalColor(cell.first().abnormal)
+                                                        else Color(0xFF486581))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        val undated = markerRows.sumOf { (_, rows) ->
+                            rows.count { RecentReportDates.parse(it.date) == null }
+                        }
+                        if (undated > 0) Text(
+                            "${undated} biomarker observations have unrecognized dates; review All Results.",
+                            fontSize = 10.sp, color = Color(0xFF875B22))
+                        if (markerSource.isNotEmpty()) {
+                            HorizontalDivider()
+                            markerSource.forEach { obs ->
+                                Text(obs.parameter + " · " +
+                                    LabPanelMatrix.displayDate(obs.date) + ": " +
+                                    obs.valueText +
+                                    (if (obs.unit.isBlank()) "" else " " + obs.unit),
+                                    fontSize = 11.sp)
+                                if (obs.refRange.isNotBlank())
+                                    Text("Reference: " + obs.refRange, fontSize = 10.sp)
+                                if (obs.labNumber.isNotBlank())
+                                    Text("Lab/study: " + obs.labNumber, fontSize = 10.sp)
+                            }
+                            TextButton(onClick = { markerSource = emptyList() }) {
+                                Text("Close details", fontSize = 11.sp)
                             }
                         }
                     }
@@ -2002,7 +2079,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(episode.label, fontWeight = FontWeight.Medium,
                             fontSize = 12.sp, color = Color(0xFF102A43))
-                        Text("Result date: " + episode.date +
+                        Text("Result date: " + LabPanelMatrix.displayDate(episode.date) +
                             " · " + CultureReview.status(episode.rows).name,
                             fontSize = 11.sp, color = Color(0xFF486581))
                         if (episode.rows.firstOrNull()?.reportStage?.isNotBlank() == true)
@@ -2034,238 +2111,206 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     @Composable
     private fun LabsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
-        var parameter by remember(current.patient.crNo) { mutableStateOf("All") }
         var kind by remember(current.patient.crNo) { mutableStateOf("Clinical") }
-        var period by remember(current.patient.crNo) { mutableStateOf("90D") }
-        var columns by remember(current.patient.crNo) { mutableStateOf("4") }
-        val nonMicro = remember(current.results) { current.results.filterNot { isMicro(it) } }
-        val clinicalRows = remember(nonMicro, kind) {
-            nonMicro.filter { row ->
-                when (kind) {
-                    "Serology" -> ClinicalResultRules.isSerology(row) &&
-                        !ClinicalPresentation.isTechnical(row) &&
-                        !ClinicalPresentation.isOpaquePanelCode(row)
-                    "Narrative" -> ClinicalResultRules.isNarrativeOrQualitative(row) &&
-                        !ClinicalPresentation.isTechnical(row) &&
-                        !ClinicalPresentation.isOpaquePanelCode(row)
+        var period by remember(current.patient.crNo) { mutableStateOf("All") }
+        var perPage by remember(current.patient.crNo) { mutableStateOf(4) }
+        val allRows = remember(current.results) {
+            current.results.filterNot { isMicro(it) }
+        }
+        val latest = remember(allRows) {
+            allRows.mapNotNull { RecentReportDates.parse(it.date) }.maxOrNull()
+        }
+        val days = when(period) {
+            "14D" -> 14L; "30D" -> 30L; "90D" -> 90L
+            "1Y" -> 365L; else -> null
+        }
+        val filtered = remember(allRows,query,kind,days,latest) {
+            allRows.filter { row ->
+                val sourceMatches = when(kind) {
                     "Raw" -> true
+                    "Serology" -> ClinicalResultRules.isSerology(row) &&
+                        !ClinicalPresentation.isTechnical(row)
+                    "Narrative" -> ClinicalResultRules.isNarrativeOrQualitative(row) &&
+                        !ClinicalPresentation.isTechnical(row)
                     else -> !ClinicalPresentation.isTechnical(row)
                 }
-            }
-        }
-        val latest = remember(nonMicro) {
-            nonMicro.maxByOrNull { BulkParser.dateKey(it.date) }?.date.orEmpty()
-        }
-        val periodDays: Long? = when (period) {
-            "14D" -> 14L
-            "30D" -> 30L
-            "90D" -> 90L
-            "1Y" -> 365L
-            else -> null
-        }
-        val options = remember(clinicalRows) {
-            clinicalRows.filter { it.parameter.isNotBlank() &&
-                (kind == "Raw" || !ClinicalReportRenderer.isUninterpretedCode(it)) }
-                .groupingBy { it.parameter }.eachCount()
-                .entries.sortedByDescending { it.value }
-                .take(20).map { it.key }
-        }
-        val filtered = remember(clinicalRows, query, parameter, period, latest) {
-            clinicalRows.filter { row ->
-                (kind == "Raw" || !ClinicalReportRenderer.isPlaceholder(row)) &&
-                    (parameter == "All" || row.parameter == parameter) &&
-                    ClinicalResultRules.inWindow(row.date, latest, periodDays) &&
-                    (query.isBlank() || (row.test + " " + row.parameter + " " + row.date)
-                        .contains(query, true))
-            }
-        }
-        val groups = remember(filtered) {
-            filtered.groupBy { it.test.ifBlank { "Other investigations" } }
-                .toList().sortedBy { it.first }
-        }
-        LazyColumn(state = scroll, 
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(10.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp)
-        ) {
-            item {
-                Text("Laboratory comparison", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                OutlinedTextField(
-                    value = query, onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    placeholder = { Text("Search investigation or parameter") }
+                val ageOk = days == null || (
+                    latest != null &&
+                    RecentReportDates.parse(row.date)?.let {
+                        java.time.temporal.ChronoUnit.DAYS.between(it,latest) in 0 until days
+                    } == true
                 )
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Clinical", "Serology", "Narrative", "Raw").forEach { category ->
-                        FilterChip(selected = kind == category,
-                            onClick = { kind = category; parameter = "All" },
-                            label = { Text(category, fontSize = 11.sp) })
-                    }
-                }
-                Text("Parameter", fontSize = 11.sp, color = Color(0xFF66788A))
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    (listOf("All") + options).forEach { name ->
-                        FilterChip(selected = parameter == name,
-                            onClick = { parameter = name },
-                            label = { Text(name, fontSize = 11.sp, maxLines = 1) })
-                    }
-                }
-                Text("Date range · relative to latest result", fontSize = 11.sp,
-                    color = Color(0xFF66788A))
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("14D", "30D", "90D", "1Y", "All").forEach { span ->
-                        FilterChip(selected = period == span, onClick = { period = span },
-                            label = { Text(span, fontSize = 11.sp) })
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Dates shown:", fontSize = 11.sp, color = Color(0xFF66788A))
-                    listOf("4", "8", "All").forEach { count ->
-                        FilterChip(selected = columns == count,
-                            onClick = { columns = count },
-                            label = { Text(count, fontSize = 11.sp) })
-                    }
-                }
+                sourceMatches && ageOk &&
+                    (query.isBlank() || (
+                        row.test + " " + row.parameter + " " +
+                        row.valueText + " " + row.date).contains(query,ignoreCase=true))
             }
-            if (groups.isEmpty()) {
-                item { Text("No matching values in this date range.", color = Color(0xFF66788A)) }
-            }
-            items(groups, key = { it.first }) { (test, sourceRows) ->
-                val selectedLayout = ClinicalReportRenderer.layout(test, sourceRows)
-                if (selectedLayout != ClinicalLayout.SERIES && kind != "Raw") {
-                    ClinicalNarrativeCard(test, sourceRows, selectedLayout,
-                        current.patient.crNo, current.reports)
-                } else {
-                val rows = if (kind == "Raw") sourceRows else sourceRows.filter {
-                    !ClinicalReportRenderer.isUninterpretedCode(it) &&
-                        !ClinicalReportRenderer.isPlaceholder(it)
-                }
-                val dates = remember(rows, columns) {
-                    val allDates = rows.map { it.date }.distinct()
-                        .sortedByDescending { BulkParser.dateKey(it) }
-                    when (columns) {
-                        "4" -> allDates.take(4)
-                        "8" -> allDates.take(8)
-                        else -> allDates
+        }
+        val tables = remember(filtered) { LabPanelMatrix.build(filtered) }
+        LazyColumn(state=scroll, modifier=Modifier.fillMaxSize(),
+            contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
+            verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            item {
+                Text("Laboratory comparison", fontWeight=FontWeight.Bold,fontSize=17.sp)
+                Text("Combined source values in three clinical panels; each column is " +
+                    "a result date, not an inferred collection/reporting timestamp.",
+                    fontSize=11.sp,color=Color(0xFF66788A))
+                OutlinedTextField(value=query,onValueChange={ query=it },
+                    modifier=Modifier.fillMaxWidth(),singleLine=true,
+                    placeholder={ Text("Search test, parameter, result or date") })
+                Row(modifier=Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                    listOf("Clinical","Serology","Narrative","Raw").forEach { mode ->
+                        FilterChip(selected=kind==mode,onClick={kind=mode},
+                            label={Text(mode,fontSize=11.sp)})
                     }
                 }
-                val parameters = remember(rows) {
-                    rows.groupBy { it.parameter.ifBlank { it.test } }.toList()
+                Row(modifier=Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                    listOf("14D","30D","90D","1Y","All").forEach { span ->
+                        FilterChip(selected=period==span,onClick={period=span},
+                            label={Text(span,fontSize=11.sp)})
+                    }
                 }
-                var selectedValues by remember(current.patient.crNo, test) {
+                Row(verticalAlignment=Alignment.CenterVertically,
+                    horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Text("Date columns:",fontSize=11.sp,color=Color(0xFF66788A))
+                    listOf(4,8).forEach { count ->
+                        FilterChip(selected=perPage==count,onClick={perPage=count},
+                            label={Text(count.toString(),fontSize=11.sp)})
+                    }
+                }
+                Text("${filtered.size} source values · ${tables.size} clinical panels",
+                    fontSize=11.sp,color=Color(0xFF486581))
+            }
+            if(tables.isEmpty()) item {
+                Text("No matching source values. Try All dates or Raw.",
+                    fontSize=12.sp,color=Color(0xFF66788A))
+            }
+            items(tables,key={it.panel.name}) { table ->
+                var page by remember(current.patient.crNo,table.panel,perPage,period,kind,query) {
+                    mutableStateOf(0)
+                }
+                var showAllParameters by remember(current.patient.crNo,table.panel) {
+                    mutableStateOf(false)
+                }
+                var chosen by remember(current.patient.crNo,table.panel) {
                     mutableStateOf<List<LabResult>>(emptyList())
                 }
-                Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                    Column(Modifier.padding(10.dp)) {
-                        Text(test + " · " + rows.size + " values", fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp, color = Color(0xFF102A43))
-                        if (Regex("(?i)biofire|filmarray|ana\\s*(?:profile|blot|panel)")
-                                .containsMatchIn(test)) {
-                            Text("Panel codes are uninterpreted without a validated target dictionary. Verify the original PDF.",
-                                fontSize = 10.sp, color = Color(0xFF875B22))
-                            TextButton(onClick = {
-                                browseSourceReports(test)
-                            }) { Text("Find source panel PDF") }
+                val first=page*perPage
+                val dates=table.dates.drop(first).take(perPage)
+                val parameterRows=if(showAllParameters) table.parameters
+                    else table.parameters.take(20)
+                Card(colors=CardDefaults.cardColors(containerColor=Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                        Text(table.panel.label,fontWeight=FontWeight.Bold,
+                            fontSize=14.sp,color=Color(0xFF102A43))
+                        Text("${table.observationCount} source values · " +
+                            "${table.parameters.size} parameters · " +
+                            "${table.dates.size} dates",
+                            fontSize=10.sp,color=Color(0xFF66788A))
+                        if(table.undatedCount>0) Text(
+                            "${table.undatedCount} source values have unrecognized or absent dates; " +
+                                "inspect in All Results.",
+                            fontSize=10.sp,color=Color(0xFF875B22))
+                        Row(Modifier.fillMaxWidth(),
+                            horizontalArrangement=Arrangement.SpaceBetween,
+                            verticalAlignment=Alignment.CenterVertically) {
+                            Text("Newest → older (DD-MM-YYYY)",fontSize=10.sp,
+                                color=Color(0xFF486581))
+                            Row(verticalAlignment=Alignment.CenterVertically) {
+                                TextButton(enabled=page>0,onClick={page--}) {
+                                    Text("Newer",fontSize=10.sp)
+                                }
+                                TextButton(enabled=(page+1)*perPage<table.dates.size,
+                                    onClick={page++}) {
+                                    Text("Older",fontSize=10.sp)
+                                }
+                            }
                         }
-                        if (Regex("(?i)blood grouping|antibody screening").containsMatchIn(test)) {
-                            Text("Source-coded result fields may not represent clinical values. Verify ABO/Rh and interpretation in the original PDF.",
-                                fontSize = 10.sp, color = Color(0xFF875B22))
-                        }
-                        Text(dates.size.toString() + " dates · scroll horizontally for older values",
-                            fontSize = 10.sp, color = Color(0xFF829AB1))
-                        Spacer(Modifier.height(6.dp))
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.width(117.dp)) {
-                                Text("Parameter", fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.height(27.dp))
-                                parameters.forEach { (name, values) ->
-                                    Column(modifier = Modifier.height(44.dp).padding(end = 5.dp)) {
-                                        Text(name, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                                            maxLines = 2)
-                                        values.firstOrNull()?.unit?.takeIf { it.isNotBlank() }?.let { unit ->
-                                            Text(unit, fontSize = 9.sp,
-                                                color = Color(0xFF829AB1), maxLines = 1)
-                                        }
+                        val rowHeight=52.dp
+                        Row(modifier=Modifier.fillMaxWidth()) {
+                            Column(modifier=Modifier.width(126.dp)) {
+                                Text("Parameter",fontSize=10.sp,fontWeight=FontWeight.Bold,
+                                    modifier=Modifier.height(32.dp))
+                                parameterRows.forEach { param ->
+                                    Column(Modifier.height(rowHeight).padding(end=5.dp)) {
+                                        Text(param.title,fontSize=11.sp,maxLines=2,
+                                            fontWeight=FontWeight.Medium)
+                                        if(param.unit.isNotBlank()) Text(param.unit,
+                                            fontSize=9.sp,color=Color(0xFF66788A),
+                                            maxLines=1)
                                     }
                                 }
                             }
-                            Row(modifier = Modifier.weight(1f)
+                            Row(modifier=Modifier.weight(1f)
                                 .horizontalScroll(rememberScrollState())) {
                                 dates.forEach { date ->
-                                    Column(modifier = Modifier.width(92.dp)) {
-                                        Text(date.drop(2), fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.height(27.dp))
-                                        parameters.forEach { (_, values) ->
-                                            val matches = values.filter { it.date == date }
-                                            val value = matches.singleOrNull()
-                                            Box(
-                                                modifier = Modifier.height(44.dp).fillMaxWidth()
-                                                    .clickable(enabled = matches.isNotEmpty()) {
-                                                        selectedValues = matches
-                                                    }.padding(end = 6.dp)
-                                            ) {
-                                                val flag = value?.abnormal?.lowercase().orEmpty()
-                                                val flagged = flag == "h" || flag == "l" ||
-                                                    "high" in flag || "low" in flag ||
-                                                    "critical" in flag
-                                                Surface(
-                                                    color = if (flagged) Color(0xFFFFF0E9) else Color.Transparent,
-                                                    shape = RoundedCornerShape(4.dp)
-                                                ) {
-                                                    Text(when {
-                                                        matches.size > 1 -> "${matches.size} results"
-                                                        value != null -> ClinicalPresentation.displayValue(value)
+                                    Column(Modifier.width(112.dp)) {
+                                        Text(LabPanelMatrix.displayDate(date),
+                                            fontSize=10.sp,fontWeight=FontWeight.Bold,
+                                            modifier=Modifier.height(32.dp))
+                                        parameterRows.forEach { param ->
+                                            val entries=param.byDate[date].orEmpty()
+                                            val single=entries.singleOrNull()
+                                            Box(Modifier.height(rowHeight)
+                                                .fillMaxWidth()
+                                                .clickable(enabled=entries.isNotEmpty()) {
+                                                    chosen=entries
+                                                }.padding(end=5.dp)) {
+                                                Text(
+                                                    when {
+                                                        entries.size>1 ->
+                                                            "${entries.size} source values"
+                                                        single!=null ->
+                                                            ClinicalPresentation.displayValue(single)
                                                         else -> "—"
                                                     },
-                                                        modifier = Modifier.padding(horizontal = 2.dp),
-                                                        fontSize = 12.sp,
-                                                        fontWeight = FontWeight.SemiBold,
-                                                        color = value?.let {
-                                                            abnormalColor(it.abnormal)
-                                                        } ?: Color(0xFF829AB1), maxLines = 2)
-                                                }
+                                                    fontSize=11.sp,maxLines=2,
+                                                    color=single?.let {
+                                                        abnormalColor(it.abnormal)
+                                                    } ?: Color(0xFF66788A))
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        if (selectedValues.isNotEmpty()) {
-                            HorizontalDivider()
-                            Text(selectedValues.first().parameter + " · " +
-                                selectedValues.first().date +
-                                if (selectedValues.size > 1) " · ${selectedValues.size} source entries" else "",
-                                fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            selectedValues.forEach { detail ->
-                                Text(ClinicalPresentation.displayValue(detail) +
-                                    (if (detail.unit.isBlank()) "" else " " + detail.unit),
-                                    fontSize = 13.sp)
-                                if (detail.sentDate.isNotBlank()) {
-                                    Text("Collected: " + detail.sentDate, fontSize = 10.sp,
-                                        color = Color(0xFF66788A))
-                                }
-                                if (detail.reportedDate.isNotBlank()) {
-                                    Text("Reported: " + detail.reportedDate, fontSize = 10.sp,
-                                        color = Color(0xFF66788A))
-                                }
-                                if (detail.labNumber.isNotBlank()) {
-                                    Text("Lab accession: " + detail.labNumber, fontSize = 10.sp,
-                                        color = Color(0xFF486581))
-                                }
-                                if (detail.refRange.isNotBlank()) {
-                                    Text("Reference: " + detail.refRange, fontSize = 11.sp,
-                                        color = Color(0xFF66788A))
-                                }
+                        if(table.parameters.size>20) {
+                            TextButton(onClick={showAllParameters=!showAllParameters}) {
+                                Text(if(showAllParameters) "Show first 20 parameters"
+                                    else "Show all ${table.parameters.size} parameters",
+                                    fontSize=11.sp)
                             }
-                            TextButton(onClick = { selectedValues = emptyList() }) { Text("Close detail") }
+                        }
+                        if(chosen.isNotEmpty()) {
+                            HorizontalDivider()
+                            Text(chosen.first().parameter.ifBlank{chosen.first().test} +
+                                " · " + LabPanelMatrix.displayDate(chosen.first().date),
+                                fontSize=12.sp,fontWeight=FontWeight.Bold)
+                            chosen.forEach { value ->
+                                Text(ClinicalPresentation.displayValue(value)+
+                                    (if(value.unit.isBlank()) "" else " "+value.unit),
+                                    fontSize=12.sp)
+                                if(value.refRange.isNotBlank()) Text(
+                                    "Reference: "+value.refRange,fontSize=10.sp,
+                                    color=Color(0xFF66788A))
+                                if(value.labNumber.isNotBlank()) Text(
+                                    "Source lab/study: "+value.labNumber,
+                                    fontSize=10.sp)
+                                if(value.sampleNumber.isNotBlank()) Text(
+                                    "Source sample: "+value.sampleNumber,fontSize=10.sp)
+                                if(value.collectionDateTime.isNotBlank()) Text(
+                                    "Collected: "+value.collectionDateTime,fontSize=10.sp)
+                                if(value.reportedDate.isNotBlank()) Text(
+                                    "Reported: "+value.reportedDate,fontSize=10.sp)
+                            }
+                            TextButton(onClick={chosen=emptyList()}) {
+                                Text("Close detail",fontSize=11.sp)
+                            }
                         }
                     }
-                }
                 }
             }
         }
@@ -2492,7 +2537,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 title = { Text("Match source PDF to specimen") },
                                 text = {
                                     Column {
-                                        Text(test + " · result date " + date +
+                                        Text(test + " · result date " + LabPanelMatrix.displayDate(date) +
                                             " · accession " + accession.ifBlank { "unknown" },
                                             fontSize = 12.sp)
                                         Text("Candidate reports are not automatically verified. Confirm the lab/study number in the source PDF before using clinical findings.",
@@ -2620,13 +2665,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text(first.parameter + if (first.unit.isNotBlank()) " (" + first.unit + ")" else "",
                                 fontWeight = FontWeight.Bold)
                             Text(rows.size.toString() + " measurements · " +
-                                first.date + " → " + last.date, fontSize = 11.sp,
+                                LabPanelMatrix.displayDate(first.date) + " → " +
+                                LabPanelMatrix.displayDate(last.date), fontSize = 11.sp,
                                 color = Color(0xFF66788A))
                             Spacer(Modifier.height(6.dp))
                             TrendChart(rows, Modifier.fillMaxWidth().height(180.dp))
                             Text("Dates on the horizontal axis reflect actual elapsed time.",
                                 fontSize = 10.sp, color = Color(0xFF829AB1))
-                            Text("Latest: " + last.valueText + " · " + last.date,
+                            Text("Latest: " + last.valueText + " · " +
+                                LabPanelMatrix.displayDate(last.date),
                                 fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
@@ -2944,10 +2991,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else if (report.url.isNotBlank()) "Original NIMS PDF · "
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
-                                         else entry.date.toString())
+                                         else LabPanelMatrix.displayDate(entry.date.toString()))
                                     else rows.size.toString() + " result fields · column date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
-                                         else entry.date.toString()),
+                                         else LabPanelMatrix.displayDate(entry.date.toString())),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                             Text(if (expanded) "Collapse ↑" else "Expand ↓",
@@ -2982,12 +3029,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         " · Reported: " + reported.ifBlank { "—" },
                                     fontSize = 10.sp, color = Color(0xFF486581))
                             } else {
-                                Text("Lab/study no.: " +
-                                    accession.ifBlank { "Not available in structured feed" },
+                                if (accession.isNotBlank()) Text(
+                                    "Lab/study no.: " + accession, fontSize = 11.sp)
+                                if (collected.isNotBlank()) Text(
+                                    "Collected/studied: " +
+                                        LabPanelMatrix.displayDateTime(collected), fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text(
+                                    "Sample sent: " + LabPanelMatrix.displayDateTime(sent),
                                     fontSize = 11.sp)
-                                Text("Collected/studied: " +
-                                    collected.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
-                                if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
                                 rows.firstOrNull()?.let { first ->
                                     if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
                                     if (first.accessionNumber.isNotBlank()) Text("Accession: " + first.accessionNumber, fontSize=11.sp)
@@ -3000,8 +3049,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (first.reportNumber.isNotBlank()) Text("Report No: " + first.reportNumber, fontSize=11.sp)
                                     if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
                                 }
-                                Text("Reported: " +
-                                    reported.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
+                                if (reported.isNotBlank()) Text(
+                                    "Reported: " + LabPanelMatrix.displayDateTime(reported),
+                                    fontSize = 11.sp)
+                                if (accession.isBlank() || collected.isBlank() ||
+                                    reported.isBlank()) Text(
+                                    "Some lab/specimen or timing metadata is absent in the " +
+                                        "structured feed; original report review may be required.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
@@ -3043,24 +3098,47 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (verifiedIndex == null && unlinkedSources.isNotEmpty()) {
                                     HorizontalDivider()
-                                    Text("Possible source-index records (" +
-                                        unlinkedSources.size + ") · NOT specimen-verified",
+                                    Text("Candidate source reports · identity NOT verified",
                                         fontSize = 11.sp, color = Color(0xFF875B22),
                                         fontWeight = FontWeight.SemiBold)
-                                    unlinkedSources.take(4).forEach { source ->
-                                        Text("Lab: " + source.labNumber.ifBlank { "unknown" } +
-                                            " · Sample: " + source.sampleNumber.ifBlank { "unknown" } +
-                                            " · Collected: " +
-                                            source.collectionDateTime.ifBlank { source.sentDate }
-                                                .ifBlank { "unknown" } +
-                                            " · Report No: " +
-                                            source.reportNumber.ifBlank { "unknown" },
+                                    Text("A matching title/date is not proof of the same specimen. " +
+                                        "Confirm the CR, accession and sample in the PDF.",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                    unlinkedSources.take(3).forEach { source ->
+                                        Text(source.title + " · " +
+                                            LabPanelMatrix.displayDate(source.date),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium)
+                                        val verifiedFields = listOfNotNull(
+                                            source.labNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Lab: " + it
+                                            },
+                                            source.sampleNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Sample: " + it
+                                            },
+                                            source.collectionDateTime.takeIf { it.isNotBlank() }?.let {
+                                                "Collected: " + it
+                                            },
+                                            source.reportNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Report: " + it
+                                            }
+                                        )
+                                        if (verifiedFields.isNotEmpty()) Text(
+                                            verifiedFields.joinToString(" · "),
                                             fontSize = 10.sp, color = Color(0xFF486581))
+                                        if (source.url.isNotBlank()) TextButton(
+                                            onClick = { openReport(source.url) }) {
+                                            Text("Open candidate PDF · verify specimen",
+                                                fontSize = 11.sp)
+                                        }
                                     }
-                                    TextButton(onClick = {
+                                    if (unlinkedSources.size > 3) TextButton(onClick = {
                                         subview = "Report index / PDFs"
                                         query = entry.title
-                                    }) { Text("Review source-index records (no automatic linking)") }
+                                    }) {
+                                        Text("Review all ${unlinkedSources.size} source records",
+                                            fontSize = 11.sp)
+                                    }
                                 }
                                 HorizontalDivider()
                                 // Preserve even unclassified source values. Codes are
@@ -3136,7 +3214,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         resultLinks.candidates.forEach { candidate ->
                                             TextButton(onClick = { openReport(candidate.url) }) {
                                                 Text(candidate.title + " · " +
-                                                    candidate.date, fontSize = 11.sp)
+                                                    LabPanelMatrix.displayDate(candidate.date), fontSize = 11.sp)
                                             }
                                         }
                                     }
@@ -3157,8 +3235,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
+                            val restOnly =
+                                report.sourceTag.startsWith("nims_rest_reportList")
+                            if (restOnly && !expanded) {
+                                Text("REST source reportDate: " +
+                                    LabPanelMatrix.displayDate(report.reportedDate.ifBlank {
+                                        report.date
+                                    }) + " · tap Expand for complete source fields",
+                                    fontSize = 11.sp, color = Color(0xFF486581))
+                            } else {
                             Text("Lab/study no.: " + lab.ifBlank {
                                 if (parts.isNotEmpty()) "Multiple studies / see sections"
+                                else if (restOnly) "Not present in REST record"
                                 else "Not yet extracted"
                             }, fontSize = 11.sp)
                             if (report.sampleNumber.isNotBlank()) Text(
@@ -3173,13 +3261,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if (report.reportStage.isNotBlank()) Text(
                                 "Report stage: " + report.reportStage, fontSize = 11.sp)
                             Text("Collection date (report index / verified PDF): " +
-                                collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
+                                (collected.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
+                                    ?: "Not supplied"), fontSize = 11.sp)
                             Text(
                                 (if (report.sourceTag.startsWith("nims_rest_reportList"))
                                     "REST source reportDate (not collection time): "
                                  else "Report-index/PDF reporting timestamp: ") +
-                                reported.ifBlank { "Not supplied by this source" },
+                                (reported.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
+                                    ?: "Not supplied by this source"),
                                 fontSize = 11.sp)
+                            }
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
@@ -3254,7 +3345,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 TextButton(onClick = { openReport(report.url) }) {
                                     Text("Open complete original PDF")
                                 }
-                            } else Text("Metadata-only NIMS report row: no usable PDF URL provided.",
+                            } else if (!restOnly && expanded) Text(
+                                "No PDF link is present in this source-index row.",
                                 fontSize = 11.sp, color = Color(0xFF875B22))
                             if (expanded && report.sourceRow.isNotBlank()) {
                                 TextButton(onClick = { showEntireSource = !showEntireSource }) {
@@ -3297,7 +3389,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     fontWeight = FontWeight.Bold,
                     color = abnormalColor(row.abnormal)
                 )
-                Text(row.date, fontSize = 10.sp, color = Color(0xFF829AB1))
+                Text(LabPanelMatrix.displayDate(row.date),
+                    fontSize = 10.sp, color = Color(0xFF829AB1))
             }
         }
     }

@@ -36,11 +36,11 @@ object ResultSections {
  */
 object RecentReportDates {
     private val textual = DateTimeFormatter.ofPattern("d-MMM-uuuu", Locale.ENGLISH)
-    private val slash = DateTimeFormatter.ofPattern("d/M/uuuu", Locale.ENGLISH)
+    private val numeric = DateTimeFormatter.ofPattern("d-M-uuuu", Locale.ENGLISH)
 
     fun parse(value: String): LocalDate? {
         val trimmed = value.trim()
-        val token = Regex("""(?i)\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[-/][a-z]{3}[-/]\d{4}|\d{1,2}/\d{1,2}/\d{4}""")
+        val token = Regex("""(?i)\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[-/][a-z]{3}[-/]\d{4}|\d{1,2}[-/]\d{1,2}[-/]\d{4}""")
             .find(trimmed)?.value ?: return null
         return try {
             when {
@@ -48,7 +48,7 @@ object RecentReportDates {
                     LocalDate.parse(token)
                 token.contains('/') && token.any(Char::isLetter) ->
                     LocalDate.parse(token.replace('/', '-'), textual)
-                token.contains('/') -> LocalDate.parse(token, slash)
+                token.contains('/') || token.matches(Regex("""\d{1,2}-\d{1,2}-\d{4}""")) -> LocalDate.parse(token.replace('/', '-'), numeric)
                 else -> LocalDate.parse(token, textual)
             }
         } catch (_: DateTimeParseException) { null }
