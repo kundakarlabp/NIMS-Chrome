@@ -3455,10 +3455,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                     }
                                 }
-                                if (preferred.size < rows.size) Text(
-                                    "Additional unclassified source fields are available " +
-                                        "under Raw; verify clinical meaning in the PDF.",
-                                    fontSize = 10.sp, color = Color(0xFF875B22))
                                 if (linkedPart != null) {
                                     Text("Confirmed source section · page " + linkedPart.page,
                                         fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -3484,10 +3480,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 verifiedReport != null -> TextButton(onClick = {
                                     openReport(verifiedReport.url)
                                 }) { Text("Open accession-linked original PDF") }
-                                resultLinks.candidates.size == 1 -> TextButton(onClick = {
+                                resultLinks.candidates.size == 1 && !expanded -> TextButton(onClick = {
                                     openReport(resultLinks.candidates.single().url)
                                 }) { Text("Review possible PDF · match unverified") }
-                                resultLinks.candidates.isNotEmpty() -> {
+                                resultLinks.candidates.isNotEmpty() && !expanded -> {
                                     TextButton(onClick = {
                                         showCandidates = !showCandidates
                                     }) {
