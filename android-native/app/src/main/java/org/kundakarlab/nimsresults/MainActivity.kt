@@ -3029,12 +3029,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         " · Reported: " + reported.ifBlank { "—" },
                                     fontSize = 10.sp, color = Color(0xFF486581))
                             } else {
-                                Text("Lab/study no.: " +
-                                    accession.ifBlank { "Not available in structured feed" },
+                                if (accession.isNotBlank()) Text(
+                                    "Lab/study no.: " + accession, fontSize = 11.sp)
+                                if (collected.isNotBlank()) Text(
+                                    "Collected/studied: " +
+                                        LabPanelMatrix.displayDateTime(collected), fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text(
+                                    "Sample sent: " + LabPanelMatrix.displayDateTime(sent),
                                     fontSize = 11.sp)
-                                Text("Collected/studied: " +
-                                    collected.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
-                                if (sent.isNotBlank()) Text("Sample sent: " + sent, fontSize = 11.sp)
                                 rows.firstOrNull()?.let { first ->
                                     if (first.sampleNumber.isNotBlank()) Text("Sample: " + first.sampleNumber, fontSize=11.sp)
                                     if (first.accessionNumber.isNotBlank()) Text("Accession: " + first.accessionNumber, fontSize=11.sp)
@@ -3047,8 +3049,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if (first.reportNumber.isNotBlank()) Text("Report No: " + first.reportNumber, fontSize=11.sp)
                                     if (first.reportStage.isNotBlank()) Text("Stage: " + first.reportStage, fontSize=11.sp)
                                 }
-                                Text("Reported: " +
-                                    reported.ifBlank { "Not in this Custom Sheet response" }, fontSize = 11.sp)
+                                if (reported.isNotBlank()) Text(
+                                    "Reported: " + LabPanelMatrix.displayDateTime(reported),
+                                    fontSize = 11.sp)
+                                if (accession.isBlank() || collected.isBlank() ||
+                                    reported.isBlank()) Text(
+                                    "Some lab/specimen or timing metadata is absent in the " +
+                                        "structured feed; original report review may be required.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                             val ordered = rows.firstOrNull { it.orderDate.isNotBlank() }
                                 ?.orderDate.orEmpty().ifBlank {
