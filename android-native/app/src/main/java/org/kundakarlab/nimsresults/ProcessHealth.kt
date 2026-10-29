@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
+import android.os.Debug
 
 /**
  * Why a new process followed the previous one. Java exception hooks cannot
@@ -68,6 +69,14 @@ object ProcessHealth {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val m = ActivityManager.MemoryInfo()
         manager.getMemoryInfo(m)
+        // JVM heap alone hides PdfRenderer bitmaps and native PDF parsing.
+        // Capture this process's PSS on diagnostic tap, not every redraw.
+        val appMem = Debug.MemoryInfo()
+        val pssReady = runCatching {
+            Debug.getMemoryInfo(appMem)
+            true
+        }.getOrDefault(false)
+        val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024 * 1024)
         return listOf(
             "process.launches=" + pref.getInt(STARTS, 0),
             "process.previousExit=" + recentExit(context),
@@ -78,6 +87,13 @@ object ProcessHealth {
             "process.lastTrimLevel=" + pref.getInt(LAST_TRIM, -1),
             "memory.heapUsedMb=" + heapUsedMb,
             "memory.heapLimitMb=" + maxHeapMb,
+            "memory.nativeHeapAllocatedMb=" + nativeHeapMb,
+            "memory.processPssMb=" + if (pssReady) appMem.totalPss / 1024 else -1,
+            "memory.nativePssMb=" + if (pssReady) appMem.nativePss / 1024 else -1,
+            "memory.dalvikPssMb=" + if (pssReady) appMem.dalvikPss / 1024 else -1,
+            "memory.otherPssMb=" + if (pssReady) appMem.otherPss / 1024 else -1,
+            "memory.pdfBitmapBytes=" + PdfPerformanceTrace.currentBitmapBytes(),
+            ReportTitleCache.diagnosticFootprint(),
             "memory.systemLow=" + m.lowMemory,
             "memory.availableMb=" + m.availMem / (1024 * 1024)
         ).joinToString("\n")

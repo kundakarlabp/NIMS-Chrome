@@ -430,6 +430,7 @@ class ReportActivity : Activity() {
                     image.setImageDrawable(null)
                     val old = bitmap
                     bitmap = newBitmap
+                    PdfPerformanceTrace.bitmapAllocated(newBitmap.allocationByteCount)
                     pageIndex = index
                     image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
                     image.setImageBitmap(newBitmap)
@@ -485,7 +486,8 @@ class ReportActivity : Activity() {
                 Result.success(cachedExtractedText)
             else runCatching {
                 PDFBoxResourceLoader.init(applicationContext)
-                PDDocument.load(file).use { doc ->
+                PDDocument.load(file, MemoryUsageSetting.setupMixed(
+                    4L * 1024 * 1024)).use { doc ->
                     val pages = minOf(doc.numberOfPages, 8)
                     PDFTextStripper().apply {
                         startPage = 1
@@ -619,6 +621,7 @@ class ReportActivity : Activity() {
         image.setImageDrawable(null)
         bitmap?.recycle()
         bitmap = null
+        PdfPerformanceTrace.bitmapAllocated(0)
         super.onDestroy()
     }
 
