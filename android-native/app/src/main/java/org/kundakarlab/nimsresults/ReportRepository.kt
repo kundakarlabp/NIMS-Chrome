@@ -152,9 +152,15 @@ class ReportRepository(
             val reports = ReportPayloadParser.parseRest(
                 payload, crNo, verifiedPatientContext = verifiedPatientContext
             )
-            RestReportDiagnostics.stage(
-                if(reports.isEmpty()) "no_verified_report_rows" else "verified_report_rows"
-            )
+            val contextBound = reports.any {
+                it.sourceTag == "nims_rest_reportList_context"
+            }
+            RestReportDiagnostics.binding(contextBound)
+            RestReportDiagnostics.stage(when {
+                reports.isEmpty() -> "no_accepted_rows"
+                contextBound -> "context_bound_metadata_no_specimen_identifiers"
+                else -> "response_cr_verified_records"
+            })
             return reports
         }
     }
