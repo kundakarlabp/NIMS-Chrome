@@ -10,7 +10,8 @@ object DiagnosticEvents {
     private val counts = ConcurrentHashMap<String, Int>()
     private val allowed = setOf("AUTH_REQUIRED", "STRUCTURED_FAILURE",
         "REPORT_INDEX_FAILED", "PDF_HTTP_FAILED", "PDF_NOT_VALID",
-        "PDF_IDENTITY_MISMATCH", "PDF_TEXT_MISSING", "PDF_RENDER_FAILED")
+        "PDF_IDENTITY_MISMATCH", "PDF_TEXT_MISSING", "PDF_RENDER_FAILED",
+        "CR_SCAN_VALID", "CR_SCAN_UNRECOGNIZED", "CR_SCAN_FAILED")
     fun record(code: String) {
         if (code in allowed) counts.merge(code, 1, Int::plus)
     }
@@ -64,6 +65,35 @@ object AppDiagnostics {
         val recentIndex = sourceReports.count {
             RecentReportDates.isLastWeek(RecentReportDates.dateFor(it).first, lastWeek)
         }
+        // Metadata-only candidate assessment: no network, no PDF fetch or
+        // speculative specimen association. Runs off the UI thread when copied.
+        val candidateCounts = groups.values.map { group ->
+            SourceMetadataReview.candidates(group, sourceReports)
+                .map { it.url }.filter(String::isNotBlank).distinct().size
+        }
+        val clinicalPanels = LabPanelMatrix.build(
+            rows.filterNot { ClinicalReportRenderer.isMicrobiologyInvestigation(it.test) },
+            clinical = true)
+        val allClinicalPanels = LabPanelMatrix.Panel.entries.associateWith { panel ->
+            clinicalPanels.firstOrNull { it.panel == panel }
+        }
+        val nonMicroRows=rows.filterNot {
+            ClinicalReportRenderer.isMicrobiologyInvestigation(it.test)
+        }
+        val missingCellText = rows.count {
+            it.valueText.isBlank() ||
+            it.valueText.contains("Not reported in structured feed", ignoreCase = true)
+        }
+        val lastDate=rows.mapNotNull { RecentReportDates.parse(it.date) }.maxOrNull()
+        val sourceMetadata = mapOf(
+            "lab" to sourceReports.count { it.labNumber.isNotBlank() },
+            "sample" to sourceReports.count { it.sampleNumber.isNotBlank() },
+            "collection" to sourceReports.count { it.collectionDateTime.isNotBlank() },
+            "reportDate" to sourceReports.count { it.reportedDate.isNotBlank() },
+            "orderDate" to sourceReports.count { it.orderDate.isNotBlank() },
+            "department" to sourceReports.count { it.department.isNotBlank() },
+            "pdf" to sourceReports.count { it.url.isNotBlank() }
+        )
         val findings = buildList {
             if (sourceReports.isEmpty()) add("SOURCE_INVENTORY_EMPTY")
             if (sourceReports.any { it.url.isBlank() }) add("SOURCE_PDF_URL_MISSING")
@@ -116,9 +146,12 @@ object AppDiagnostics {
             appendLine("audit.source_identity_unmatched=" + noIndexMatch)
             appendLine("audit.pdf_auto_mapping=disabled")
             appendLine("audit.pdf_match_auto_verified=0")
-            appendLine("audit.pdf_match_one_unverified_candidate=0")
-            appendLine("audit.pdf_match_ambiguous=0")
-            appendLine("audit.pdf_match_no_candidate=" + groups.size)
+            appendLine("audit.pdf_match_one_unverified_candidate=" +
+                candidateCounts.count { it == 1 })
+            appendLine("audit.pdf_match_ambiguous=" +
+                candidateCounts.count { it > 1 })
+            appendLine("audit.pdf_match_no_candidate=" +
+                candidateCounts.count { it == 0 })
             appendLine("audit.technical_fields=" + technical)
             appendLine("audit.opaque_or_unmapped_fields=" + medicalCodes)
             appendLine("audit.source_coded_panel_groups=" + panelGroups)
@@ -129,6 +162,47 @@ object AppDiagnostics {
             }
             appendLine("audit.flags=" + findings.joinToString(",").ifBlank { "none" })
             appendLine("audit.event_counters=" + DiagnosticEvents.snapshot())
+            appendLine("diagnostics.clinical.structured_numeric=" +
+                rows.count { it.numericValue?.isFinite() == true })
+            appendLine("diagnostics.clinical.missing_placeholder_values=" + missingCellText)
+            appendLine("diagnostics.clinical.structured_lab_identifiers=" +
+                rows.count { it.labNumber.isNotBlank() })
+            appendLine("diagnostics.clinical.structured_sample_identifiers=" +
+                rows.count { it.sampleNumber.isNotBlank() })
+            appendLine("diagnostics.clinical.structured_collection_times=" +
+                rows.count { it.collectionDateTime.isNotBlank() })
+            appendLine("diagnostics.clinical.structured_report_dates=" +
+                rows.count { it.reportedDate.isNotBlank() })
+            appendLine("diagnostics.clinical.latest_result_age_days=" +
+                (lastDate?.let { java.time.temporal.ChronoUnit.DAYS.between(
+                    it,java.time.LocalDate.now()).coerceAtLeast(0) } ?: "unavailable"))
+            appendLine("diagnostics.source.pdf_candidate_one=" +
+                candidateCounts.count { it == 1 })
+            appendLine("diagnostics.source.pdf_candidate_multiple=" +
+                candidateCounts.count { it > 1 })
+            appendLine("diagnostics.source.pdf_candidate_none=" +
+                candidateCounts.count { it == 0 })
+            appendLine("diagnostics.source.candidates_are_specimen_verified=false")
+            for ((name,count) in sourceMetadata) {
+                appendLine("diagnostics.source.index_rows_with_" + name + "=" + count)
+            }
+            for ((panel,table) in allClinicalPanels) {
+                val name=panel.name.lowercase()
+                appendLine("diagnostics.labs." + name + ".visible_parameters=" +
+                    (table?.parameters?.size ?: 0))
+                appendLine("diagnostics.labs." + name + ".visible_observations=" +
+                    (table?.parameters?.sumOf { p ->
+                        p.byDate.values.sumOf { it.size } } ?: 0))
+                appendLine("diagnostics.labs." + name + ".dates=" +
+                    (table?.dates?.size ?: 0))
+            }
+            appendLine("diagnostics.labs.source_non_micro_rows=" + nonMicroRows.size)
+            appendLine("diagnostics.labs.filtered_from_clinical_view=" +
+                (nonMicroRows.size - clinicalPanels.sumOf { table ->
+                    table.parameters.sumOf { p ->
+                        p.byDate.values.sumOf { it.size } } }).coerceAtLeast(0))
+            appendLine("diagnostics.labs.raw_source_retained=true")
+            appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
         }
     }
