@@ -2599,7 +2599,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
-                val mapping = ReportCandidates(null, emptyList())
+                val mapping = remember(rows, current.reports) {
+                    val possible=SourceMetadataReview.candidates(rows,current.reports)
+                        .filter { it.url.isNotBlank() }
+                        .distinctBy { it.url }
+                    ReportCandidates(null, possible)
+                }
                 val exact = mapping.verified
                 var chooseSource by remember(current.patient.crNo, key) {
                     mutableStateOf(false)
@@ -2637,15 +2642,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (isCulture) Text(status.name,
                             color = statusColor, fontSize = 11.sp,
                             fontWeight = FontWeight.Bold)
-                        Text("Lab/study number: " +
-                            accession.ifBlank { "Not available in structured results" },
+                        Text("Result date: " + LabPanelMatrix.displayDate(date),
                             fontSize = 11.sp, color = Color(0xFF486581))
-                        Text("Sent/collection date: " +
-                            sentDate.ifBlank { "Not available" },
-                            fontSize = 11.sp, color = Color(0xFF486581))
-                        Text("Reported date: " +
-                            reportedDate.ifBlank { "Not available (result date: " + date + ")" },
-                            fontSize = 11.sp, color = Color(0xFF486581))
+                        val verifiedFields=listOfNotNull(
+                            accession.takeIf(String::isNotBlank)?.let { "Lab " + it },
+                            sentDate.takeIf(String::isNotBlank)?.let {
+                                "Collected " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            reportedDate.takeIf(String::isNotBlank)?.let {
+                                "Reported " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            rows.firstOrNull()?.specimenType?.takeIf(String::isNotBlank)
+                                ?.let { "Specimen " + it }
+                        )
+                        if (verifiedFields.isNotEmpty()) Text(
+                            verifiedFields.joinToString(" · "),
+                            fontSize=10.sp,color=Color(0xFF486581),maxLines=3)
                         if (relatedHeader != null) {
                             val possible = listOfNotNull(
                                 relatedHeader.labNumber.takeIf(String::isNotBlank)
@@ -2739,7 +2751,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                         } else if (current.reports.isNotEmpty()) {
                             TextButton(onClick = { browseSourceReports(test) }) {
-                                Text("Find original PDF in All results")
+                                Text("Browse source PDFs")
                             }
                         }
                         if (chooseSource) {
