@@ -29,7 +29,7 @@ object LabPanelMatrix {
      * A timestamp's provenance remains that of its source field. */
     fun displayDateTime(raw: String): String {
         val date = RecentReportDates.parse(raw) ?: return raw
-        val clock = Regex("""\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\b""")
+        val clock = Regex("""\b\d{1,2}:\d{2}(?::\d{2})?\b""")
             .find(raw)?.value
         return date.format(formatter) + (clock?.let { " " + it } ?: "")
     }
