@@ -1948,9 +1948,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Infectious diseases · clinical overview", fontSize = 17.sp,
                     fontWeight = FontWeight.Bold, color = Color(0xFF102A43))
-                Text("Source-reported inflammation markers, blood counts and culture " +
-                    "chronology. No diagnosis or treatment is inferred.",
-                    fontSize = 11.sp, color = Color(0xFF66788A))
                 Text("${markerRows.count { it.second.isNotEmpty() }} of 6 marker groups " +
                     "found · ${cultures.size} culture episodes · $positiveCount positive " +
                     "· $microPdfs microbiology PDF references",
@@ -1959,8 +1956,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             item {
                 Text("Inflammatory markers and counts", fontWeight = FontWeight.Bold,
                     fontSize = 14.sp, color = Color(0xFF102A43))
-                Text("CRP and hsCRP are not combined; values retain their source units.",
-                    fontSize = 10.sp, color = Color(0xFF66788A))
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -2057,6 +2052,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if (obs.labNumber.isNotBlank())
                                     Text("Lab/study: " + obs.labNumber, fontSize = 10.sp)
                             }
+                            val pdfChoices = remember(markerSource, current.reports) {
+                                SourceMetadataReview.candidates(markerSource, current.reports)
+                                    .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                            }
+                            when (pdfChoices.size) {
+                                1 -> TextButton(onClick = {
+                                    openReport(pdfChoices.single().url)
+                                }) {
+                                    Text("Open source PDF · verify accession",
+                                        fontSize = 11.sp)
+                                }
+                                0 -> Text("Original PDF not linked for this marker.",
+                                    fontSize = 10.sp, color = Color(0xFF66788A))
+                                else -> {
+                                    Text("${pdfChoices.size} possible PDFs · verify specimen",
+                                        fontSize = 10.sp, color = Color(0xFF875B22))
+                                    pdfChoices.take(5).forEach { pdf ->
+                                        TextButton(onClick = { openReport(pdf.url) }) {
+                                            Text(LabPanelMatrix.displayDate(pdf.date) + " · " +
+                                                pdf.title + if (pdf.labNumber.isBlank()) ""
+                                                else " · " + pdf.labNumber, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
                             TextButton(onClick = { markerSource = emptyList() }) {
                                 Text("Close details", fontSize = 11.sp)
                             }
@@ -2080,6 +2100,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     fontSize = 11.sp, color = Color(0xFF66788A))
             }
             items(shownCultures, key = { it.key }) { episode ->
+                // Reconcile only visible culture episodes. All source PDF
+                // choices remain unverified until their accession is checked.
+                val candidatePdfs = remember(episode.key, current.reports) {
+                    SourceMetadataReview.candidates(episode.rows, current.reports)
+                        .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                }
+                var showPdfChoices by remember(episode.key) {
+                    mutableStateOf(false)
+                }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2091,10 +2120,33 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (episode.rows.firstOrNull()?.reportStage?.isNotBlank() == true)
                             Text("Stage: " + episode.rows.first().reportStage,
                                 fontSize = 10.sp, color = Color(0xFF486581))
-                        TextButton(onClick = {
-                            microFilter = "All"
-                            selectedTab = ResultsTab.MICROBIOLOGY
-                        }) { Text("Review full culture findings", fontSize = 11.sp) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                microFilter = "All"
+                                selectedTab = ResultsTab.MICROBIOLOGY
+                            }) { Text("Full culture", fontSize = 11.sp) }
+                            if (candidatePdfs.size == 1) {
+                                TextButton(onClick = { openReport(candidatePdfs[0].url) }) {
+                                    Text("Open PDF · verify", fontSize = 11.sp)
+                                }
+                            } else if (candidatePdfs.size > 1) {
+                                TextButton(onClick = { showPdfChoices = !showPdfChoices }) {
+                                    Text("PDFs (${candidatePdfs.size})", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        if (showPdfChoices) {
+                            Text("Candidate reports · specimen identity unverified",
+                                fontSize = 10.sp, color = Color(0xFF875B22))
+                            candidatePdfs.take(8).forEach { report ->
+                                TextButton(onClick = { openReport(report.url) }) {
+                                    Text(report.title + " · " +
+                                        LabPanelMatrix.displayDate(report.date) +
+                                        if (report.labNumber.isBlank()) ""
+                                        else " · " + report.labNumber, fontSize = 11.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }
