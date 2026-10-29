@@ -3248,9 +3248,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 current.reports.any {
                                     !it.sourceTag.startsWith("nims_rest_reportList")
-                                } && expanded -> Text(
-                                    "Source reports are available separately; no specimen-level link established.",
-                                    fontSize = 10.sp, color = Color(0xFF875B22))
+                                } && expanded -> TextButton(onClick = {
+                                    subview = "Report index / PDFs"
+                                    query = ""
+                                }) {
+                                    Text("Browse original NIMS PDFs · no verified match",
+                                        fontSize = 11.sp)
+                                }
                             }
                         } else {
                             // Parse source metadata only after expansion; dozens of
@@ -3316,9 +3320,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Original PDF inventory · independent NIMS source",
                                     fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                 if (catalogCandidates.isEmpty()) {
-                                    Text("No source PDF candidate found for this test and date. " +
-                                        "Use Original PDFs to search the full report index.",
+                                    Text("No matching candidate in the source PDF index.",
                                         fontSize = 10.sp, color = Color(0xFF66788A))
+                                    TextButton(onClick = {
+                                        subview = "Report index / PDFs"
+                                        query = ""
+                                    }) {
+                                        Text("Browse all original PDFs", fontSize = 11.sp)
+                                    }
                                 } else {
                                     Text("${catalogCandidates.size} possible source PDFs. " +
                                         "Title/date proximity is NOT specimen verification.",
