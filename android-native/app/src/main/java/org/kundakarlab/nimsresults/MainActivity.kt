@@ -2067,7 +2067,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 1 -> TextButton(onClick = {
                                     openReport(pdfChoices.single().url)
                                 }) {
-                                    Text("Open source PDF · verify accession",
+                                    Text("Open candidate PDF · verify accession",
                                         fontSize = 11.sp)
                                 }
                                 0 -> Text("Original PDF not linked for this marker.",
@@ -2127,6 +2127,29 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (episode.rows.firstOrNull()?.reportStage?.isNotBlank() == true)
                             Text("Stage: " + episode.rows.first().reportStage,
                                 fontSize = 10.sp, color = Color(0xFF486581))
+                        // This is source-index context only. It is not copied
+                        // into the structured culture event.
+                        if (candidatePdfs.size == 1) {
+                            val source = candidatePdfs.single()
+                            val evidence = listOfNotNull(
+                                source.labNumber.takeIf { it.isNotBlank() }
+                                    ?.let { "Lab " + it },
+                                source.sampleNumber.takeIf { it.isNotBlank() }
+                                    ?.let { "Sample " + it },
+                                source.collectionDateTime.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "Collected " + LabPanelMatrix.displayDateTime(it)
+                                    },
+                                source.reportedDate.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        "Report " + LabPanelMatrix.displayDateTime(it)
+                                    }
+                            )
+                            if (evidence.isNotEmpty()) Text(
+                                "Possible source · " + evidence.joinToString(" · "),
+                                fontSize = 10.sp, color = Color(0xFF486581),
+                                maxLines = 3)
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             TextButton(onClick = {
                                 microFilter = "All"
@@ -3396,7 +3419,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 report.sourceTag.startsWith("nims_rest_reportList")
                             if (!expanded) {
                                 if (restOnly) Text(
-                                    "Reported " + LabPanelMatrix.displayDateTime(
+                                    "REST report date " + LabPanelMatrix.displayDateTime(
                                         report.reportedDate.ifBlank { report.date }),
                                     fontSize = 11.sp, color = Color(0xFF486581),
                                     maxLines = 1)
