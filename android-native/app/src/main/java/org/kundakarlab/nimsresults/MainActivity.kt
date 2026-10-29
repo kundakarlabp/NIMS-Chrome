@@ -968,7 +968,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     } else {
                         PatientStrip(current, onToggleTools = { toolsOpen = !toolsOpen })
                         NativeTabs()
-                        if (historyStatus.isNotBlank()) {
+                        if (selectedTab == ResultsTab.OVERVIEW && historyStatus.isNotBlank()) {
                             Text(historyStatus,
                                 modifier = Modifier.fillMaxWidth()
                                     .padding(horizontal = 14.dp, vertical = 2.dp),
@@ -1373,11 +1373,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            ResultsTab.entries.forEach { tab ->
+            // Prioritize bedside review destinations; preserve all legacy screens.
+            listOf(ResultsTab.OVERVIEW, ResultsTab.ALL, ResultsTab.LABS,
+                ResultsTab.MICROBIOLOGY, ResultsTab.ID, ResultsTab.RECENT,
+                ResultsTab.TRENDS).forEach { tab ->
+                val short = when (tab) {
+                    ResultsTab.OVERVIEW -> "Summary"
+                    ResultsTab.ALL -> "Results"
+                    ResultsTab.LABS -> "Labs"
+                    ResultsTab.MICROBIOLOGY -> "Cultures"
+                    ResultsTab.ID -> "ID focus"
+                    ResultsTab.RECENT -> "7 days"
+                    ResultsTab.TRENDS -> "Trends"
+                }
                 FilterChip(
                     selected = selectedTab == tab,
                     onClick = { selectedTab = tab },
-                    label = { Text(tabLabel(tab)) }
+                    label = { Text(short, fontSize = 11.sp) }
                 )
             }
         }
@@ -1457,7 +1469,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     listOf("All", "Source PDFs", "Results", "Microbiology").forEach { name ->
                         FilterChip(selected = filter == name,
                             onClick = { filter = name },
-                            label = { Text(name, fontSize = 11.sp) })
+                            label = { Text(label, fontSize = 11.sp) })
                     }
                 }
                 Text(shown.size.toString() + " entries · " +
@@ -2792,6 +2804,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val restCount = baseFeed.count {
             it.report?.sourceTag?.startsWith("nims_rest_reportList") == true
         }
+        // Keep large REST catalogues responsive while preserving access to every row.
+        var restLimit by remember(current.patient.crNo, subview, query) {
+            mutableStateOf(40)
+        }
+        val shownFeed = if (subview == "REST API") visibleFeed.take(restLimit)
+            else visibleFeed
         LaunchedEffect(subview) { scroll.scrollToItem(0) }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
@@ -2799,12 +2817,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigation groups · $sourceCount report-index rows · " +
-                    "$restCount REST entries",
+                Text("$studyCount results · $sourceCount source reports · " +
+                    "$restCount REST catalogue entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    listOf("Investigations", "Report index / PDFs", "REST API", "Enquiry orders").forEach { name ->
+                    listOf("Investigations" to "Results",
+                        "Report index / PDFs" to "Original PDFs",
+                        "REST API" to "REST catalogue",
+                        "Enquiry orders" to "Orders").forEach { (name, label) ->
                         FilterChip(selected = subview == name,
                             onClick = {
                                 subview = name
@@ -2825,10 +2846,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text("$apiCount REST reportList metadata entries · $contextOnly " +
                         "accepted using independently verified patient context.",
                         fontSize = 11.sp, color = Color(0xFF486581))
-                    Text("These records provide source test names and report dates. " +
-                        "They do not establish specimen, accession or PDF identity. " +
-                        "Inspect original fields on expansion; full lab values still " +
-                        "come from Custom Sheet.",
+                    Text("REST is a test/date catalogue, not a specimen or PDF API. " +
+                        "For source documents, expand a row to review matching " +
+                        "original PDFs; confirm the accession in the PDF. " +
+                        "Structured values come from Custom Sheet.",
                         fontSize = 10.sp, color = Color(0xFF875B22))
                 }
                 if (pdfTotalCount > 0 && subview == "Report index / PDFs") Text(
@@ -2955,7 +2976,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 else "No investigations match these filters.",
                     color = Color(0xFF66788A))
             }
-            items(visibleFeed, key = { it.key }) { entry ->
+            items(shownFeed, key = { it.key },
+                contentType = { if (it.report == null) "study"
+                    else if (it.report.sourceTag.startsWith("nims_rest_reportList"))
+                        "rest" else "source" }) { entry ->
                 var expanded by remember(current.patient.crNo, entry.key) {
                     mutableStateOf(false)
                 }
@@ -2967,7 +2991,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 val report = entry.report
                 val rows = entry.rows
-                val resultLinks = ReportCandidates(null, emptyList())
+                // No matching work while scrolling collapsed cards. On expansion,
+                // use the independently retrieved PDF index and verified PDF evidence.
+                val resultLinks = remember(entry.key, current.reports, expanded,
+                    reportTitleEpoch, current.patient.crNo) {
+                    if (report == null && expanded)
+                        ReportLinkResolver.candidates(rows, current.reports,
+                            current.patient.crNo)
+                    else ReportCandidates(null, emptyList())
+                }
                 val verifiedReport = resultLinks.verified
                 val accession = ClinicalPresentation.accession(rows)
                 val linkedPart = verifiedReport?.url?.let { url ->
@@ -3226,9 +3258,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 10.sp, color = Color(0xFF875B22))
                             }
                         } else {
-                            val parts = ReportTitleCache.sections(report.url)
-                            val header = ReportTitleCache.header(report.url)
-                                ?.takeIf { it.crNo == current.patient.crNo }
+                            // Parse source metadata only after expansion; dozens of
+                            // index cards must not trigger PDF evidence traversal.
+                            val parts = if (expanded) ReportTitleCache.sections(report.url)
+                                else emptyList()
+                            val header = if (expanded) ReportTitleCache.header(report.url)
+                                ?.takeIf { it.crNo == current.patient.crNo } else null
                             val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
                             val collected = header?.collectionDate.orEmpty()
                                 .ifBlank { report.collectionDateTime }
@@ -3270,6 +3305,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 (reported.takeIf { it.isNotBlank() }?.let(LabPanelMatrix::displayDateTime)
                                     ?: "Not supplied by this source"),
                                 fontSize = 11.sp)
+                            }
+                            if (expanded && restOnly) {
+                                val catalogCandidates = remember(report.id, current.reports) {
+                                    SourceMetadataReview.catalogCandidates(report, current.reports)
+                                }
+                                HorizontalDivider()
+                                Text("Original PDF inventory · independent NIMS source",
+                                    fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                if (catalogCandidates.isEmpty()) {
+                                    Text("No source PDF candidate found for this test and date. " +
+                                        "Use Original PDFs to search the full report index.",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                } else {
+                                    Text("${catalogCandidates.size} possible source PDFs. " +
+                                        "Title/date proximity is NOT specimen verification.",
+                                        fontSize = 10.sp, color = Color(0xFF875B22))
+                                    catalogCandidates.forEach { candidate ->
+                                        TextButton(onClick = { openReport(candidate.url) }) {
+                                            Text(candidate.title + " · " +
+                                                LabPanelMatrix.displayDate(candidate.date) +
+                                                " · review accession", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
                             }
                             if (expanded) {
                                 HorizontalDivider()
@@ -3359,6 +3418,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 10.sp, color = Color(0xFF486581))
                             }
                         }
+                    }
+                }
+            }
+            if (subview == "REST API" && visibleFeed.size > shownFeed.size) {
+                item {
+                    TextButton(onClick = { restLimit += 40 },
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text("Load next 40 catalogue rows · " +
+                            "${shownFeed.size} of ${visibleFeed.size} shown")
                     }
                 }
             }
