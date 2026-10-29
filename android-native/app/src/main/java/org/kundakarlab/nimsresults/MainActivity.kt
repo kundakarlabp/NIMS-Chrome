@@ -3246,7 +3246,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else LabPanelMatrix.displayDate(entry.date.toString()))
-                                    else rows.size.toString() + " result fields · column date " +
+                                    else rows.size.toString() + " result fields · result date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else LabPanelMatrix.displayDate(entry.date.toString())),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
