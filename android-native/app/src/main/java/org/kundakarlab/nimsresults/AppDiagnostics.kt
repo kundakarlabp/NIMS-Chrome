@@ -202,6 +202,17 @@ object AppDiagnostics {
                     table.parameters.sumOf { p ->
                         p.byDate.values.sumOf { it.size } } }).coerceAtLeast(0))
             appendLine("diagnostics.labs.raw_source_retained=true")
+            val chronology=ClinicalChronology.days(rows)
+            appendLine("diagnostics.results.chronological_dates=" + chronology.size)
+            appendLine("diagnostics.results.chronological_studies=" +
+                chronology.sumOf { it.studies.size })
+            appendLine("diagnostics.results.studies_with_values=" +
+                chronology.sumOf { day -> day.studies.count { it.visible.isNotEmpty() } })
+            appendLine("diagnostics.results.structured_reported_dates=" +
+                rows.count { it.reportedDate.isNotBlank() })
+            appendLine("diagnostics.results.date_is_source_not_collection=true")
+            appendLine("diagnostics.results.raw_source_retained=true")
+
             appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
         }

@@ -51,6 +51,8 @@ object LabPanelMatrix {
         // NIMS sometimes returns coded panels such as BU/SC/SE rather than a
         // named renal profile. Recognized *analytes* take precedence over
         // opaque panel titles. Do not infer culture or blood-bank identities.
+        if (Regex("""(?i)(?:ascitic|pleural|cerebrospinal|csf|fluid\\s*cell|body\\s*fluid|urine\\s*(?:routine|examination)|biochemical\\s*analysis\\s*of\\s*fluid)""")
+                .containsMatchIn(test)) return Panel.OTHERS
         if (ClinicalReportRenderer.isMicrobiologyInvestigation(test) ||
             cleanedTest.contains("bloodgroup") ||
             cleanedTest.contains("antibodyscreen")) return Panel.OTHERS
@@ -90,7 +92,16 @@ object LabPanelMatrix {
             v == "serumpotassium" -> "K"
             v == "serumchloride" -> "Cl"
             v == "serumbicarbonate" -> "HCO3"
-            v == "hemoglobin" || v == "haemoglobin" -> "Hb"
+            v.startsWith("hemoglobin") || v.startsWith("haemoglobin") -> "Hb"
+            v.startsWith("prothrombintimeptcontrol") -> "PT (control)"
+            v.startsWith("prothrombintimeptpatient") -> "PT (patient)"
+            v.startsWith("ptinr") || v == "inr" -> "INR"
+            v.startsWith("apttpatient") -> "aPTT (patient)"
+            v.startsWith("apttcontrol") -> "aPTT (control)"
+            v.startsWith("totalleucocytecount") || v.startsWith("totalleukocytecount") ->
+                "TLC"
+            v.startsWith("plateletcount") -> "Platelets"
+            v.startsWith("pcv") -> "PCV"
             v.contains("totalleucocytecount") || v.contains("totalleukocytecount") ||
                 v == "tlc" -> "TLC"
             v == "plateletcount" -> "Platelets"
@@ -116,7 +127,8 @@ object LabPanelMatrix {
                 v.contains("bilirubin") -> 10
                 v == "ast" || v.startsWith("serumast") || v == "sgot" -> 11
                 v == "alt" || v.startsWith("serumalt") || v == "sgpt" -> 12
-                v.contains("alkalinephosphatase") || v == "alp" -> 13
+                v.contains("alkalinephosphatase") ||
+                    v.contains("alkphosphatase") || v == "alp" -> 13
                 v.contains("albumin") -> 14
                 v.contains("totalprotein") || v.contains("globulin") -> 15
                 v.contains("sodium") -> 20
@@ -153,15 +165,22 @@ object LabPanelMatrix {
             it.valueText.length <= 40 }
             .mapNotNull { RecentReportDates.parse(it.date) }.distinct().size >= 2
 
-    private val missingValues = setOf("", "-", "--", "na", "n/a", "nil",
+    private val missingValues = setOf("", "-", "--", "—", "na", "n/a", "nil",
         "not reported", "not reported in structured feed", "not available",
         "not done", "no result", "null", "none")
+
+    private val administration = Regex(
+        """(?i)(?:^(?:nature\\s+of\\s+specimen|physical\\s+appearance|section\\s+key|procedure|test\\s+done\\s+by|sample\\s+processed|report\\s+status|machine\\s*id)$|\\(investigation\\)$|^\\d+$|^/[hl]pf)"""
+    )
 
     /** Clinical sheets contain measurements, not raw administrative placeholders.
      * All excluded observations remain in All Results / Raw. */
     fun clinicallyUseful(row: LabResult, group: Panel = panel(row)): Boolean {
         val value = row.valueText.trim()
         if (value.lowercase(Locale.US) in missingValues ||
+            administration.containsMatchIn(row.parameter.trim()) ||
+            (group == Panel.OTHERS &&
+                row.parameter.trim().equals("Control",ignoreCase=true)) ||
             value.contains("not reported in structured", ignoreCase = true) ||
             ClinicalPresentation.isTechnical(row) ||
             ClinicalReportRenderer.isUninterpretedCode(row)) return false
@@ -198,7 +217,8 @@ object LabPanelMatrix {
                 // A generic 'Result' under different named tests is not the
                 // same measurement, especially in the Other panel.
                 val generic=clean(name) in setOf("result","value","observation")
-                val identity = (if(generic) clean(row.test)+"|" else "")+
+                val identity = (if(generic || panel == Panel.OTHERS)
+                    clean(row.test)+"|" else "")+
                     clean(name)+"|"+clean(row.unit)
                 keys.getOrPut(identity) { mutableListOf() }.add(row)
                 labels.putIfAbsent(identity,
