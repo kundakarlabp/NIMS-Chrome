@@ -57,6 +57,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -1156,11 +1157,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 placeholder = { Text("15-digit CR number") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                trailingIcon = {
+                                    IconButton(onClick = { scanCrBarcode() }) {
+                                        Text("▣", fontSize = 21.sp,
+                                            color = Color(0xFF00769C))
+                                    }
+                                }
                             )
-                            TextButton(onClick = { scanCrBarcode() }) {
-                                Text("Scan QR / barcode", fontSize = 12.sp)
-                            }
                             Spacer(Modifier.height(4.dp))
                             Button(
                                 onClick = {
@@ -1189,12 +1193,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
                                 placeholder = { Text("15-digit CR number") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                trailingIcon = {
+                                    IconButton(onClick = { scanCrBarcode() }) {
+                                        Text("▣", fontSize = 21.sp,
+                                            color = Color(0xFF00769C))
+                                    }
+                                }
                             )
                             Spacer(Modifier.width(8.dp))
-                            TextButton(onClick = { scanCrBarcode() }) {
-                                Text("Scan CR", fontSize = 11.sp)
-                            }
                             Button(
                                 onClick = {
                                     crInput = localCr
@@ -2282,7 +2289,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
                     fontSize=14.sp)
                 if (kind == "Clinical") Text(
-                    "Renal → LFT → electrolytes · Hb → TLC → DLC → platelets → ESR → smear",
+                    "Renal / LFT / Electrolytes · Hb / TLC / DLC / Platelets / ESR / Smear",
                     fontSize=10.sp,color=Color(0xFF486581),maxLines=2)
                 OutlinedTextField(value=query,onValueChange={ query=it },
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
@@ -2364,14 +2371,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        val rowHeight=46.dp
+                        val rowHeight=42.dp
                         Row(modifier=Modifier.fillMaxWidth()) {
-                            Column(modifier=Modifier.width(126.dp)) {
+                            Column(modifier=Modifier.width(113.dp)) {
                                 Text("Parameter",fontSize=10.sp,fontWeight=FontWeight.Bold,
                                     modifier=Modifier.height(32.dp))
                                 parameterRows.forEach { param ->
                                     Column(Modifier.height(rowHeight).padding(end=5.dp)) {
-                                        Text(param.title,fontSize=11.sp,maxLines=2,
+                                        Text(LabPanelMatrix.shortLabel(param.title),fontSize=11.sp,maxLines=2,
                                             fontWeight=FontWeight.Medium)
                                         if(param.unit.isNotBlank()) Text(param.unit,
                                             fontSize=9.sp,color=Color(0xFF66788A),
@@ -2382,7 +2389,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Row(modifier=Modifier.weight(1f)
                                 .horizontalScroll(rememberScrollState())) {
                                 dates.forEach { date ->
-                                    Column(Modifier.width(112.dp)) {
+                                    Column(Modifier.width(98.dp)) {
                                         Text(LabPanelMatrix.displayDate(date),
                                             fontSize=10.sp,fontWeight=FontWeight.Bold,
                                             modifier=Modifier.height(32.dp))
