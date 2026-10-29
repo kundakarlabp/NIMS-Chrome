@@ -1487,7 +1487,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Column(Modifier.weight(1f)) {
                                 Text(entry.title, fontWeight = FontWeight.SemiBold,
                                     fontSize = 13.sp, color = Color(0xFF102A43))
-                                Text(entry.dateLabel + ": " + entry.date.toString() +
+                                Text(entry.dateLabel + ": " + LabPanelMatrix.displayDate(entry.date.toString()) +
                                     " · " + if (entry.rows.isNotEmpty())
                                         "Structured result" else "Source report index",
                                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -1612,7 +1612,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                                     Text(row.parameter, modifier = Modifier.weight(1f),
                                         fontSize = 12.sp, maxLines = 1)
-                                    Text(row.valueText + " " + row.unit + " · " + row.date,
+                                    Text(row.valueText + " " + row.unit + " · " +
+                                        LabPanelMatrix.displayDate(row.date),
                                         fontSize = 11.sp, color = abnormalColor(row.abnormal))
                                 }
                             }
@@ -1690,7 +1691,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     color = abnormalColor(row.abnormal),
                     maxLines = 1
                 )
-                Text(row.date, fontSize = 11.sp, color = Color(0xFF829AB1))
+                Text(LabPanelMatrix.displayDate(row.date),
+                    fontSize = 11.sp, color = Color(0xFF829AB1))
             }
         }
     }
@@ -1962,7 +1964,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             rows.take(if (showAll) rows.size else 3).forEach { value ->
                                 Row(Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text(value.date, fontSize = 11.sp,
+                                    Text(LabPanelMatrix.displayDate(value.date), fontSize = 11.sp,
                                         color = Color(0xFF486581))
                                     Text(value.valueText +
                                         if (value.unit.isNotBlank()) " " + value.unit else "",
@@ -2002,7 +2004,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(episode.label, fontWeight = FontWeight.Medium,
                             fontSize = 12.sp, color = Color(0xFF102A43))
-                        Text("Result date: " + episode.date +
+                        Text("Result date: " + LabPanelMatrix.displayDate(episode.date) +
                             " · " + CultureReview.status(episode.rows).name,
                             fontSize = 11.sp, color = Color(0xFF486581))
                         if (episode.rows.firstOrNull()?.reportStage?.isNotBlank() == true)
@@ -2460,7 +2462,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 title = { Text("Match source PDF to specimen") },
                                 text = {
                                     Column {
-                                        Text(test + " · result date " + date +
+                                        Text(test + " · result date " + LabPanelMatrix.displayDate(date) +
                                             " · accession " + accession.ifBlank { "unknown" },
                                             fontSize = 12.sp)
                                         Text("Candidate reports are not automatically verified. Confirm the lab/study number in the source PDF before using clinical findings.",
@@ -2588,13 +2590,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Text(first.parameter + if (first.unit.isNotBlank()) " (" + first.unit + ")" else "",
                                 fontWeight = FontWeight.Bold)
                             Text(rows.size.toString() + " measurements · " +
-                                first.date + " → " + last.date, fontSize = 11.sp,
+                                LabPanelMatrix.displayDate(first.date) + " → " +
+                                LabPanelMatrix.displayDate(last.date), fontSize = 11.sp,
                                 color = Color(0xFF66788A))
                             Spacer(Modifier.height(6.dp))
                             TrendChart(rows, Modifier.fillMaxWidth().height(180.dp))
                             Text("Dates on the horizontal axis reflect actual elapsed time.",
                                 fontSize = 10.sp, color = Color(0xFF829AB1))
-                            Text("Latest: " + last.valueText + " · " + last.date,
+                            Text("Latest: " + last.valueText + " · " +
+                                LabPanelMatrix.displayDate(last.date),
                                 fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
@@ -2912,10 +2916,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else if (report.url.isNotBlank()) "Original NIMS PDF · "
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
-                                         else entry.date.toString())
+                                         else LabPanelMatrix.displayDate(entry.date.toString()))
                                     else rows.size.toString() + " result fields · column date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
-                                         else entry.date.toString()),
+                                         else LabPanelMatrix.displayDate(entry.date.toString())),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
                             }
                             Text(if (expanded) "Collapse ↑" else "Expand ↓",
@@ -3265,7 +3269,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     fontWeight = FontWeight.Bold,
                     color = abnormalColor(row.abnormal)
                 )
-                Text(row.date, fontSize = 10.sp, color = Color(0xFF829AB1))
+                Text(LabPanelMatrix.displayDate(row.date),
+                    fontSize = 10.sp, color = Color(0xFF829AB1))
             }
         }
     }
