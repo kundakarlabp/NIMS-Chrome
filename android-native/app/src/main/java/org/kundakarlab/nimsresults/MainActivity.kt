@@ -1030,11 +1030,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(color = Color.White, shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.size(40.dp)) {
+                    modifier = Modifier.size(34.dp)) {
                     Image(
                         painter = painterResource(id = R.drawable.nims_logo),
                         contentDescription = "NIMS official logo",
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                 }
                 Spacer(Modifier.width(7.dp))
@@ -1314,51 +1314,45 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
 
     @Composable
     private fun PatientStrip(current: ClinicalBundle, onToggleTools: () -> Unit) {
+        // Keep patient identity visible while giving results more screen space.
+        // Diagnostics, logout and session management remain under CR tools.
         Surface(color = Color(0xFFEFF6FF)) {
-            Column(modifier = Modifier.fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 2.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(current.patient.name.ifBlank { "Patient · identity pending" },
-                        modifier = Modifier.weight(1f),
-                        fontWeight = FontWeight.Bold, fontSize = 14.sp,
-                        color = Color(0xFF102A43), maxLines = 1,
+                        fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                        maxLines = 1, color = Color(0xFF102A43),
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    Text("CR " + current.patient.crNo, fontSize = 10.sp,
-                        color = Color(0xFF486581), maxLines = 1)
+                    val subtitle = listOf(current.patient.age,
+                        current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim(),
+                        "CR " + current.patient.crNo).filter(String::isNotBlank)
+                        .joinToString(" · ")
+                    Text(subtitle, fontSize = 10.sp, maxLines = 1,
+                        color = Color(0xFF486581),
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
-                Row(modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    val demographics = listOf(current.patient.age,
-                        current.patient.sex.replace(Regex("(?i)age\\s*:.*"), "").trim())
-                        .filter { it.isNotBlank() }.joinToString(" · ")
-                    Text(demographics,
-                        color = Color(0xFF486581), fontSize = 11.sp, maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
-                    TextButton(onClick = {
-                        togglePatientList(current.patient.crNo, "Favorites")
-                    }, contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
-                        val favorite = shelfEntries.firstOrNull { it.cr == current.patient.crNo }
-                            ?.lists?.contains("Favorites") == true
-                        Text(if (favorite) "★" else "☆", fontSize = 20.sp)
-                    }
-                    TextButton(onClick = { shelfOpen = true },
-                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)) {
-                        Text("Patients", fontSize = 11.sp)
-                    }
-                    TextButton(onClick = { copyDiagnostics() },
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
-                        Text("Diagnostics", fontSize = 10.sp)
-                    }
-                    TextButton(onClick = { refreshCurrent() },
-                        contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp)) {
-                        Text("↻", fontSize = 19.sp)
-                    }
-                    TextButton(onClick = onToggleTools,
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
-                        Text("CR ▾", fontSize = 11.sp)
-                    }
+                val favorite = shelfEntries.firstOrNull { it.cr == current.patient.crNo }
+                    ?.lists?.contains("Favorites") == true
+                TextButton(onClick = { togglePatientList(current.patient.crNo, "Favorites") },
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
+                    Text(if (favorite) "★" else "☆", fontSize = 19.sp)
+                }
+                TextButton(onClick = { shelfOpen = true },
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
+                    Text("Patients", fontSize = 11.sp)
+                }
+                TextButton(onClick = { refreshCurrent() },
+                    contentPadding = PaddingValues(horizontal = 1.dp, vertical = 0.dp)) {
+                    Text("↻", fontSize = 20.sp)
+                }
+                TextButton(onClick = onToggleTools,
+                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
+                    Text("CR ▾", fontSize = 11.sp)
                 }
             }
         }
