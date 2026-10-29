@@ -3090,24 +3090,47 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (verifiedIndex == null && unlinkedSources.isNotEmpty()) {
                                     HorizontalDivider()
-                                    Text("Possible source-index records (" +
-                                        unlinkedSources.size + ") · NOT specimen-verified",
+                                    Text("Candidate source reports · identity NOT verified",
                                         fontSize = 11.sp, color = Color(0xFF875B22),
                                         fontWeight = FontWeight.SemiBold)
-                                    unlinkedSources.take(4).forEach { source ->
-                                        Text("Lab: " + source.labNumber.ifBlank { "unknown" } +
-                                            " · Sample: " + source.sampleNumber.ifBlank { "unknown" } +
-                                            " · Collected: " +
-                                            source.collectionDateTime.ifBlank { source.sentDate }
-                                                .ifBlank { "unknown" } +
-                                            " · Report No: " +
-                                            source.reportNumber.ifBlank { "unknown" },
+                                    Text("A matching title/date is not proof of the same specimen. " +
+                                        "Confirm the CR, accession and sample in the PDF.",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                    unlinkedSources.take(3).forEach { source ->
+                                        Text(source.title + " · " +
+                                            LabPanelMatrix.displayDate(source.date),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium)
+                                        val verifiedFields = listOfNotNull(
+                                            source.labNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Lab: " + it
+                                            },
+                                            source.sampleNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Sample: " + it
+                                            },
+                                            source.collectionDateTime.takeIf { it.isNotBlank() }?.let {
+                                                "Collected: " + it
+                                            },
+                                            source.reportNumber.takeIf { it.isNotBlank() }?.let {
+                                                "Report: " + it
+                                            }
+                                        )
+                                        if (verifiedFields.isNotEmpty()) Text(
+                                            verifiedFields.joinToString(" · "),
                                             fontSize = 10.sp, color = Color(0xFF486581))
+                                        if (source.url.isNotBlank()) TextButton(
+                                            onClick = { openReport(source.url) }) {
+                                            Text("Open candidate PDF · verify specimen",
+                                                fontSize = 11.sp)
+                                        }
                                     }
-                                    TextButton(onClick = {
+                                    if (unlinkedSources.size > 3) TextButton(onClick = {
                                         subview = "Report index / PDFs"
                                         query = entry.title
-                                    }) { Text("Review source-index records (no automatic linking)") }
+                                    }) {
+                                        Text("Review all ${unlinkedSources.size} source records",
+                                            fontSize = 11.sp)
+                                    }
                                 }
                                 HorizontalDivider()
                                 // Preserve even unclassified source values. Codes are
