@@ -23,7 +23,8 @@ object ClinicalReportRenderer {
     private val coded = Regex(
         """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|[12]\.?\s*antibody\s*screening|\/[hl]pf\s*\((?:investigation|result)\)|negative\s*\(investigation\)|result\s*code)$"""
     )
-    private val unknownValues = setOf("", "--", "—", "null", "n/a")
+    private val unknownValues = setOf("", "-", "--", "—", "null", "n/a",
+        "not reported in structured feed", "not available", "not reported")
 
     fun isMicrobiologyInvestigation(test: String): Boolean {
         // Report titles may include historical organism/culture mentions in
