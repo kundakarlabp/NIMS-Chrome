@@ -57,6 +57,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -144,6 +145,46 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var apiReportCount by mutableStateOf(0)
     private var apiAttemptMs by mutableStateOf(0L)
     private var currentTimeout: Runnable? = null
+
+    private data class LabExport(
+        val patient: PatientInfo, val retrievedAt: Long,
+        val tables: List<LabPanelMatrix.Table>
+    )
+    private var pendingLabExport: LabExport? = null
+    private val labPdfLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val request=pendingLabExport
+        pendingLabExport=null
+        if (uri != null && request != null) {
+            worker.execute {
+                val success=runCatching {
+                    contentResolver.openOutputStream(uri)?.use { target ->
+                        ClinicalLabPdfExport.write(target, request.patient,
+                            request.retrievedAt, request.tables)
+                    } ?: error("Selected destination is not writable")
+                }.isSuccess
+                runOnUiThread {
+                    Toast.makeText(this,
+                        if (success) "Laboratory summary PDF saved"
+                        else "Could not save laboratory summary PDF",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun exportClinicalLabs(current: ClinicalBundle) {
+        val source=current.results.filterNot { isMicro(it) }
+        val tables=LabPanelMatrix.build(source, clinical=true)
+        if (tables.isEmpty()) {
+            Toast.makeText(this,"No dated clinical results to export",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingLabExport=LabExport(current.patient,current.retrievedAt,tables)
+        labPdfLauncher.launch("NIMS-Labs-" + current.patient.crNo + ".pdf")
+    }
 
     private val deviceUnlockLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -1156,11 +1197,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                                 placeholder = { Text("15-digit CR number") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                trailingIcon = {
+                                    IconButton(onClick = { scanCrBarcode() }) {
+                                        Text("▣", fontSize = 21.sp,
+                                            color = Color(0xFF00769C))
+                                    }
+                                }
                             )
-                            TextButton(onClick = { scanCrBarcode() }) {
-                                Text("Scan QR / barcode", fontSize = 12.sp)
-                            }
                             Spacer(Modifier.height(4.dp))
                             Button(
                                 onClick = {
@@ -1189,12 +1233,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 modifier = Modifier.weight(1f),
                                 singleLine = true,
                                 placeholder = { Text("15-digit CR number") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                trailingIcon = {
+                                    IconButton(onClick = { scanCrBarcode() }) {
+                                        Text("▣", fontSize = 21.sp,
+                                            color = Color(0xFF00769C))
+                                    }
+                                }
                             )
                             Spacer(Modifier.width(8.dp))
-                            TextButton(onClick = { scanCrBarcode() }) {
-                                Text("Scan CR", fontSize = 11.sp)
-                            }
                             Button(
                                 onClick = {
                                     crInput = localCr
@@ -2279,10 +2326,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
             verticalArrangement=Arrangement.spacedBy(8.dp)) {
             item {
-                Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
-                    fontSize=14.sp)
+                Row(modifier=Modifier.fillMaxWidth(),
+                    horizontalArrangement=Arrangement.SpaceBetween,
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
+                        fontSize=14.sp)
+                    OutlinedButton(onClick={exportClinicalLabs(current)}) {
+                        Text("Export PDF",fontSize=11.sp)
+                    }
+                }
                 if (kind == "Clinical") Text(
-                    "Renal → LFT → electrolytes · Hb → TLC → DLC → platelets → ESR → smear",
+                    "Renal / LFT / Electrolytes · Hb / TLC / DLC / Platelets / ESR / Smear",
                     fontSize=10.sp,color=Color(0xFF486581),maxLines=2)
                 OutlinedTextField(value=query,onValueChange={ query=it },
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
@@ -2364,14 +2418,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                         }
-                        val rowHeight=46.dp
+                        val rowHeight=42.dp
                         Row(modifier=Modifier.fillMaxWidth()) {
-                            Column(modifier=Modifier.width(126.dp)) {
+                            Column(modifier=Modifier.width(113.dp)) {
                                 Text("Parameter",fontSize=10.sp,fontWeight=FontWeight.Bold,
                                     modifier=Modifier.height(32.dp))
                                 parameterRows.forEach { param ->
                                     Column(Modifier.height(rowHeight).padding(end=5.dp)) {
-                                        Text(param.title,fontSize=11.sp,maxLines=2,
+                                        Text(LabPanelMatrix.shortLabel(param.title),fontSize=11.sp,maxLines=2,
                                             fontWeight=FontWeight.Medium)
                                         if(param.unit.isNotBlank()) Text(param.unit,
                                             fontSize=9.sp,color=Color(0xFF66788A),
@@ -2382,7 +2436,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Row(modifier=Modifier.weight(1f)
                                 .horizontalScroll(rememberScrollState())) {
                                 dates.forEach { date ->
-                                    Column(Modifier.width(112.dp)) {
+                                    Column(Modifier.width(98.dp)) {
                                         Text(LabPanelMatrix.displayDate(date),
                                             fontSize=10.sp,fontWeight=FontWeight.Bold,
                                             modifier=Modifier.height(32.dp))
@@ -2545,7 +2599,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 var expanded by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 var showOriginal by remember(current.patient.crNo, key) { mutableStateOf(false) }
                 val isCulture = ClinicalPresentation.isCulture(test)
-                val mapping = ReportCandidates(null, emptyList())
+                val mapping = remember(rows, current.reports) {
+                    val possible=SourceMetadataReview.candidates(rows,current.reports)
+                        .filter { it.url.isNotBlank() }
+                        .distinctBy { it.url }
+                    ReportCandidates(null, possible)
+                }
                 val exact = mapping.verified
                 var chooseSource by remember(current.patient.crNo, key) {
                     mutableStateOf(false)
@@ -2583,15 +2642,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         if (isCulture) Text(status.name,
                             color = statusColor, fontSize = 11.sp,
                             fontWeight = FontWeight.Bold)
-                        Text("Lab/study number: " +
-                            accession.ifBlank { "Not available in structured results" },
+                        Text("Result date: " + LabPanelMatrix.displayDate(date),
                             fontSize = 11.sp, color = Color(0xFF486581))
-                        Text("Sent/collection date: " +
-                            sentDate.ifBlank { "Not available" },
-                            fontSize = 11.sp, color = Color(0xFF486581))
-                        Text("Reported date: " +
-                            reportedDate.ifBlank { "Not available (result date: " + date + ")" },
-                            fontSize = 11.sp, color = Color(0xFF486581))
+                        val verifiedFields=listOfNotNull(
+                            accession.takeIf(String::isNotBlank)?.let { "Lab " + it },
+                            sentDate.takeIf(String::isNotBlank)?.let {
+                                "Collected " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            reportedDate.takeIf(String::isNotBlank)?.let {
+                                "Reported " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            rows.firstOrNull()?.specimenType?.takeIf(String::isNotBlank)
+                                ?.let { "Specimen " + it }
+                        )
+                        if (verifiedFields.isNotEmpty()) Text(
+                            verifiedFields.joinToString(" · "),
+                            fontSize=10.sp,color=Color(0xFF486581),maxLines=3)
                         if (relatedHeader != null) {
                             val possible = listOfNotNull(
                                 relatedHeader.labNumber.takeIf(String::isNotBlank)
@@ -2685,7 +2751,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                         } else if (current.reports.isNotEmpty()) {
                             TextButton(onClick = { browseSourceReports(test) }) {
-                                Text("Find original PDF in All results")
+                                Text("Browse source PDFs")
                             }
                         }
                         if (chooseSource) {
@@ -2934,11 +3000,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     (query.isBlank() || UnifiedResultsFeed.filterEntries(
                         listOf(it), query, "All", null).isNotEmpty())
             }
-            "Report index / PDFs" -> baseFeed.filter {
-                it.report != null &&
-                    !it.report.sourceTag.startsWith("nims_rest_reportList") &&
-                    (query.isBlank() || UnifiedResultsFeed.filterEntries(
-                        listOf(it), query, "All", null).isNotEmpty())
+            "Report index / PDFs" -> baseFeed.filter { entry ->
+                val report = entry.report
+                if (report == null) false
+                else {
+                    val restOnly = report.sourceTag.startsWith("nims_rest_reportList")
+                    // REST catalogue rows are integrated into the source list
+                    // only when no plausible source PDF already represents
+                    // that test/date. Raw REST rows remain in diagnostics.
+                    val meaningful = (report.url.isNotBlank() ||
+                        report.title.isNotBlank() &&
+                        !report.title.equals("Investigation title unavailable", true)) &&
+                        (!restOnly || SourceMetadataReview.catalogCandidates(
+                            report, current.reports).isEmpty())
+                    meaningful && (query.isBlank() ||
+                        UnifiedResultsFeed.filterEntries(
+                            listOf(entry), query, "All", null).isNotEmpty())
+                }
             }
             else -> feed.filter { it.report == null }
             }
@@ -2976,8 +3054,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("Investigations" to "Results",
-                        "Report index / PDFs" to "Original PDFs",
-                        "REST API" to "REST catalogue",
+                        "Report index / PDFs" to "Source reports",
                         "Enquiry orders" to "Orders").forEach { (name, label) ->
                         FilterChip(selected = subview == name,
                             onClick = {
@@ -3169,7 +3246,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else LabPanelMatrix.displayDate(entry.date.toString()))
-                                    else rows.size.toString() + " result fields · column date " +
+                                    else rows.size.toString() + " result fields · result date " +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
                                          else LabPanelMatrix.displayDate(entry.date.toString())),
                                     fontSize = 10.sp, color = Color(0xFF66788A))
@@ -3378,10 +3455,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                     }
                                 }
-                                if (preferred.size < rows.size) Text(
-                                    "Additional unclassified source fields are available " +
-                                        "under Raw; verify clinical meaning in the PDF.",
-                                    fontSize = 10.sp, color = Color(0xFF875B22))
                                 if (linkedPart != null) {
                                     Text("Confirmed source section · page " + linkedPart.page,
                                         fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -3407,10 +3480,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 verifiedReport != null -> TextButton(onClick = {
                                     openReport(verifiedReport.url)
                                 }) { Text("Open accession-linked original PDF") }
-                                resultLinks.candidates.size == 1 -> TextButton(onClick = {
+                                resultLinks.candidates.size == 1 && !expanded -> TextButton(onClick = {
                                     openReport(resultLinks.candidates.single().url)
                                 }) { Text("Review possible PDF · match unverified") }
-                                resultLinks.candidates.isNotEmpty() -> {
+                                resultLinks.candidates.isNotEmpty() && !expanded -> {
                                     TextButton(onClick = {
                                         showCandidates = !showCandidates
                                     }) {
@@ -3486,9 +3559,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             } else {
                                 if (restOnly) {
-                                    Text("REST catalogue: only test name and report date are " +
-                                        "available in the captured response. Not a specimen ID.",
-                                        fontSize = 11.sp, color = Color(0xFF66788A))
+                                    Text("NIMS REST catalogue · not specimen verified",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
+                                    if (report.sourceOrderId.isNotBlank()) Text(
+                                        "Requisition ID: " + report.sourceOrderId,
+                                        fontSize = 11.sp, color = Color(0xFF486581))
                                 }
                                 if (lab.isNotBlank()) Text("Lab/study: " + lab,
                                     fontSize = 11.sp)
@@ -3567,9 +3642,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     "Linked investigations: " + associated.joinToString(" · "),
                                     fontSize = 11.sp, color = Color(0xFF102A43))
                                 if (parts.isEmpty()) {
-                                    Text("Open this PDF to index all readable pages. " +
-                                        "Unverified PDF text is never assigned to another specimen.",
-                                        fontSize = 11.sp, color = Color(0xFF875B22))
+                                    Text("Source PDF not indexed yet.",
+                                        fontSize = 10.sp, color = Color(0xFF66788A))
                                 } else {
                                     val visibleParts = if (showEntireSource) parts else parts.take(3)
                                     visibleParts.forEach { part ->
@@ -3615,9 +3689,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if (report.url.isNotBlank()) {
+                            if (expanded && report.url.isNotBlank()) {
                                 TextButton(onClick = { openReport(report.url) }) {
-                                    Text("Open complete original PDF")
+                                    Text("View original PDF", fontSize = 11.sp)
                                 }
                             }
                             if (expanded && report.sourceRow.isNotBlank()) {

@@ -42,7 +42,7 @@ object RestReportDiagnostics {
     private val reportKeys = setOf("reportname","investigationname","testname",
         "reportid","reportno","reportnumber","labno","labnumber","labstudyno",
         "sampleno","samplenumber","reporturl","reporttoken","filename",
-        "reportdate","collectiondate","reportingdate","requisitionno",
+        "reportdate","collectiondate","reportingdate","requisitionno","reqdno",
         "specimenno","accessionno","url")
     private val detailKeys = setOf("parametername","resultvalue","result",
         "resulttext","value","observations","results","valuesbydate",
@@ -112,7 +112,7 @@ object RestReportDiagnostics {
             ?.map(::canonical)?.filter { it in allowed }
             ?.sorted()?.take(35).orEmpty()
         val present = listOf("labno","labnumber","labstudyno","sampleno",
-            "samplenumber","requisitionno","reportnumber","reportno",
+            "samplenumber","requisitionno","reqdno","reportnumber","reportno",
             "collectiondate","reportingdate","validateddate","specimentype",
             "reporturl","filename","reporttoken")
             .filter { it in names }
@@ -145,6 +145,7 @@ object RestReportDiagnostics {
             value(obj=it,"reportingDate","reportedDate","reportingDateTime",
                 "reportedDateTime")
         })
+        assign("rest.rowsWithOrderId",objects.count { value(obj=it,"REQDNO","requisitionNo","reqNo","orderId") })
         assign("rest.rowsWithReportNumber",objects.count { value(obj=it,"reportNo","reportNumber") })
         assign("rest.rowsWithDocumentRef",objects.count { value(obj=it,"fileName","reportUrl","pdfUrl","reportToken") })
         assign("rest.possibleDetailRecords",possibleDetailed)

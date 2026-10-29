@@ -45,16 +45,63 @@ object LabPanelMatrix {
         """(?i)\b(?:creatinine|urea|bun|renal\s*function|kidney\s*function|electrolytes?|sodium|potassium|chloride|hepatic\s*function|liver\s*function|lft|rft|kft|bilirubin|albumin|alkaline\s*phosphatase|sgot|sgpt|transaminase|total\s*protein|glucose|blood\s*sugar|glycosylated|glycated|hba\s*1c|hba1c)\b"""
     )
     fun panel(row: LabResult): Panel {
-        val test=row.test
-        // ESR can be ordered separately from CBC; peripheral smear stays with
-        // hematology. Never classify a culture by a phrase in the narrative.
-        val cleanedTest=clean(test)
+        val test = row.test
+        val analyte = clean(row.parameter)
+        val cleanedTest = clean(test)
+        // NIMS sometimes returns coded panels such as BU/SC/SE rather than a
+        // named renal profile. Recognized *analytes* take precedence over
+        // opaque panel titles. Do not infer culture or blood-bank identities.
+        if (ClinicalReportRenderer.isMicrobiologyInvestigation(test) ||
+            cleanedTest.contains("bloodgroup") ||
+            cleanedTest.contains("antibodyscreen")) return Panel.OTHERS
+        if (hemogram.containsMatchIn(test) || cleanedTest == "esr" ||
+            analyte in setOf("hemoglobin","haemoglobin","tlc","totalleucocytecount",
+                "totalleukocytecount","plateletcount","pcv","mcv","mch","mchc",
+                "neutrophils","lymphocytes","monocytes","eosinophils","basophils",
+                "esr") || cleanedTest.contains("sedimentationrate"))
+            return Panel.HEMOGRAM
+        if (metabolic.containsMatchIn(test) ||
+            analyte in setOf("serumcreatinine","bloodurea","serumurea","urea",
+                "serumsodium","serumpotassium","serumchloride","serumalbumin",
+                "serumbilirubintotal","serumbilirubinconjugated",
+                "serumastsgot","serumaltsgpt","serumalkphosphatasealp",
+                "serumtotalprotein","serumalkalinephosphatase","plasmaglucosefasting"))
+            return Panel.METABOLIC
+        return Panel.OTHERS
+    }
+
+    /** Short clinical row labels; source test name, units, and raw values are
+     * preserved unchanged for drill-down, auditing and PDF provenance. */
+    fun shortLabel(name: String): String {
+        val v=clean(name)
         return when {
-            hemogram.containsMatchIn(test) || cleanedTest == "esr" ||
-                cleanedTest.startsWith("erythrocytesedimentationrate") ||
-                cleanedTest.startsWith("sedimentationrate") -> Panel.HEMOGRAM
-            metabolic.containsMatchIn(test) -> Panel.METABOLIC
-            else -> Panel.OTHERS
+            v == "serumcreatinine" || v == "creatinine" -> "Creatinine"
+            v in setOf("serumurea","bloodurea","urea") -> "Urea"
+            v.startsWith("serumast") || v == "ast" || v == "sgot" -> "AST"
+            v.startsWith("serumalt") || v == "alt" || v == "sgpt" -> "ALT"
+            v.contains("alkphosphatase") || v.contains("alkalinephosphatase") ||
+                v == "alp" -> "ALP"
+            v.contains("bilirubin") && (v.contains("conjugated") ||
+                v.contains("direct")) -> "Bilirubin (direct)"
+            v.contains("bilirubin") -> "Bilirubin (total)"
+            v == "serumalbumin" -> "Albumin"
+            v == "serumtotalprotein" -> "Total protein"
+            v == "serumsodium" -> "Na"
+            v == "serumpotassium" -> "K"
+            v == "serumchloride" -> "Cl"
+            v == "serumbicarbonate" -> "HCO3"
+            v == "hemoglobin" || v == "haemoglobin" -> "Hb"
+            v.contains("totalleucocytecount") || v.contains("totalleukocytecount") ||
+                v == "tlc" -> "TLC"
+            v == "plateletcount" -> "Platelets"
+            v == "neutrophils" -> "Neutrophils %"
+            v == "lymphocytes" -> "Lymphocytes %"
+            v == "monocytes" -> "Monocytes %"
+            v == "eosinophils" -> "Eosinophils %"
+            v == "basophils" -> "Basophils %"
+            else -> name.replace(Regex("(?i)^serum\\s+"), "Sr. ")
+                .replace(Regex("(?i)\\s*\\(SGOT\\)"), "")
+                .replace(Regex("(?i)\\s*\\(SGPT\\)"), "")
         }
     }
 
@@ -67,8 +114,8 @@ object LabPanelMatrix {
                 v.contains("creatinine") && !v.contains("urine") -> 0
                 v.contains("urea") || v == "bun" || v.contains("bloodureanitrogen") -> 1
                 v.contains("bilirubin") -> 10
-                v.contains("ast") || v.contains("sgot") -> 11
-                v.contains("alt") || v.contains("sgpt") -> 12
+                v == "ast" || v.startsWith("serumast") || v == "sgot" -> 11
+                v == "alt" || v.startsWith("serumalt") || v == "sgpt" -> 12
                 v.contains("alkalinephosphatase") || v == "alp" -> 13
                 v.contains("albumin") -> 14
                 v.contains("totalprotein") || v.contains("globulin") -> 15

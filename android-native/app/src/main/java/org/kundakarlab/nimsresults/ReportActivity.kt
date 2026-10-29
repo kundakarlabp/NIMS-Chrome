@@ -12,6 +12,9 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -46,6 +49,22 @@ class ReportActivity : Activity() {
     private lateinit var verticalScroll: ScrollView
     private lateinit var horizontalScroll: HorizontalScrollView
     private var zoom = 1f
+    private var restoredPage = 0
+    private var pinchDetector: ScaleGestureDetector? = null
+    private var swipeDetector: GestureDetector? = null
+
+    // Receive swipe/pinch even if a nested ScrollView intercepts MOVE events.
+    // Preserve normal taps, scrolling, and all accessible PDF controls.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val pinch=pinchDetector
+        if (pinch != null) {
+            pinch.onTouchEvent(event)
+            val flung = if (!pinch.isInProgress)
+                swipeDetector?.onTouchEvent(event) == true else false
+            if (pinch.isInProgress || flung) return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
     private var sourceUrl = ""
     private var expectedCr = ""
     private lateinit var readTextButton: Button
@@ -64,6 +83,7 @@ class ReportActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoredPage = savedInstanceState?.getInt("current_pdf_page", 0) ?: 0
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         sourceUrl = url
         expectedCr = intent.getStringExtra(EXTRA_EXPECTED_CR).orEmpty()
@@ -110,7 +130,7 @@ class ReportActivity : Activity() {
         image = ImageView(this).apply {
             setBackgroundColor(Color.WHITE)
             adjustViewBounds = false
-            scaleType = ImageView.ScaleType.FIT_XY
+            scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "NIMS PDF page"
         }
         // PDF pages are rendered at readable, page-width scale and scroll vertically.
@@ -130,6 +150,38 @@ class ReportActivity : Activity() {
         root.addView(verticalScroll, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
         ))
+        // Keep large documents in the existing PdfRenderer. Touch changes
+        // the visible page, never loads all pages into bitmap memory at once.
+        val pinch = ScaleGestureDetector(this,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    zoom = (zoom * detector.scaleFactor).coerceIn(1f, 2.7f)
+                    return true
+                }
+                override fun onScaleEnd(detector: ScaleGestureDetector) {
+                    render(pageIndex)
+                }
+            })
+        val swipe = GestureDetector(this,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: MotionEvent): Boolean = true
+                override fun onFling(
+                    e1: MotionEvent?, e2: MotionEvent,
+                    velocityX: Float, velocityY: Float
+                ): Boolean {
+                    val distance = e2.x - (e1?.x ?: e2.x)
+                    if (zoom > 1.05f || kotlin.math.abs(distance) < dp(65) ||
+                        kotlin.math.abs(distance) < kotlin.math.abs(e2.y-(e1?.y?:e2.y)) ||
+                        kotlin.math.abs(velocityX) < 250f) return false
+                    val total = renderer?.pageCount ?: return false
+                    val nextPage = pageIndex + if (distance < 0) 1 else -1
+                    if (nextPage !in 0 until total) return false
+                    render(nextPage)
+                    return true
+                }
+            })
+        pinchDetector = pinch
+        swipeDetector = swipe
 
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -146,20 +198,6 @@ class ReportActivity : Activity() {
             contentDescription = "Next PDF page"
             isEnabled = false
             setOnClickListener { render(pageIndex + 1) }
-        }
-        val zoomOut = Button(this).apply {
-            text = "−"
-            contentDescription = "Zoom out"
-            setOnClickListener { zoom = (zoom / 1.5f).coerceAtLeast(1f); render(pageIndex) }
-        }
-        val zoomIn = Button(this).apply {
-            text = "+"
-            contentDescription = "Zoom in"
-            setOnClickListener { zoom = (zoom * 1.5f).coerceAtMost(2.5f); render(pageIndex) }
-        }
-        val fit = Button(this).apply {
-            text = "Fit"
-            setOnClickListener { zoom = 1f; render(pageIndex) }
         }
         readTextButton = Button(this).apply {
             text = "Text"
@@ -178,7 +216,7 @@ class ReportActivity : Activity() {
             isEnabled = false
             setOnClickListener { savePdf() }
         }
-        listOf(previous, next, zoomOut, zoomIn, fit, readTextButton, tableButton).forEach { control ->
+        listOf(previous, next).forEach { control ->
             control.minimumWidth = 0
             control.minWidth = 0
             control.isAllCaps = false
@@ -187,10 +225,35 @@ class ReportActivity : Activity() {
             nav.addView(control, LinearLayout.LayoutParams(0, dp(44), 1f))
         }
         top.addView(saveButton)
+        val helper = TextView(this).apply {
+            text = "‹ / › pages   ·   Swipe between pages   ·   Pinch to zoom"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(70, 92, 112))
+            setPadding(0, dp(3), 0, dp(3))
+        }
+        // Preserve text/table extraction without occupying permanent screen space.
+        val more = Button(this).apply {
+            text = "⋮"
+            contentDescription = "PDF text and table options"
+            setOnClickListener {
+                AlertDialog.Builder(this@ReportActivity)
+                    .setItems(arrayOf("Selectable text", "Table text")) { _, choice ->
+                        extractText(choice == 1)
+                    }.show()
+            }
+        }
+        top.addView(more)
+        nav.addView(helper, LinearLayout.LayoutParams(0, dp(38), 3f))
         root.addView(nav)
 
         setContentView(root)
         download(url)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("current_pdf_page", pageIndex)
+        super.onSaveInstanceState(outState)
     }
 
     private fun download(url: String) {
@@ -373,7 +436,7 @@ class ReportActivity : Activity() {
                 saveButton.isEnabled = true
                 readTextButton.isEnabled = true
                 tableButton.isEnabled = true
-                render(0)
+                render(restoredPage.coerceIn(0, (renderer?.pageCount ?: 1)-1))
             }
         } catch (_: Exception) {
             DiagnosticEvents.record("PDF_RENDER_FAILED")
@@ -405,9 +468,11 @@ class ReportActivity : Activity() {
             var result: Bitmap? = null
             try {
                 page = current.openPage(index)
-                val desiredWidth = (resources.displayMetrics.widthPixels * currentZoom)
-                    .coerceIn(320f, 900f).toDouble()
-                val scale = minOf(desiredWidth / page.width, 1600.0 / page.height)
+                val viewport = horizontalScroll.width.takeIf { it > 0 }
+                    ?: resources.displayMetrics.widthPixels
+                val desiredWidth = (viewport * currentZoom)
+                    .coerceIn(240f, 1500f).toDouble()
+                val scale = minOf(desiredWidth / page.width, 2600.0 / page.height)
                 val width = (page.width * scale).toInt().coerceAtLeast(1)
                 val height = (page.height * scale).toInt().coerceAtLeast(1)
                 result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -433,7 +498,7 @@ class ReportActivity : Activity() {
                     bitmap = newBitmap
                     PdfPerformanceTrace.bitmapAllocated(newBitmap.allocationByteCount)
                     pageIndex = index
-                    image.layoutParams = android.widget.FrameLayout.LayoutParams(width, height)
+                    image.layoutParams = ViewGroup.LayoutParams(width, height)
                     image.setImageBitmap(newBitmap)
                     old?.recycle()
                     PdfPerformanceTrace.record("render_page_ms",
