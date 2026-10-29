@@ -46,6 +46,16 @@ object ReportLinkResolver {
     private fun kind(s: String): String {
         val v = normalize(s)
         return when {
+            // HIS Custom Sheet often names a CBC panel with all component
+            // analytes, while the PDF index says CBC+DIFF or hemogram.
+            // This normalizes *candidate discovery only*; it never verifies
+            // a specimen without identical source identifiers and PDF CR.
+            v.startsWith("cbc") || v.startsWith("cbp") ||
+                v.startsWith("completebloodcount") ||
+                v.startsWith("completebloodpicture") ||
+                v.startsWith("completehemogram") ||
+                v.startsWith("hemogram") || v.startsWith("haemogram") ->
+                "cbcdiff"
             v.startsWith("gramstain") || v.startsWith("gramsmear") -> "gramstain"
             v.contains("fluorescencestain") || v.contains("auramine") -> "afbstain"
             v.contains("aerobicculture") -> "aerobicculture"
