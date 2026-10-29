@@ -146,6 +146,46 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var apiAttemptMs by mutableStateOf(0L)
     private var currentTimeout: Runnable? = null
 
+    private data class LabExport(
+        val patient: PatientInfo, val retrievedAt: Long,
+        val tables: List<LabPanelMatrix.Table>
+    )
+    private var pendingLabExport: LabExport? = null
+    private val labPdfLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val request=pendingLabExport
+        pendingLabExport=null
+        if (uri != null && request != null) {
+            worker.execute {
+                val success=runCatching {
+                    contentResolver.openOutputStream(uri)?.use { target ->
+                        ClinicalLabPdfExport.write(target, request.patient,
+                            request.retrievedAt, request.tables)
+                    } ?: error("Selected destination is not writable")
+                }.isSuccess
+                runOnUiThread {
+                    Toast.makeText(this,
+                        if (success) "Laboratory summary PDF saved"
+                        else "Could not save laboratory summary PDF",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun exportClinicalLabs(current: ClinicalBundle) {
+        val source=current.results.filterNot { isMicro(it) }
+        val tables=LabPanelMatrix.build(source, clinical=true)
+        if (tables.isEmpty()) {
+            Toast.makeText(this,"No dated clinical results to export",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingLabExport=LabExport(current.patient,current.retrievedAt,tables)
+        labPdfLauncher.launch("NIMS-Labs-" + current.patient.crNo + ".pdf")
+    }
+
     private val deviceUnlockLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             unlockPromptActive = false
@@ -2286,8 +2326,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             contentPadding=PaddingValues(start=10.dp,end=18.dp,top=10.dp,bottom=24.dp),
             verticalArrangement=Arrangement.spacedBy(8.dp)) {
             item {
-                Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
-                    fontSize=14.sp)
+                Row(modifier=Modifier.fillMaxWidth(),
+                    horizontalArrangement=Arrangement.SpaceBetween,
+                    verticalAlignment=Alignment.CenterVertically) {
+                    Text("Lab trends · result dates", fontWeight=FontWeight.Bold,
+                        fontSize=14.sp)
+                    OutlinedButton(onClick={exportClinicalLabs(current)}) {
+                        Text("Export PDF",fontSize=11.sp)
+                    }
+                }
                 if (kind == "Clinical") Text(
                     "Renal / LFT / Electrolytes · Hb / TLC / DLC / Platelets / ESR / Smear",
                     fontSize=10.sp,color=Color(0xFF486581),maxLines=2)
