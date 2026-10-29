@@ -2,7 +2,6 @@ package org.kundakarlab.nimsresults
 
 import java.net.URI
 import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 /** Accept only an unambiguous 15-digit NIMS CR; never log scanned payloads.
  * A scanner result is entered into the CR field for user confirmation,
@@ -23,10 +22,10 @@ object CrScanParser {
         val values = uri.rawQuery.orEmpty().split("&").mapNotNull { item ->
             val pair = item.split("=", limit = 2)
             if (pair.size != 2) return@mapNotNull null
-            val key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8)
+            val key = URLDecoder.decode(pair[0], "UTF-8")
                 .lowercase().replace(Regex("[^a-z]"), "")
             if (key !in setOf("cr","crno","crnumber","patientcr")) return@mapNotNull null
-            URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
+            URLDecoder.decode(pair[1], "UTF-8")
         }.filter(exact::matches).distinct()
         return values.singleOrNull()
     }
