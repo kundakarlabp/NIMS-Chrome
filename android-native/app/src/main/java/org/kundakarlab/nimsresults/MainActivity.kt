@@ -3129,8 +3129,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
+                            val restOnly =
+                                report.sourceTag.startsWith("nims_rest_reportList")
+                            if (restOnly && !expanded) {
+                                Text("REST source reportDate: " +
+                                    LabPanelMatrix.displayDate(report.reportedDate.ifBlank {
+                                        report.date
+                                    }) + " · tap Expand for complete source fields",
+                                    fontSize = 11.sp, color = Color(0xFF486581))
+                            } else {
                             Text("Lab/study no.: " + lab.ifBlank {
                                 if (parts.isNotEmpty()) "Multiple studies / see sections"
+                                else if (restOnly) "Not present in REST record"
                                 else "Not yet extracted"
                             }, fontSize = 11.sp)
                             if (report.sampleNumber.isNotBlank()) Text(
@@ -3152,6 +3162,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                  else "Report-index/PDF reporting timestamp: ") +
                                 reported.ifBlank { "Not supplied by this source" },
                                 fontSize = 11.sp)
+                            }
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
@@ -3226,7 +3237,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 TextButton(onClick = { openReport(report.url) }) {
                                     Text("Open complete original PDF")
                                 }
-                            } else Text("Metadata-only NIMS report row: no usable PDF URL provided.",
+                            } else if (!restOnly && expanded) Text(
+                                "No PDF link is present in this source-index row.",
                                 fontSize = 11.sp, color = Color(0xFF875B22))
                             if (expanded && report.sourceRow.isNotBlank()) {
                                 TextButton(onClick = { showEntireSource = !showEntireSource }) {
