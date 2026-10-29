@@ -138,7 +138,13 @@ object RestReportDiagnostics {
         assign("rest.rowsWithLabNo",objects.count { value(obj=it,"labNo","labNumber","labStudyNo","accessionNo") })
         assign("rest.rowsWithSampleNo",objects.count { value(obj=it,"sampleNo","sampleNumber","specimenNo") })
         assign("rest.rowsWithCollectionTime",objects.count { value(obj=it,"collectionDate","sampleCollectionDate") })
-        assign("rest.rowsWithReportingTime",objects.count { value(obj=it,"reportingDate","reportedDate","reportDate") })
+        assign("rest.rowsWithSourceReportDate",objects.count {
+            value(obj=it,"reportDate")
+        })
+        assign("rest.rowsWithExplicitReportingTimestamp",objects.count {
+            value(obj=it,"reportingDate","reportedDate","reportingDateTime",
+                "reportedDateTime")
+        })
         assign("rest.rowsWithReportNumber",objects.count { value(obj=it,"reportNo","reportNumber") })
         assign("rest.rowsWithDocumentRef",objects.count { value(obj=it,"fileName","reportUrl","pdfUrl","reportToken") })
         assign("rest.possibleDetailRecords",possibleDetailed)
@@ -166,6 +172,11 @@ object RestReportDiagnostics {
                 else "conflict"
             else -> "not_returned"
         })
+    }
+
+    @Synchronized fun binding(acceptedWithoutResponseCr: Boolean) {
+        metrics["rest.patientBinding"] = if (acceptedWithoutResponseCr)
+            "authenticated_patient_header_context_only" else "response_cr_required"
     }
 
     private fun value(obj: JSONObject, vararg fields: String): Boolean {
