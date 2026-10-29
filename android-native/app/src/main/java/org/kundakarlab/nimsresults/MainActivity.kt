@@ -2959,6 +2959,201 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
 
+    /** A single reverse-date clinical timeline. This is presentation only:
+     * source rows and PDF inventory are preserved independently. */
+    @Composable
+    private fun ChronologyResultsScreen(
+        current: ClinicalBundle, scroll: LazyListState,
+        onSources: () -> Unit, onOrders: () -> Unit
+    ) {
+        var query by remember(current.patient.crNo) { mutableStateOf("") }
+        var category by remember(current.patient.crNo) { mutableStateOf("All") }
+        var period by remember(current.patient.crNo) { mutableStateOf("All") }
+        LaunchedEffect(allResultsSourceFilter) {
+            if (allResultsSourceFilter in listOf("Microbiology","Metabolic",
+                    "Pathology","Blood bank")) {
+                category=allResultsSourceFilter
+                scroll.scrollToItem(0)
+            }
+        }
+        val within = when(period) {
+            "7D" -> 7L; "30D" -> 30L; "90D" -> 90L; "1Y" -> 365L
+            else -> null
+        }
+        val chronology=remember(current.results,query,category,period) {
+            ClinicalChronology.days(current.results,query,category,within)
+        }
+        LazyColumn(state=scroll,modifier=Modifier.fillMaxSize(),
+            contentPadding=PaddingValues(start=12.dp,end=19.dp,top=8.dp,bottom=26.dp),
+            verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth(),
+                    horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                    FilterChip(selected=true,onClick={},
+                        label={Text("Results",fontSize=11.sp)})
+                    FilterChip(selected=false,onClick=onSources,
+                        label={Text("Source PDFs",fontSize=11.sp)})
+                    FilterChip(selected=false,onClick=onOrders,
+                        label={Text("Orders",fontSize=11.sp)})
+                }
+                OutlinedTextField(value=query,onValueChange={query=it},
+                    modifier=Modifier.fillMaxWidth(),singleLine=true,
+                    placeholder={Text("Search results, tests or dates")})
+                Row(Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                    listOf("All","Microbiology","Metabolic","Pathology","Blood bank")
+                        .forEach { type ->
+                            FilterChip(selected=category==type,
+                                onClick={category=type},label={Text(type,fontSize=10.sp)})
+                        }
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                    listOf("7D","30D","90D","1Y","All").forEach { span ->
+                        FilterChip(selected=period==span,onClick={period=span},
+                            label={Text(span,fontSize=10.sp)})
+                    }
+                }
+            }
+            if(chronology.isEmpty()) item {
+                Text("No matching results in the fetched data.",
+                    fontSize=12.sp,color=Color(0xFF66788A))
+            }
+            chronology.forEach { day ->
+                item(key="date|"+day.date.toString()) {
+                    Text(if(day.date==LocalDate.MIN) "Date unavailable"
+                        else LabPanelMatrix.displayDate(day.date.toString()),
+                        fontSize=13.sp,fontWeight=FontWeight.Bold,
+                        color=Color(0xFF102A43),
+                        modifier=Modifier.padding(top=10.dp,bottom=4.dp))
+                }
+                items(day.studies,key={ "study|"+it.key }) { study ->
+                    val rows=study.rows
+                    val relevant=study.visible
+                    val candidates=remember(rows,current.reports) {
+                        SourceMetadataReview.candidates(rows,current.reports)
+                            .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                            .sortedWith(compareBy<ReportRef> { source ->
+                                val sourceDate=RecentReportDates.parse(
+                                    source.collectionDateTime.ifBlank{source.date})
+                                if(sourceDate==null || study.date==LocalDate.MIN)
+                                    Long.MAX_VALUE else kotlin.math.abs(
+                                        java.time.temporal.ChronoUnit.DAYS.between(
+                                            sourceDate,study.date))
+                            }.thenBy { it.title })
+                    }
+                    var expanded by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
+                    }
+                    var pickPdf by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
+                    }
+                    Surface(color=Color.White,shape=RoundedCornerShape(10.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal=11.dp,vertical=7.dp),
+                            verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                            Row(Modifier.fillMaxWidth(),
+                                horizontalArrangement=Arrangement.SpaceBetween,
+                                verticalAlignment=Alignment.CenterVertically) {
+                                Text(study.title,fontSize=12.sp,
+                                    fontWeight=FontWeight.SemiBold,
+                                    color=Color(0xFF102A43),
+                                    modifier=Modifier.weight(1f).clickable{
+                                        expanded=!expanded
+                                    },maxLines=2)
+                                TextButton(onClick={expanded=!expanded}) {
+                                    Text(if(expanded) "Less" else "Details",
+                                        fontSize=10.sp)
+                                }
+                                if(candidates.isNotEmpty()) {
+                                    TextButton(onClick={
+                                        if(candidates.size==1) openReport(candidates[0].url)
+                                        else pickPdf=true
+                                    }) {
+                                        Text(if(candidates.size==1) "PDF" else
+                                            "PDFs",fontSize=10.sp)
+                                    }
+                                }
+                            }
+                            if(relevant.isNotEmpty()) {
+                                Text(ClinicalChronology.preview(study),
+                                    fontSize=12.sp,color=Color(0xFF2C516A),
+                                    maxLines=if(expanded) 8 else 2)
+                            } else Text("No interpretable structured value; review source",
+                                fontSize=10.sp,color=Color(0xFF66788A))
+                            if(expanded) {
+                                val provenance=listOfNotNull(
+                                    rows.firstOrNull()?.reportedDate
+                                        ?.takeIf{it.isNotBlank()}?.let{
+                                            "Reported "+LabPanelMatrix.displayDateTime(it)},
+                                    rows.firstOrNull()?.collectionDateTime
+                                        ?.takeIf{it.isNotBlank()}?.let{
+                                            "Collected "+LabPanelMatrix.displayDateTime(it)},
+                                    rows.firstOrNull()?.specimenType
+                                        ?.takeIf{it.isNotBlank()}?.let{"Sample "+it},
+                                    rows.firstOrNull()?.labNumber
+                                        ?.takeIf{it.isNotBlank()}?.let{"Lab "+it},
+                                    rows.firstOrNull()?.sampleNumber
+                                        ?.takeIf{it.isNotBlank()}?.let{"No. "+it}
+                                )
+                                if(provenance.isNotEmpty()) Text(provenance.joinToString(" · "),
+                                    fontSize=10.sp,color=Color(0xFF486581))
+                                else Text("Date shown is from the structured result source.",
+                                    fontSize=10.sp,color=Color(0xFF66788A))
+                                relevant.forEach { row ->
+                                    Row(Modifier.fillMaxWidth(),
+                                        horizontalArrangement=Arrangement.SpaceBetween) {
+                                        Text(ClinicalChronology.parameterLabel(row),
+                                            fontSize=11.sp,color=Color(0xFF486581),
+                                            modifier=Modifier.weight(1f).padding(end=6.dp))
+                                        Text(ClinicalChronology.clinicalText(
+                                            ClinicalPresentation.displayValue(row)) +
+                                            if(row.unit.isBlank()) "" else " "+row.unit,
+                                            fontSize=11.sp,
+                                            color=abnormalColor(row.abnormal),
+                                            modifier=Modifier.weight(1.1f))
+                                    }
+                                }
+                                if(relevant.size<rows.size) Text(
+                                    "Additional original fields remain available in source data.",
+                                    fontSize=10.sp,color=Color(0xFF66788A))
+                            }
+                        }
+                    }
+                    if(pickPdf) {
+                        AlertDialog(onDismissRequest={pickPdf=false},
+                            title={Text("Choose original PDF")},
+                            text={
+                                Column {
+                                    Text("These are possible reports; verify specimen, " +
+                                        "collection date and accession in the PDF.",
+                                        fontSize=11.sp,color=Color(0xFF875B22))
+                                    LazyColumn(Modifier.heightIn(max=390.dp)) {
+                                        items(candidates,key={it.url}) { report ->
+                                            TextButton(onClick={
+                                                pickPdf=false
+                                                openReport(report.url)
+                                            }) {
+                                                Text(LabPanelMatrix.displayDate(
+                                                    report.collectionDateTime.ifBlank{
+                                                        report.date})+" · "+report.title+
+                                                    if(report.labNumber.isBlank()) ""
+                                                    else " · "+report.labNumber,
+                                                    fontSize=11.sp)
+                                            }
+                                            HorizontalDivider()
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton={TextButton(onClick={pickPdf=false}) {
+                                Text("Close")
+                            }})
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     private fun AllResultsScreen(current: ClinicalBundle, scroll: LazyListState) {
         var subview by remember(current.patient.crNo) { mutableStateOf("Investigations") }
@@ -2968,6 +3163,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         var query by remember(current.patient.crNo) { mutableStateOf("") }
         var category by remember(current.patient.crNo) { mutableStateOf("All") }
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
+        if (subview == "Investigations") {
+            ChronologyResultsScreen(current,scroll,
+                onSources={subview="Report index / PDFs"},
+                onOrders={subview="Enquiry orders"})
+            return
+        }
         val days = when (range) {
             "7D" -> 7L
             "30D" -> 30L
