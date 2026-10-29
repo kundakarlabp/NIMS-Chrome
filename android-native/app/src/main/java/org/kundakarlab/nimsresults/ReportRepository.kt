@@ -53,7 +53,8 @@ class ReportRepository(
     fun load(
         crNo: String,
         verifiedRest: List<ReportRef> = emptyList(),
-        restAlreadyAttempted: Boolean = false
+        restAlreadyAttempted: Boolean = false,
+        verifiedPatientContext: Boolean = false
     ): Inventory {
         require(Regex("""\d{15}""").matches(crNo)) { "Enter the 15-digit NIMS CR number." }
 
@@ -61,7 +62,7 @@ class ReportRepository(
             else if (restAlreadyAttempted) emptyList()
             else runCatching {
             ReportInventoryTrace.event("rest_attempt")
-            loadRest(crNo)
+            loadRest(crNo, verifiedPatientContext = verifiedPatientContext)
         }.getOrElse { error ->
             RestReportDiagnostics.stage(when (error) {
                 is IdentityMismatchException -> "patient_identity_conflict"
@@ -104,7 +105,11 @@ class ReportRepository(
         )
     }
 
-    private fun loadRest(crNo: String, apiClient: OkHttpClient = client): List<ReportRef> {
+    private fun loadRest(
+        crNo: String,
+        apiClient: OkHttpClient = client,
+        verifiedPatientContext: Boolean = false
+    ): List<ReportRef> {
         RestReportDiagnostics.reset()
         RestReportDiagnostics.stage("requesting")
         val started = System.nanoTime()
@@ -144,10 +149,18 @@ class ReportRepository(
                 throw IllegalStateException("NIMS reportList did not return valid JSON.",e)
             }
             RestReportDiagnostics.inspect(payload,crNo)
-            val reports = ReportPayloadParser.parseRest(payload, crNo)
-            RestReportDiagnostics.stage(
-                if(reports.isEmpty()) "no_verified_report_rows" else "verified_report_rows"
+            val reports = ReportPayloadParser.parseRest(
+                payload, crNo, verifiedPatientContext = verifiedPatientContext
             )
+            val contextBound = reports.any {
+                it.sourceTag == "nims_rest_reportList_context"
+            }
+            RestReportDiagnostics.binding(contextBound)
+            RestReportDiagnostics.stage(when {
+                reports.isEmpty() -> "no_accepted_rows"
+                contextBound -> "context_bound_metadata_no_specimen_identifiers"
+                else -> "response_cr_verified_records"
+            })
             return reports
         }
     }
@@ -303,7 +316,11 @@ object ReportPayloadParser {
     private val crRegex = Regex("""(?i)(?:CR\s*(?:No|Number)?|patCrNo)\s*[:=\-]?\s*(\d{15})""")
     private val printReportRegex = Regex("""(?i)printReport\s*\(\s*['"]([^'"]+)['"]\s*\)""")
 
-    fun parseRest(payload: Any, expectedCr: String): List<ReportRef> {
+    fun parseRest(
+        payload: Any,
+        expectedCr: String,
+        verifiedPatientContext: Boolean = false
+    ): List<ReportRef> {
         // Use the same inspected array selection for parsing and diagnostics.
         // Preserve raw objects independently; never assert values complete.
         val rows = RestReportDiagnostics.bestArray(payload)
@@ -319,7 +336,12 @@ object ReportPayloadParser {
 
         if (returned.isNotBlank() && returned != expectedCr) throw IdentityMismatchException("NIMS report-list returned a different CR.")
         if (rowCrs.any { it != expectedCr }) throw IdentityMismatchException("NIMS report-list returned conflicting patient rows.")
-        if (returned.isBlank() && rowCrs.isEmpty()) return emptyList()
+        val missingIdentity = returned.isBlank() && rowCrs.isEmpty()
+        // Some NIMS reportList deployments return only testName/reportDate.
+        // Adopt as context-bound metadata ONLY after the same authenticated
+        // patient's independently verified Custom Sheet response. A CR passed
+        // as a query argument or an existing cookie is never sufficient.
+        if (missingIdentity && !verifiedPatientContext) return emptyList()
 
         return objects.mapIndexedNotNull { index, row ->
             val title = first(row, titleKeys).ifBlank { "Investigation report" }
@@ -345,7 +367,8 @@ object ReportPayloadParser {
                 packingListNumber = first(row, packingKeys),
                 sourceRow = row.toString(),
                 collectionDateTime = first(row, listOf("collectionDate", "sampleCollectionDate", "collection_date")),
-                sourceTag = "nims_rest_reportList"
+                sourceTag = if (missingIdentity) "nims_rest_reportList_context"
+                    else "nims_rest_reportList"
             )
         }
     }

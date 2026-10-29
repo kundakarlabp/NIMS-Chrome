@@ -669,7 +669,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // A slow PDF index must not block new structured laboratory batches.
         inventoryWorker.execute {
             val inventory = try {
-                reportRepository.load(cr, seed, restAlreadyAttempted = false)
+                reportRepository.load(
+                    cr, seed, restAlreadyAttempted = false,
+                    verifiedPatientContext = (patientHeaderRequestId == requestId &&
+                        pendingPatient.crNo == cr && bundle?.patient?.crNo == cr &&
+                        sessionState == SessionState.CONNECTED)
+                )
             } catch (_: IdentityMismatchException) {
                 DiagnosticEvents.record("PDF_IDENTITY_MISMATCH")
                 runOnUiThread {
@@ -692,10 +697,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 worker.execute {
                     if (requestId == activeRequestId) snapshotCache.save(withInventory)
                 }
-                apiReportCount = sources.size
+                val htmlCount = sources.count {
+                    !it.sourceTag.startsWith("nims_rest_reportList")
+                }
+                val restCount = sources.size - htmlCount
+                apiReportCount = htmlCount
+                apiStage = if (sources.any {
+                    it.sourceTag == "nims_rest_reportList_context"
+                }) "rest_context_bound_metadata_not_specimen_linked"
+                else if (sources.isNotEmpty()) "source_index_loaded_not_result_linked"
+                else "source_inventory_missing"
                 if (sources.isNotEmpty()) historyStatus =
                     current.results.size.toString() + " structured fields · " +
-                        sources.size + " NIMS source-index rows (separate identifiers)"
+                        htmlCount + " report-index rows · " +
+                        restCount + " REST metadata records (identities separate)"
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -1771,6 +1786,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("No interpretable clinical fields in the structured feed.",
                             fontSize = 11.sp, color = Color(0xFF66788A))
                     }
+                    if (ClinicalPresentation.isCulture(test) &&
+                        shown.any {
+                            it.valueText.contains("TREATMENT:", ignoreCase = true) ||
+                            it.valueText.contains("TREATMENT :", ignoreCase = true)
+                        }) {
+                        Text("Source report contains generic treatment commentary, " +
+                            "not a patient-specific recommendation from this app.",
+                            fontSize = 10.sp, color = Color(0xFF875B22))
+                    }
                     val hasLongText = shown.any { it.valueText.length > 280 }
                     if (hasLongText) {
                         TextButton(onClick = { showFullText = !showFullText }) {
@@ -1884,7 +1908,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val markerRows = remember(current.results) {
             markers.map { (name, aliases) ->
                 name to current.results.filter { row ->
-                    !isMicro(row) && normalizeKey(row.parameter) in aliases &&
+                    !isMicro(row) &&
+                        (normalizeKey(row.parameter) in aliases ||
+                            (normalizeKey(row.parameter) in
+                                setOf("result","value","observation") &&
+                                aliases.any { alias ->
+                                    normalizeKey(row.test).startsWith(alias)
+                                })) &&
                         row.numericValue?.isFinite() == true &&
                         !ClinicalReportRenderer.isUninterpretedCode(row)
                 }.sortedByDescending { BulkParser.dateKey(it.date) }
@@ -2668,46 +2698,71 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val feed = remember(baseFeed, query, category, range) {
             UnifiedResultsFeed.filterEntries(baseFeed, query, category, days)
         }
-        val visibleFeed = if (subview == "Enquiry orders") emptyList() else
-            feed.filter {
-                when (subview) {
-                    "REST API" -> it.report?.sourceTag == "nims_rest_reportList"
-                    "Report index / PDFs" -> it.report != null
-                    else -> it.report == null
-                }
+        // REST and report inventory have their own scopes: investigation
+        // category filters and bulk result date filters must not hide them.
+        val visibleFeed = when (subview) {
+            "Enquiry orders" -> emptyList()
+            "REST API" -> baseFeed.filter {
+                it.report?.sourceTag?.startsWith("nims_rest_reportList") == true &&
+                    (query.isBlank() || UnifiedResultsFeed.filterEntries(
+                        listOf(it), query, "All", null).isNotEmpty())
             }
+            "Report index / PDFs" -> baseFeed.filter {
+                it.report != null &&
+                    !it.report.sourceTag.startsWith("nims_rest_reportList") &&
+                    (query.isBlank() || UnifiedResultsFeed.filterEntries(
+                        listOf(it), query, "All", null).isNotEmpty())
+            }
+            else -> feed.filter { it.report == null }
+        }
         val studyCount = feed.count { it.report == null }
-        val sourceCount = feed.count { it.report != null }
+        val sourceCount = baseFeed.count {
+            it.report != null &&
+                !it.report.sourceTag.startsWith("nims_rest_reportList")
+        }
+        val restCount = baseFeed.count {
+            it.report?.sourceTag?.startsWith("nims_rest_reportList") == true
+        }
+        LaunchedEffect(subview) { scroll.scrollToItem(0) }
         LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, top = 10.dp,
                 end = 27.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             item {
                 Text("All results", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text("$studyCount investigation groups · $sourceCount source-index entries",
+                Text("$studyCount investigation groups · $sourceCount report-index rows · " +
+                    "$restCount REST entries",
                     fontSize = 11.sp, color = Color(0xFF66788A))
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("Investigations", "Report index / PDFs", "REST API", "Enquiry orders").forEach { name ->
                         FilterChip(selected = subview == name,
-                            onClick = { subview = name; query = "" },
+                            onClick = {
+                                subview = name
+                                query = ""
+                                category = "All"
+                                range = "All"
+                            },
                             label = { Text(name, fontSize = 11.sp) })
                     }
                 }
                 if (subview == "REST API") {
                     val apiCount = current.reports.count {
-                        it.sourceTag == "nims_rest_reportList"
+                        it.sourceTag.startsWith("nims_rest_reportList")
                     }
-                    Text("$apiCount verified REST reportList records retained. " +
-                        "Expand a record to inspect all original API fields, including " +
-                        "unrecognized nested details. These are not automatically " +
-                        "interpreted as structured measurements.",
+                    val contextOnly = current.reports.count {
+                        it.sourceTag == "nims_rest_reportList_context"
+                    }
+                    Text("$apiCount REST reportList metadata entries · $contextOnly " +
+                        "accepted using independently verified patient context.",
                         fontSize = 11.sp, color = Color(0xFF486581))
-                    Text("REST API status and field-coverage counts are in Copy diagnostics. " +
-                        "If the endpoint does not confirm the patient CR, its raw " +
-                        "records will not be assigned to this patient.",
+                    Text("These records provide source test names and report dates. " +
+                        "They do not establish specimen, accession or PDF identity. " +
+                        "Inspect original fields on expansion; full lab values still " +
+                        "come from Custom Sheet.",
                         fontSize = 10.sp, color = Color(0xFF875B22))
                 }
-                if (pdfTotalCount > 0) Text(
+                if (pdfTotalCount > 0 && subview == "Report index / PDFs") Text(
                     "$pdfTotalCount source PDFs · Open a report to inspect it securely",
                     fontSize = 10.sp, color = Color(0xFF66788A))
                 OutlinedTextField(
@@ -2717,6 +2772,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     singleLine = true,
                     placeholder = { Text("Search test, result, lab number, report or date") }
                 )
+                if (subview == "Investigations") {
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf("All", "Microbiology", "Metabolic", "Pathology",
@@ -2737,9 +2793,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             label = { Text(value, fontSize = 11.sp) })
                     }
                 }
-                Text("Full investigations and the independent source PDF list are separate. " +
-                    "Specimen identifiers from the report index are kept separate until verified.",
-                    fontSize = 10.sp, color = Color(0xFF66788A))
+                if (subview == "Investigations") {
+                    Text("Source values remain independent of report metadata until " +
+                        "event identity can be verified.", fontSize = 10.sp,
+                        color = Color(0xFF66788A))
+                }
+                }
             }
             if (subview == "Enquiry orders") {
                 item {
@@ -2820,7 +2879,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
             }
             if (subview != "Enquiry orders" && visibleFeed.isEmpty()) item {
-                Text("No investigations or source-index entries match these filters.",
+                Text(if (subview == "REST API")
+                    "No REST records retained. Check REST diagnostics for status and patient context."
+                else if (subview == "Report index / PDFs")
+                    "No report-index entries match this search."
+                else "No investigations match these filters.",
                     color = Color(0xFF66788A))
             }
             items(visibleFeed, key = { it.key }) { entry ->
@@ -2854,7 +2917,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF102A43))
                                 Text(
-                                    if (report != null) (if (report.sourceTag == "nims_rest_reportList") "REST reportList record · "
+                                    if (report != null) (if (report.sourceTag.startsWith("nims_rest_reportList"))
+                                            "REST reportList · "
                                         else if (report.url.isNotBlank()) "Original NIMS PDF · "
                                         else "NIMS source index (PDF unavailable) · ") +
                                         (if (entry.date == LocalDate.MIN) "date not provided"
@@ -3055,9 +3119,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                     }
                                 }
-                                current.reports.isNotEmpty() -> Text(
-                                    "No defensible PDF mapping yet; original source " +
-                                        "documents remain in this list.",
+                                current.reports.any {
+                                    !it.sourceTag.startsWith("nims_rest_reportList")
+                                } && expanded -> Text(
+                                    "Source reports are available separately; no specimen-level link established.",
                                     fontSize = 10.sp, color = Color(0xFF875B22))
                             }
                         } else {
@@ -3087,8 +3152,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 "Report stage: " + report.reportStage, fontSize = 11.sp)
                             Text("Collection date (report index / verified PDF): " +
                                 collected.ifBlank { "Not supplied" }, fontSize = 11.sp)
-                            Text("Reporting date/time (verified PDF only): " +
-                                reported.ifBlank { "Not in this report-index row" }, fontSize = 11.sp)
+                            Text(
+                                (if (report.sourceTag.startsWith("nims_rest_reportList"))
+                                    "REST source reportDate (not collection time): "
+                                 else "Report-index/PDF reporting timestamp: ") +
+                                reported.ifBlank { "Not supplied by this source" },
+                                fontSize = 11.sp)
                             if (expanded) {
                                 HorizontalDivider()
                                 val uniqueAccessions = parts.map {
@@ -3168,8 +3237,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if (expanded && report.sourceRow.isNotBlank()) {
                                 TextButton(onClick = { showEntireSource = !showEntireSource }) {
                                     Text(if (showEntireSource) "Hide complete original source record"
-                                        else if (report.sourceTag == "nims_rest_reportList")
-                                            "Show all REST source fields and nested details"
+                                        else if (report.sourceTag.startsWith("nims_rest_reportList"))
+                                            "Show complete REST record"
                                         else "Show complete source index row")
                                 }
                                 if (showEntireSource) Text(report.sourceRow,
