@@ -1786,6 +1786,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Text("No interpretable clinical fields in the structured feed.",
                             fontSize = 11.sp, color = Color(0xFF66788A))
                     }
+                    if (ClinicalPresentation.isCulture(test) &&
+                        shown.any {
+                            it.valueText.contains("TREATMENT:", ignoreCase = true) ||
+                            it.valueText.contains("TREATMENT :", ignoreCase = true)
+                        }) {
+                        Text("Source report contains generic treatment commentary, " +
+                            "not a patient-specific recommendation from this app.",
+                            fontSize = 10.sp, color = Color(0xFF875B22))
+                    }
                     val hasLongText = shown.any { it.valueText.length > 280 }
                     if (hasLongText) {
                         TextButton(onClick = { showFullText = !showFullText }) {
@@ -1899,7 +1908,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val markerRows = remember(current.results) {
             markers.map { (name, aliases) ->
                 name to current.results.filter { row ->
-                    !isMicro(row) && normalizeKey(row.parameter) in aliases &&
+                    !isMicro(row) &&
+                        (normalizeKey(row.parameter) in aliases ||
+                            (normalizeKey(row.parameter) in
+                                setOf("result","value","observation") &&
+                                aliases.any { alias ->
+                                    normalizeKey(row.test).startsWith(alias)
+                                })) &&
                         row.numericValue?.isFinite() == true &&
                         !ClinicalReportRenderer.isUninterpretedCode(row)
                 }.sortedByDescending { BulkParser.dateKey(it.date) }
