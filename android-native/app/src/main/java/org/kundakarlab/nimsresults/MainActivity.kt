@@ -3104,9 +3104,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                     }
                                 }
-                                current.reports.isNotEmpty() -> Text(
-                                    "No defensible PDF mapping yet; original source " +
-                                        "documents remain in this list.",
+                                current.reports.any {
+                                    !it.sourceTag.startsWith("nims_rest_reportList")
+                                } && expanded -> Text(
+                                    "Source reports are available separately; no specimen-level link established.",
                                     fontSize = 10.sp, color = Color(0xFF875B22))
                             }
                         } else {
