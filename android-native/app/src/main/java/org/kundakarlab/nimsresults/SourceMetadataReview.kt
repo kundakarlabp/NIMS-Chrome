@@ -68,6 +68,12 @@ object SourceMetadataReview {
                 report.collectionDateTime.ifBlank { report.sentDate }.ifBlank { report.date }
             ) ?: return@filter false
             ChronoUnit.DAYS.between(collection, date) in 0L..14L
+        // A bundled NIMS PDF can be indexed in several rows. Present a single
+        // review choice per physical PDF, never five copies of "unknown".
+        }.distinctBy { report ->
+            if (report.url.isNotBlank()) "document:" + report.url
+            else "metadata:" + report.id + "|" + report.labNumber +
+                "|" + report.sampleNumber + "|" + report.reportNumber
         }.sortedWith(compareByDescending<ReportRef> {
             RecentReportDates.parse(it.collectionDateTime.ifBlank { it.date })
         }.thenBy { it.labNumber }.thenBy { it.reportNumber })
