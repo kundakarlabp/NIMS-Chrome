@@ -298,8 +298,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     pdfTotalCount = previous.reports.map { it.url }
                         .filter(String::isNotBlank).distinct().size
+                    val restMetadataCount = previous.reports.size - apiReportCount
                     historyStatus = "Cached " + previous.results.size + " result fields · " +
-                        previous.reports.size + " source-index rows · refresh for live data"
+                        apiReportCount + " source-index rows · " + restMetadataCount +
+                        " REST metadata rows · refresh for live data"
                     selectedTab = ResultsTab.OVERVIEW
                     loadStage = LoadStage.READY
                     statusText = "Encrypted local snapshot · refresh before clinical use."
@@ -3140,80 +3142,96 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             sourceDate,study.date))
                             }.thenBy { it.title })
                     }
-                    var expanded by remember(current.patient.crNo,study.key) {
-                        mutableStateOf(false)
+                    val inlineRows=remember(study.rows,study.visible) {
+                        ClinicalChronology.inlineRows(study)
                     }
                     var pickPdf by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
                     Surface(color=Color.White,shape=RoundedCornerShape(10.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal=11.dp,vertical=7.dp),
-                            verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal=11.dp,vertical=8.dp),
+                            verticalArrangement=Arrangement.spacedBy(5.dp)) {
                             Row(Modifier.fillMaxWidth(),
                                 horizontalArrangement=Arrangement.SpaceBetween,
                                 verticalAlignment=Alignment.CenterVertically) {
-                                Text(study.title,fontSize=12.sp,
+                                Text(study.title,fontSize=13.sp,
                                     fontWeight=FontWeight.SemiBold,
                                     color=Color(0xFF102A43),
-                                    modifier=Modifier.weight(1f).clickable{
-                                        expanded=!expanded
-                                    },maxLines=2)
-                                TextButton(onClick={expanded=!expanded}) {
-                                    Text(if(expanded) "Less" else "Details",
-                                        fontSize=10.sp)
-                                }
+                                    modifier=Modifier.weight(1f))
                                 if(candidates.isNotEmpty()) {
-                                    TextButton(onClick={
-                                        if(candidates.size==1) openReport(candidates[0].url)
-                                        else pickPdf=true
-                                    }) {
-                                        Text(if(candidates.size==1) "PDF" else
-                                            "PDFs",fontSize=10.sp)
+                                    // PDF remains an optional source-review action;
+                                    // it is not required to read any structured result.
+                                    TextButton(onClick={pickPdf=true}) {
+                                        Text(if(candidates.size==1) "Possible PDF" else
+                                            "PDFs (${candidates.size})",fontSize=10.sp)
                                     }
                                 }
                             }
-                            if(relevant.isNotEmpty()) {
-                                Text(ClinicalChronology.preview(study),
-                                    fontSize=12.sp,color=Color(0xFF2C516A),
-                                    maxLines=if(expanded) 8 else 2)
-                            } else Text("No interpretable structured value; review source",
+                            Text(if(study.reportedIsExplicit) "Reported date" else
+                                "NIMS result date · report timestamp unavailable",
                                 fontSize=10.sp,color=Color(0xFF66788A))
-                            if(expanded) {
-                                val provenance=listOfNotNull(
-                                    rows.firstOrNull()?.reportedDate
-                                        ?.takeIf{it.isNotBlank()}?.let{
-                                            "Reported "+LabPanelMatrix.displayDateTime(it)},
-                                    rows.firstOrNull()?.collectionDateTime
-                                        ?.takeIf{it.isNotBlank()}?.let{
-                                            "Collected "+LabPanelMatrix.displayDateTime(it)},
-                                    rows.firstOrNull()?.specimenType
-                                        ?.takeIf{it.isNotBlank()}?.let{"Sample "+it},
-                                    rows.firstOrNull()?.labNumber
-                                        ?.takeIf{it.isNotBlank()}?.let{"Lab "+it},
-                                    rows.firstOrNull()?.sampleNumber
-                                        ?.takeIf{it.isNotBlank()}?.let{"No. "+it}
-                                )
-                                if(provenance.isNotEmpty()) Text(provenance.joinToString(" · "),
-                                    fontSize=10.sp,color=Color(0xFF486581))
-                                else Text("Date shown is from the structured result source.",
-                                    fontSize=10.sp,color=Color(0xFF66788A))
-                                relevant.forEach { row ->
-                                    Row(Modifier.fillMaxWidth(),
-                                        horizontalArrangement=Arrangement.SpaceBetween) {
-                                        Text(ClinicalChronology.parameterLabel(row),
-                                            fontSize=11.sp,color=Color(0xFF486581),
-                                            modifier=Modifier.weight(1f).padding(end=6.dp))
-                                        Text(ClinicalChronology.clinicalText(
-                                            ClinicalPresentation.displayValue(row)) +
-                                            if(row.unit.isBlank()) "" else " "+row.unit,
-                                            fontSize=11.sp,
-                                            color=abnormalColor(row.abnormal),
-                                            modifier=Modifier.weight(1.1f))
+                            val provenance=listOfNotNull(
+                                rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
+                                    .distinct().singleOrNull()?.let {
+                                        "Reported "+LabPanelMatrix.displayDateTime(it) },
+                                rows.map{it.collectionDateTime.trim()}
+                                    .filter(String::isNotBlank).distinct().singleOrNull()
+                                    ?.let{"Collected "+LabPanelMatrix.displayDateTime(it)},
+                                rows.map{it.specimenType.trim()}
+                                    .filter(String::isNotBlank).distinct().singleOrNull()
+                                    ?.let{"Specimen "+it},
+                                rows.map{it.labNumber.trim()}
+                                    .filter(String::isNotBlank).distinct().singleOrNull()
+                                    ?.let{"Lab "+it},
+                                rows.map{it.sampleNumber.trim()}
+                                    .filter(String::isNotBlank).distinct().singleOrNull()
+                                    ?.let{"Sample "+it}
+                            )
+                            if(provenance.isNotEmpty()) Text(provenance.joinToString(" · "),
+                                fontSize=10.sp,color=Color(0xFF486581))
+                            if(inlineRows.isEmpty()) {
+                                Text("No readable result value was supplied in the " +
+                                    "structured NIMS feed for this investigation.",
+                                    fontSize=11.sp,color=Color(0xFF66788A))
+                            } else {
+                                // Render every result in the ordinary scroll, with
+                                // no preview truncation, collapsed details or PDF dependency.
+                                inlineRows.forEachIndexed { index, row ->
+                                    val label=ClinicalChronology.parameterLabel(row)
+                                    val rawValue=ClinicalChronology.fullValue(row)
+                                    val unmapped=ClinicalChronology.isUnmapped(row)
+                                    val longText=ClinicalChronology.isNarrativeRow(study,row)
+                                    val caption=if(unmapped)
+                                        "Unmapped source field: "+row.parameter
+                                        else label
+                                    if(longText) {
+                                        Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                                            Text(caption,fontSize=11.sp,
+                                                color=if(unmapped) Color(0xFF875B22)
+                                                    else Color(0xFF486581),
+                                                fontWeight=FontWeight.Medium)
+                                            Text(rawValue,fontSize=12.sp,
+                                                color=if(unmapped) Color(0xFF875B22)
+                                                    else abnormalColor(row.abnormal))
+                                        }
+                                    } else {
+                                        Row(Modifier.fillMaxWidth(),
+                                            horizontalArrangement=Arrangement.SpaceBetween,
+                                            verticalAlignment=Alignment.Top) {
+                                            Text(caption,fontSize=11.sp,
+                                                color=if(unmapped) Color(0xFF875B22)
+                                                    else Color(0xFF486581),
+                                                modifier=Modifier.weight(1f)
+                                                    .padding(end=8.dp))
+                                            Text(rawValue,fontSize=12.sp,
+                                                color=if(unmapped) Color(0xFF875B22)
+                                                    else abnormalColor(row.abnormal),
+                                                modifier=Modifier.weight(1.1f))
+                                        }
                                     }
+                                    if(index<inlineRows.lastIndex) HorizontalDivider(
+                                        color=Color(0xFFEDF1F5))
                                 }
-                                if(relevant.size<rows.size) Text(
-                                    "Additional original fields remain available in source data.",
-                                    fontSize=10.sp,color=Color(0xFF66788A))
                             }
                         }
                     }

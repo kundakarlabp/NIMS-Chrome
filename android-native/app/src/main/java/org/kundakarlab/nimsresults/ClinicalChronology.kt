@@ -50,6 +50,35 @@ object ClinicalChronology {
             .map { Day(it.key,it.value) }
     }
 
+    /** Complete on-screen observations in the original HIS order. Clinical
+     * values never require opening a PDF or expanding an investigation.
+     * Unmapped laboratory codes remain visibly marked as raw source fields;
+     * administrative and missing-value placeholders are not clinical results.
+     * All raw rows remain intact in ClinicalBundle for separate source review. */
+    fun inlineRows(study: Study): List<LabResult> = study.rows.filter { row ->
+        row.valueText.isNotBlank() && !ClinicalReportRenderer.isPlaceholder(row) &&
+            !ClinicalPresentation.isTechnical(row) &&
+            (study.visible.any { it === row } ||
+                ClinicalReportRenderer.isUninterpretedCode(row))
+    }
+
+    /** Never shorten or normalize narrative content or numerical precision. */
+    fun fullValue(row: LabResult): String {
+        val unit = row.unit.trim()
+        return row.valueText + if (unit.isBlank() ||
+            row.valueText.trimEnd().endsWith(unit, ignoreCase = true)) ""
+            else " " + unit
+    }
+
+    fun isNarrativeRow(study: Study, row: LabResult): Boolean =
+        ClinicalReportRenderer.isMicrobiologyInvestigation(row.test) ||
+            ClinicalReportRenderer.layout(row.test, study.rows) == ClinicalLayout.NARRATIVE ||
+            row.valueText.length > 90 || row.valueText.contains("\n") ||
+            row.valueText.contains("\r")
+
+    fun isUnmapped(row: LabResult): Boolean =
+        ClinicalReportRenderer.isUninterpretedCode(row)
+
     fun label(original: String): String {
         val name=original.trim()
         return if (name.equals("BU/SC/SE",ignoreCase=true))

@@ -2,8 +2,7 @@ package org.kundakarlab.nimsresults
 
 import android.content.Context
 
-/** Captures only exception type and application method—not messages,
- * clinical data, stack arguments, cookies, patient IDs or report paths. */
+/** Records exception class and a source method only; no PHI or exception messages. */
 object CrashTrace {
     private const val PREF = "nims_native_crash_v1"
     private const val KEY = "last"
@@ -16,14 +15,21 @@ object CrashTrace {
             val upstream = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
                 runCatching {
-                    val type = failure.javaClass.simpleName.take(48)
-                    val own = failure.stackTrace.firstOrNull {
+                    // Prefer an app frame; otherwise record the first framework frame.
+                    // Class names and method names contain no report/CR values.
+                    val cause = failure.cause ?: failure
+                    val trace = if (cause.stackTrace.isNotEmpty()) cause.stackTrace
+                        else failure.stackTrace
+                    val frame = trace.firstOrNull {
                         it.className.startsWith("org.kundakarlab.nimsresults.")
-                    }
-                    val method = own?.className?.substringAfterLast('.')?.take(48).orEmpty() +
-                        "." + own?.methodName.orEmpty().take(48)
+                    } ?: trace.firstOrNull()
+                    val where = frame?.let { entry ->
+                        entry.className.substringAfterLast(".").take(48) +
+                            "." + entry.methodName.take(48)
+                    } ?: "unknown"
+                    val type = cause.javaClass.simpleName.take(48)
                     application.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-                        .edit().putString(KEY, type + "@" + method).commit()
+                        .edit().putString(KEY, type + "@" + where).commit()
                 }
                 if (upstream != null) upstream.uncaughtException(thread, failure)
                 else android.os.Process.killProcess(android.os.Process.myPid())
