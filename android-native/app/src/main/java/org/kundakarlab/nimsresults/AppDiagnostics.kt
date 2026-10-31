@@ -212,6 +212,23 @@ object AppDiagnostics {
                 rows.count { it.reportedDate.isNotBlank() })
             appendLine("diagnostics.results.date_is_source_not_collection=true")
             appendLine("diagnostics.results.raw_source_retained=true")
+            val studies = chronology.flatMap { it.studies }
+            appendLine("diagnostics.results.readable_inline_observations=" +
+                studies.sumOf { ClinicalChronology.inlineRows(it).size })
+            appendLine("diagnostics.results.unverified_source_observations=" +
+                studies.sumOf { ClinicalChronology.unresolvedRows(it).size })
+            appendLine("diagnostics.results.studies_without_readable_value=" +
+                studies.count { ClinicalChronology.inlineRows(it).isEmpty() })
+            appendLine("diagnostics.results.unverified_urine_source_fields=" +
+                rows.count { ClinicalReportRenderer.isUrineRoutine(it.test) &&
+                    ClinicalReportRenderer.isUninterpretedCode(it) })
+            appendLine("diagnostics.results.source_minus_one_codes=" +
+                rows.count { it.valueText.trim() == "-1" })
+            appendLine("diagnostics.results.studies_with_explicit_report_dates=" +
+                studies.count { it.reportedIsExplicit })
+            appendLine("diagnostics.results.source_date_not_verified_reporting=" +
+                studies.count { !it.reportedIsExplicit && it.date != java.time.LocalDate.MIN })
+            appendLine("diagnostics.results.source_pdf_candidate_unverified=true")
 
             appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
