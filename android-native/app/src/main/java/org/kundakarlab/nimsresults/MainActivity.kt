@@ -4009,8 +4009,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                 }.map { it.test }.distinct()
                                 if (associated.isNotEmpty()) Text(
-                                    "Linked investigations: " + associated.joinToString(" · "),
-                                    fontSize = 11.sp, color = Color(0xFF102A43))
+                                    "Structured tests sharing this accession (not " +
+                                        "automatically verified against PDF sections): " +
+                                        associated.joinToString(" · "),
+                                    fontSize = 11.sp, color = Color(0xFF875B22))
                                 if (parts.isEmpty()) {
                                     Text("Source PDF not indexed yet.",
                                         fontSize = 10.sp, color = Color(0xFF66788A))
@@ -4022,13 +4024,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             if (part.title.isNotBlank()) " · " + part.title else "",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.SemiBold)
+                                        Text("Study type: " + part.kind.name.replace('_',' '),
+                                            fontSize=10.sp,color=Color(0xFF486581))
                                         if (part.header.labNumber.isNotBlank()) Text(
                                             "Lab/study: " + part.header.labNumber, fontSize = 10.sp)
+                                        if (part.sampleNumber.isNotBlank()) Text(
+                                            "Sample: " + part.sampleNumber,fontSize=10.sp)
+                                        if (part.specimen.isNotBlank()) Text(
+                                            "Specimen: " + part.specimen,fontSize=10.sp)
                                         if (part.header.collectionDate.isNotBlank()) Text(
-                                            "Collected/sent: " + part.header.collectionDate,
-                                            fontSize = 10.sp)
+                                            "Collected: " + part.header.collectionDate,fontSize=10.sp)
+                                        if (part.header.sentDate.isNotBlank()) Text(
+                                            "Sent: " + part.header.sentDate,fontSize=10.sp)
                                         if (part.header.reportedDate.isNotBlank()) Text(
-                                            "Reported: " + part.header.reportedDate, fontSize = 10.sp)
+                                            "Reported: " + part.header.reportedDate,fontSize=10.sp)
                                         val sourceValues = remember(part.text) {
                                             PdfClinicalValues.parse(part.text)
                                         }
