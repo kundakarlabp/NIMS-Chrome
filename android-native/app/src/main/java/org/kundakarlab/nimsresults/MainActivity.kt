@@ -3230,6 +3230,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             Text(rawValue,fontSize=12.sp,
                                                 color=if(unmapped) Color(0xFF875B22)
                                                     else abnormalColor(row.abnormal))
+                                            val narrativeMeta =
+                                                MicrobiologyNarrativeMetadata.extract(row)
+                                            if(narrativeMeta != null) Text(
+                                                "Labelled source narrative · " +
+                                                    narrativeMeta.display() +
+                                                    " · PDF link not verified",
+                                                fontSize=10.sp,
+                                                color=Color(0xFF486581))
                                             // Named table entries are extracted only from
                                             // explicit source labels. Never decode combo/cb
                                             // controls to fabricated organisms or ABO groups.
