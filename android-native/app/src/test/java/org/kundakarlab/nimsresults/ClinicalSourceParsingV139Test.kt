@@ -60,6 +60,15 @@ class ClinicalSourceParsingV139Test {
         assertEquals(listOf(PdfStudyKind.GRAM_STAIN,PdfStudyKind.CULTURE),parts.map{it.kind})
     }
 
+    @Test fun preliminaryAndFinalCultureSameSpecimenRemainDistinct() {
+        val p=PdfSourceEvidence.parts(listOf(
+            "CR No: 331012601170629\nLab No: B26823\nSample No: BOT001\nReport Stage: Preliminary\nAerobic Culture\nNo growth at 24 hours",
+            "CR No: 331012601170629\nLab No: B26823\nSample No: BOT001\nReport Stage: Final\nAerobic Culture\nNo growth at 5 days"
+        ),"331012601170629")
+        assertEquals(2,p.size)
+        assertEquals(listOf("PRELIMINARY","FINAL"),p.map{it.reportStage})
+    }
+
     @Test fun biofireOnlyNamedTargetsNotOpaqueLISControls() {
         val text = """
             FilmArray BioFire panel
