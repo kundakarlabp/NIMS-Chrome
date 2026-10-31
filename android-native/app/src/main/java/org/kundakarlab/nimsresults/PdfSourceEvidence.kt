@@ -14,7 +14,8 @@ data class PdfSourcePart(
     val endPage: Int = page,
     val kind: PdfStudyKind = PdfStudyKind.OTHER,
     val specimen: String = "",
-    val sampleNumber: String = ""
+    val sampleNumber: String = "",
+    val reportStage: String = ""
 )
 
 object PdfSourceEvidence {
@@ -28,6 +29,18 @@ object PdfSourceEvidence {
 
     fun patientCrs(pages: List<String>): Set<String> =
         pages.flatMap { p -> crPattern.findAll(p).map { it.groupValues[1] }.toList() }.toSet()
+
+    /** Only explicit report-stage headings count. Narrative mentions of
+     * "final diagnosis" or a previous preliminary culture do not count. */
+    fun stage(text: String): String {
+        val head = text.lines().take(35).joinToString("\n")
+        val labelled = Regex("""(?im)^\s*(?:Report\s*(?:Stage|Status)|Culture\s*Status)\s*[:#\-]\s*(Preliminary|Interim|Final|Amended)\b""")
+            .find(head)?.groupValues?.getOrNull(1)
+        val title = Regex("""(?im)^\s*(Preliminary|Interim|Final|Amended)\s+(?:Culture\s+)?Report\b|^\s*Culture\s+(Preliminary|Interim|Final|Amended)\s+Report\b""")
+            .find(head)
+        return (labelled ?: title?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() })
+            ?.uppercase(Locale.US).orEmpty()
+    }
 
     fun sampleNumber(text: String): String =
         PdfDocumentHeaders.parse(text).sampleNumber.ifBlank {
@@ -107,7 +120,8 @@ object PdfSourceEvidence {
                     title = OpaqueReportTitles.titleFromExtractedText(headingText).orEmpty(),
                     kind = kind(headingText),
                     specimen = specimen(headingText),
-                    sampleNumber = sampleNumber(headingText).ifBlank { header.sampleNumber }
+                    sampleNumber = sampleNumber(headingText).ifBlank { header.sampleNumber },
+                    reportStage = stage(headingText)
                 )
             }
         }
@@ -123,6 +137,8 @@ object PdfSourceEvidence {
                 // identifiers, stains, and final/preliminary report sections.
                 // Never fold different known study types or specimen numbers.
                 item.sampleNumber == last.sampleNumber &&
+                (item.reportStage.isBlank() || last.reportStage.isBlank() ||
+                    item.reportStage == last.reportStage) &&
                 (item.kind == last.kind ||
                     item.kind == PdfStudyKind.OTHER ||
                     last.kind == PdfStudyKind.OTHER)) {
@@ -131,7 +147,8 @@ object PdfSourceEvidence {
                     text = (last.text + "\n" + item.text).take(160000),
                     kind = if (last.kind == PdfStudyKind.OTHER) item.kind else last.kind,
                     specimen = last.specimen.ifBlank { item.specimen },
-                    sampleNumber = last.sampleNumber.ifBlank { item.sampleNumber }
+                    sampleNumber = last.sampleNumber.ifBlank { item.sampleNumber },
+                    reportStage = last.reportStage.ifBlank { item.reportStage }
                 )
             } else merged += item
         }
