@@ -455,6 +455,10 @@ class ReportActivity : Activity() {
     }
 
     private fun render(index: Int) {
+        // A stale swipe or lifecycle callback must not leave controls disabled
+        // and the spinner visible when there is no valid page to render.
+        val availablePages = renderer?.pageCount ?: return
+        if (closing || index !in 0 until availablePages) return
         val currentZoom = zoom
         val generation = ++renderingGeneration
         previous.isEnabled = false
