@@ -870,6 +870,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sourceCommit=${BuildConfig.SOURCE_COMMIT}")
+            appendLine("app.signingCertSha256=" + ApkSigningIdentity.sha256(this@MainActivity))
             appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
             appendLine(ProcessHealth.snapshot(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
@@ -2725,7 +2726,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
                 val sentDate = ClinicalPresentation.sentDate(rows)
+                    .ifBlank { verifiedPdf?.sentDate.orEmpty() }
+                val collectedDate = rows.firstOrNull {
+                    it.collectionDateTime.isNotBlank()
+                }?.collectionDateTime.orEmpty()
                     .ifBlank { verifiedPdf?.collectionDate.orEmpty() }
+                val sampleId = rows.firstOrNull {
+                    it.sampleNumber.isNotBlank()
+                }?.sampleNumber.orEmpty()
+                    .ifBlank { verifiedPdf?.sampleNumber.orEmpty() }
                 val reportedDate = ClinicalPresentation.reportedDate(rows)
                     .ifBlank { verifiedPdf?.reportedDate.orEmpty() }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -2746,8 +2755,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             fontSize = 11.sp, color = Color(0xFF486581))
                         val verifiedFields=listOfNotNull(
                             accession.takeIf(String::isNotBlank)?.let { "Lab " + it },
-                            sentDate.takeIf(String::isNotBlank)?.let {
+                            sampleId.takeIf(String::isNotBlank)?.let { "Sample " + it },
+                            collectedDate.takeIf(String::isNotBlank)?.let {
                                 "Collected " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            sentDate.takeIf(String::isNotBlank)?.let {
+                                "Sent " + LabPanelMatrix.displayDateTime(it)
                             },
                             reportedDate.takeIf(String::isNotBlank)?.let {
                                 "Reported " + LabPanelMatrix.displayDateTime(it)
@@ -2762,7 +2775,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val possible = listOfNotNull(
                                 relatedHeader.labNumber.takeIf(String::isNotBlank)
                                     ?.let { "Lab " + it },
+                                relatedHeader.sampleNumber.takeIf(String::isNotBlank)
+                                    ?.let { "sample " + it },
                                 relatedHeader.collectionDate.takeIf(String::isNotBlank)
+                                    ?.let { "collected " + it },
+                                relatedHeader.sentDate.takeIf(String::isNotBlank)
                                     ?.let { "sent " + it },
                                 relatedHeader.reportedDate.takeIf(String::isNotBlank)
                                     ?.let { "reported " + it }
@@ -3213,6 +3230,36 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             Text(rawValue,fontSize=12.sp,
                                                 color=if(unmapped) Color(0xFF875B22)
                                                     else abnormalColor(row.abnormal))
+                                            val narrativeMeta =
+                                                MicrobiologyNarrativeMetadata.extract(row)
+                                            if(narrativeMeta != null) Text(
+                                                "Labelled source narrative · " +
+                                                    narrativeMeta.display() +
+                                                    " · PDF link not verified",
+                                                fontSize=10.sp,
+                                                color=Color(0xFF486581))
+                                            // Named table entries are extracted only from
+                                            // explicit source labels. Never decode combo/cb
+                                            // controls to fabricated organisms or ABO groups.
+                                            val cells = when {
+                                                Regex("(?i)biofire|filmarray").containsMatchIn(
+                                                    study.title) ->
+                                                    SourceReportTables.biofire(row.valueText)
+                                                Regex("(?i)blood\\s*group|antibody\\s*screen|\\bbgt\\b")
+                                                    .containsMatchIn(study.title) ->
+                                                    SourceReportTables.bloodGrouping(row.valueText)
+                                                else -> emptyList()
+                                            }
+                                            cells.forEach { cell ->
+                                                Row(Modifier.fillMaxWidth(),
+                                                    horizontalArrangement=Arrangement.SpaceBetween) {
+                                                    Text(cell.label,fontSize=11.sp,
+                                                        modifier=Modifier.weight(1f))
+                                                    Text(cell.value,fontSize=11.sp,
+                                                        fontWeight=FontWeight.Medium,
+                                                        modifier=Modifier.weight(1f))
+                                                }
+                                            }
                                         }
                                     } else {
                                         Row(Modifier.fillMaxWidth(),
@@ -3840,6 +3887,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
                             val collected = header?.collectionDate.orEmpty()
                                 .ifBlank { report.collectionDateTime }
+                            val sent = header?.sentDate.orEmpty()
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
@@ -3884,8 +3932,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (lab.isNotBlank()) Text("Lab/study: " + lab,
                                     fontSize = 11.sp)
-                                if (report.sampleNumber.isNotBlank()) Text(
-                                    "Sample: " + report.sampleNumber, fontSize = 11.sp)
+                                val identifiedSample = header?.sampleNumber.orEmpty()
+                                    .ifBlank { report.sampleNumber }
+                                if (identifiedSample.isNotBlank()) Text(
+                                    "Sample: " + identifiedSample, fontSize = 11.sp)
                                 if (report.sourceSampleLabText.isNotBlank()) Text(
                                     "Original sample/lab: " + report.sourceSampleLabText,
                                     fontSize = 11.sp)
@@ -3897,6 +3947,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     "Stage: " + report.reportStage, fontSize = 11.sp)
                                 if (collected.isNotBlank()) Text(
                                     "Collected: " + LabPanelMatrix.displayDateTime(collected),
+                                    fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text(
+                                    "Sent: " + LabPanelMatrix.displayDateTime(sent),
                                     fontSize = 11.sp)
                                 if (reported.isNotBlank()) Text(
                                     (if (restOnly) "REST report date: " else "Reported: ") +
@@ -3956,8 +4009,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         }
                                 }.map { it.test }.distinct()
                                 if (associated.isNotEmpty()) Text(
-                                    "Linked investigations: " + associated.joinToString(" · "),
-                                    fontSize = 11.sp, color = Color(0xFF102A43))
+                                    "Structured tests sharing this accession (not " +
+                                        "automatically verified against PDF sections): " +
+                                        associated.joinToString(" · "),
+                                    fontSize = 11.sp, color = Color(0xFF875B22))
                                 if (parts.isEmpty()) {
                                     Text("Source PDF not indexed yet.",
                                         fontSize = 10.sp, color = Color(0xFF66788A))
@@ -3969,13 +4024,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             if (part.title.isNotBlank()) " · " + part.title else "",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.SemiBold)
+                                        Text("Study type: " + part.kind.name.replace('_',' '),
+                                            fontSize=10.sp,color=Color(0xFF486581))
+                                        if(part.reportStage.isNotBlank()) Text(
+                                            "Report stage: " + part.reportStage,fontSize=10.sp)
                                         if (part.header.labNumber.isNotBlank()) Text(
                                             "Lab/study: " + part.header.labNumber, fontSize = 10.sp)
+                                        if (part.sampleNumber.isNotBlank()) Text(
+                                            "Sample: " + part.sampleNumber,fontSize=10.sp)
+                                        if (part.specimen.isNotBlank()) Text(
+                                            "Specimen: " + part.specimen,fontSize=10.sp)
                                         if (part.header.collectionDate.isNotBlank()) Text(
-                                            "Collected/sent: " + part.header.collectionDate,
-                                            fontSize = 10.sp)
+                                            "Collected: " + part.header.collectionDate,fontSize=10.sp)
+                                        if (part.header.sentDate.isNotBlank()) Text(
+                                            "Sent: " + part.header.sentDate,fontSize=10.sp)
                                         if (part.header.reportedDate.isNotBlank()) Text(
-                                            "Reported: " + part.header.reportedDate, fontSize = 10.sp)
+                                            "Reported: " + part.header.reportedDate,fontSize=10.sp)
                                         val sourceValues = remember(part.text) {
                                             PdfClinicalValues.parse(part.text)
                                         }

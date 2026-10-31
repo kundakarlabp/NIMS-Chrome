@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
-        versionName = "1.0.38-native"
+        versionCode = 40
+        versionName = "1.0.39-native"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
@@ -25,6 +25,33 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+
+    // Update-compatible builds require the EXISTING installation's signer.
+    // Never generate a new key automatically or silently substitute a new
+    // debug keystore. Credentials are read from CI environment, not the repo.
+    val signingStore = System.getenv("NIMS_SIGNING_STORE_FILE").orEmpty()
+    val signingPass = System.getenv("NIMS_SIGNING_STORE_PASSWORD").orEmpty()
+    val signingAlias = System.getenv("NIMS_SIGNING_KEY_ALIAS").orEmpty()
+    val signingKeyPass = System.getenv("NIMS_SIGNING_KEY_PASSWORD").orEmpty()
+    val supplied = listOf(signingStore, signingPass, signingAlias, signingKeyPass)
+    require(supplied.all(String::isBlank) || supplied.all(String::isNotBlank)) {
+        "Provide all four persistent signing inputs or none."
+    }
+    if (supplied.all(String::isNotBlank)) {
+        signingConfigs {
+            create("nimsPersistent") {
+                storeFile = file(signingStore)
+                storePassword = signingPass
+                keyAlias = signingAlias
+                keyPassword = signingKeyPass
+            }
+        }
+        buildTypes {
+            getByName("debug") {
+                signingConfig = signingConfigs.getByName("nimsPersistent")
+            }
+        }
+    }
 
     buildFeatures {
         compose = true

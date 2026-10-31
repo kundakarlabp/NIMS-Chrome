@@ -3,7 +3,7 @@ package org.kundakarlab.nimsresults
 import java.util.Locale
 
 /** Meaning is derived only from explicit report headings, not a phrase in a narrative. */
-enum class PdfStudyKind { GRAM_STAIN, CULTURE, CBC, CHEMISTRY, COAGULATION, RADIOLOGY,
+enum class PdfStudyKind { GRAM_STAIN, FUNGAL_STAIN, AFB_STAIN, CULTURE, CBC, CHEMISTRY, COAGULATION, RADIOLOGY,
     BLOOD_BANK, MOLECULAR, OTHER }
 
 data class PdfSourcePart(
@@ -14,7 +14,8 @@ data class PdfSourcePart(
     val endPage: Int = page,
     val kind: PdfStudyKind = PdfStudyKind.OTHER,
     val specimen: String = "",
-    val sampleNumber: String = ""
+    val sampleNumber: String = "",
+    val reportStage: String = ""
 )
 
 object PdfSourceEvidence {
@@ -29,14 +30,34 @@ object PdfSourceEvidence {
     fun patientCrs(pages: List<String>): Set<String> =
         pages.flatMap { p -> crPattern.findAll(p).map { it.groupValues[1] }.toList() }.toSet()
 
-    fun sampleNumber(text: String): String = samplePattern.find(text)?.groupValues?.get(1).orEmpty()
+    /** Only explicit report-stage headings count. Narrative mentions of
+     * "final diagnosis" or a previous preliminary culture do not count. */
+    fun stage(text: String): String {
+        val head = text.lines().take(35).joinToString("\n")
+        val labelled = Regex("""(?im)^\s*(?:Report\s*(?:Stage|Status)|Culture\s*Status)\s*[:#\-]\s*(Preliminary|Interim|Final|Amended)\b""")
+            .find(head)?.groupValues?.getOrNull(1)
+        val title = Regex("""(?im)^\s*(Preliminary|Interim|Final|Amended)\s+(?:Culture\s+)?Report\b|^\s*Culture\s+(Preliminary|Interim|Final|Amended)\s+Report\b""")
+            .find(head)
+        return (labelled ?: title?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() })
+            ?.uppercase(Locale.US).orEmpty()
+    }
+
+    fun sampleNumber(text: String): String =
+        PdfDocumentHeaders.parse(text).sampleNumber.ifBlank {
+            samplePattern.find(text)?.groupValues?.get(1).orEmpty()
+        }
     fun specimen(text: String): String = specimenPattern.find(text)?.groupValues?.get(1)?.trim().orEmpty()
 
     fun kind(text: String): PdfStudyKind {
         val body = text.lowercase(Locale.ROOT)
         return when {
-            Regex("""(?m)^\s*(?:staining|grams?\s+(?:stain|smear))\s*$""").containsMatchIn(body) &&
-                !Regex("""(?m)^\s*(?:urine\s+)?aerobic\s+culture\b|^\s*culture\s+final\s+report\b""")
+            Regex("""(?im)^\s*(?:afb|acid[\s-]*fast(?:\s+bacilli)?|tb\s+fluorescen(?:ce|t)|auramine[\s/-]*rhodamine)\s+(?:stain(?:ing)?|smear|microscopy)\b""")
+                .containsMatchIn(body) -> PdfStudyKind.AFB_STAIN
+            Regex("""(?im)^\s*(?:(?:fungal|calcofluor|koh)\s+(?:stain(?:ing)?|smear|mount|preparation|microscopy))\b""")
+                .containsMatchIn(body) -> PdfStudyKind.FUNGAL_STAIN
+            Regex("""(?im)^\s*(?:staining|grams?(?:['’]s)?\s+(?:stain(?:ing)?|smear))\b""")
+                .containsMatchIn(body) &&
+                !Regex("""(?im)^\s*(?:urine\s+)?aerobic\s+culture\b|^\s*culture\s+final\s+report\b""")
                     .containsMatchIn(body) -> PdfStudyKind.GRAM_STAIN
             Regex("""(?m)^\s*(?:(?:fan\s+)?aerobic\s+blood\s+culture|(?:urine\s+)?aerobic\s+culture|culture\s+final\s+report)\b""")
                 .containsMatchIn(body) || body.contains("culture report") ->
@@ -99,7 +120,8 @@ object PdfSourceEvidence {
                     title = OpaqueReportTitles.titleFromExtractedText(headingText).orEmpty(),
                     kind = kind(headingText),
                     specimen = specimen(headingText),
-                    sampleNumber = sampleNumber(headingText)
+                    sampleNumber = sampleNumber(headingText).ifBlank { header.sampleNumber },
+                    reportStage = stage(headingText)
                 )
             }
         }
@@ -111,14 +133,22 @@ object PdfSourceEvidence {
             if (last != null && item.page == last.endPage + 1 &&
                 item.header.labNumber.isNotBlank() &&
                 item.header.labNumber == last.header.labNumber &&
-                (item.kind == last.kind || item.kind == PdfStudyKind.OTHER ||
+                // A shared accession can have distinct bottles, specimen
+                // identifiers, stains, and final/preliminary report sections.
+                // Never fold different known study types or specimen numbers.
+                item.sampleNumber == last.sampleNumber &&
+                (item.reportStage.isBlank() || last.reportStage.isBlank() ||
+                    item.reportStage == last.reportStage) &&
+                (item.kind == last.kind ||
+                    item.kind == PdfStudyKind.OTHER ||
                     last.kind == PdfStudyKind.OTHER)) {
                 merged[merged.lastIndex] = last.copy(
                     endPage = item.page,
                     text = (last.text + "\n" + item.text).take(160000),
                     kind = if (last.kind == PdfStudyKind.OTHER) item.kind else last.kind,
                     specimen = last.specimen.ifBlank { item.specimen },
-                    sampleNumber = last.sampleNumber.ifBlank { item.sampleNumber }
+                    sampleNumber = last.sampleNumber.ifBlank { item.sampleNumber },
+                    reportStage = last.reportStage.ifBlank { item.reportStage }
                 )
             } else merged += item
         }
