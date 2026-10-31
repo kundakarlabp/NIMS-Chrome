@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ScrollView
 import android.widget.Toast
@@ -498,7 +499,10 @@ class ReportActivity : Activity() {
                     bitmap = newBitmap
                     PdfPerformanceTrace.bitmapAllocated(newBitmap.allocationByteCount)
                     pageIndex = index
-                    image.layoutParams = ViewGroup.LayoutParams(width, height)
+                    // HorizontalScrollView extends FrameLayout and measures its child
+                    // as FrameLayout.LayoutParams. Generic ViewGroup params crash
+                    // in framework onMeasure with ClassCastException.
+                    image.layoutParams = FrameLayout.LayoutParams(width, height)
                     image.setImageBitmap(newBitmap)
                     old?.recycle()
                     PdfPerformanceTrace.record("render_page_ms",
