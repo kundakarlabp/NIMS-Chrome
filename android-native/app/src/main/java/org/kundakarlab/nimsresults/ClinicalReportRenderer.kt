@@ -56,7 +56,7 @@ object ClinicalReportRenderer {
         // cells in the original source, never present them as clinical facts.
         if (isUrineRoutine(row.test)) {
             if (name.endsWith("(Investigation)", ignoreCase = true) ||
-                name.matches(Regex("""(?i)^/[hl]pf\s*\((?:result|investigation)\)$""")) ||
+                name.matches(Regex("""(?i)^/\s*[hl]pf\s*\((?:result|investigation)\)$""")) ||
                 code == "-1") return true
             val number = code.toDoubleOrNull()
             if (number != null && (
@@ -78,7 +78,7 @@ object ClinicalReportRenderer {
             ))) return true
         // Generic /HPF or /LPF fields lack the named urinary sediment
         // analyte; an apparently numeric value must not be labeled as RBC/WBC.
-        if (Regex("""(?i)^/[hl]pf\s*\(result\)$""").matches(name)) return true
+        if (Regex("""(?i)^/\s*[hl]pf\s*\(result\)$""").matches(name)) return true
         if (coded.matches(name) && !isClinicalNarrative(code)) return true
         // -1 is commonly an administrative/empty marker, not a true negative.
         if (code == "-1" && row.refRange.isBlank() &&
