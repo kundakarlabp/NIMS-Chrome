@@ -3213,6 +3213,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             Text(rawValue,fontSize=12.sp,
                                                 color=if(unmapped) Color(0xFF875B22)
                                                     else abnormalColor(row.abnormal))
+                                            // Named table entries are extracted only from
+                                            // explicit source labels. Never decode combo/cb
+                                            // controls to fabricated organisms or ABO groups.
+                                            val cells = when {
+                                                Regex("(?i)biofire|filmarray").containsMatchIn(
+                                                    study.title) ->
+                                                    SourceReportTables.biofire(row.valueText)
+                                                Regex("(?i)blood\\s*group|antibody\\s*screen|\\bbgt\\b")
+                                                    .containsMatchIn(study.title) ->
+                                                    SourceReportTables.bloodGrouping(row.valueText)
+                                                else -> emptyList()
+                                            }
+                                            cells.forEach { cell ->
+                                                Row(Modifier.fillMaxWidth(),
+                                                    horizontalArrangement=Arrangement.SpaceBetween) {
+                                                    Text(cell.label,fontSize=11.sp,
+                                                        modifier=Modifier.weight(1f))
+                                                    Text(cell.value,fontSize=11.sp,
+                                                        fontWeight=FontWeight.Medium,
+                                                        modifier=Modifier.weight(1f))
+                                                }
+                                            }
                                         }
                                     } else {
                                         Row(Modifier.fillMaxWidth(),
@@ -3840,6 +3862,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val lab = header?.labNumber.orEmpty().ifBlank { report.labNumber }
                             val collected = header?.collectionDate.orEmpty()
                                 .ifBlank { report.collectionDateTime }
+                            val sent = header?.sentDate.orEmpty()
                                 .ifBlank { report.sentDate }
                             val reported = header?.reportedDate.orEmpty()
                                 .ifBlank { report.reportedDate }
@@ -3884,8 +3907,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                                 if (lab.isNotBlank()) Text("Lab/study: " + lab,
                                     fontSize = 11.sp)
-                                if (report.sampleNumber.isNotBlank()) Text(
-                                    "Sample: " + report.sampleNumber, fontSize = 11.sp)
+                                val identifiedSample = header?.sampleNumber.orEmpty()
+                                    .ifBlank { report.sampleNumber }
+                                if (identifiedSample.isNotBlank()) Text(
+                                    "Sample: " + identifiedSample, fontSize = 11.sp)
                                 if (report.sourceSampleLabText.isNotBlank()) Text(
                                     "Original sample/lab: " + report.sourceSampleLabText,
                                     fontSize = 11.sp)
@@ -3897,6 +3922,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     "Stage: " + report.reportStage, fontSize = 11.sp)
                                 if (collected.isNotBlank()) Text(
                                     "Collected: " + LabPanelMatrix.displayDateTime(collected),
+                                    fontSize = 11.sp)
+                                if (sent.isNotBlank()) Text(
+                                    "Sent: " + LabPanelMatrix.displayDateTime(sent),
                                     fontSize = 11.sp)
                                 if (reported.isNotBlank()) Text(
                                     (if (restOnly) "REST report date: " else "Reported: ") +
