@@ -52,14 +52,22 @@ object ClinicalChronology {
 
     /** Complete on-screen observations in the original HIS order. Clinical
      * values never require opening a PDF or expanding an investigation.
-     * Unmapped laboratory codes remain visibly marked as raw source fields;
-     * administrative and missing-value placeholders are not clinical results.
+     * Unmapped laboratory codes are available in a separate source-review
+     * disclosure; administrative and missing-value placeholders are not
+     * clinical results.
      * All raw rows remain intact in ClinicalBundle for separate source review. */
     fun inlineRows(study: Study): List<LabResult> = study.rows.filter { row ->
         row.valueText.isNotBlank() && !ClinicalReportRenderer.isPlaceholder(row) &&
             !ClinicalPresentation.isTechnical(row) &&
-            (study.visible.any { it === row } ||
-                ClinicalReportRenderer.isUninterpretedCode(row))
+            study.visible.any { it === row }
+    }
+
+    /** Reviewable, non-clinical source values are deliberately separated from
+     * bedside results. Unknown codes can be inspected without being mistaken
+     * for reported values or silently discarded. */
+    fun unresolvedRows(study: Study): List<LabResult> = study.rows.filter { row ->
+        row.valueText.isNotBlank() && !ClinicalPresentation.isTechnical(row) &&
+            ClinicalReportRenderer.isUninterpretedCode(row)
     }
 
     /** Never shorten or normalize narrative content or numerical precision. */
