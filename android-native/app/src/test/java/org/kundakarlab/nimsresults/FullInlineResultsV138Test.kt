@@ -60,10 +60,11 @@ class FullInlineResultsV138Test {
         )
         val study=ClinicalChronology.days(rows).single().studies.single()
         val visible=ClinicalChronology.inlineRows(study)
-        assertEquals(listOf("Combo1","Named target"),visible.map{it.parameter})
-        assertTrue(ClinicalChronology.isUnmapped(visible[0]))
-        assertFalse(ClinicalChronology.isUnmapped(visible[1]))
-        assertEquals("1",ClinicalChronology.fullValue(visible[0]))
+        assertEquals(listOf("Named target"),visible.map{it.parameter})
+        assertFalse(ClinicalChronology.isUnmapped(visible[0]))
+        assertEquals("Detected",ClinicalChronology.fullValue(visible[0]))
+        assertEquals(listOf("Combo1"),
+            ClinicalChronology.unresolvedRows(study).map{it.parameter})
     }
 
     @Test fun reportedDateIsPreferredWithoutCallingResultDateAReportDate() {
