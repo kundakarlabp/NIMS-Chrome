@@ -81,15 +81,18 @@ class ClinicalSourceParsingV139Test {
             Anti-A | 0
             Anti-B | 4+
             Anti-D | Positive
-            A1 Cells | 4+
+            A1 Cells | 4+ | 0
             B Cells | 0
+            Method | Gel card
+            Control | 0
             Antibody screening | Negative
             combo2 | 2
             cb30 | 1
         """.trimIndent()
         val cells=SourceReportTables.bloodGrouping(text)
-        assertEquals(listOf("Anti-A","Anti-B","Anti-D","A1 Cells","B Cells","Antibody screening"),
+        assertEquals(listOf("Anti-A","Anti-B","Anti-D","A1 Cells","B Cells","Method","Control","Antibody screening"),
             cells.map{it.label})
+        assertEquals("4+ 0",cells.first{it.label=="A1 Cells"}.value)
         assertNull(PdfClinicalSummaries.bloodGrouping(text))
     }
 
