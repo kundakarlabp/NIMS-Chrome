@@ -3163,12 +3163,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         fontSize=10.sp)
                                 }
                                 if(candidates.isNotEmpty()) {
-                                    TextButton(onClick={
-                                        if(candidates.size==1) openReport(candidates[0].url)
-                                        else pickPdf=true
-                                    }) {
-                                        Text(if(candidates.size==1) "PDF" else
-                                            "PDFs",fontSize=10.sp)
+                                    // Title/date proximity produces review choices, not
+                                    // verified report identity. Even one candidate must
+                                    // be confirmed against its original specimen/CR.
+                                    TextButton(onClick={pickPdf=true}) {
+                                        Text(if(candidates.size==1) "Possible PDF" else
+                                            "PDFs (${candidates.size})",fontSize=10.sp)
                                     }
                                 }
                             }
