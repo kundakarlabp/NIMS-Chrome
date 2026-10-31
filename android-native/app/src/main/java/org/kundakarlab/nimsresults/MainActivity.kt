@@ -298,8 +298,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     pdfTotalCount = previous.reports.map { it.url }
                         .filter(String::isNotBlank).distinct().size
+                    val restMetadataCount = previous.reports.size - apiReportCount
                     historyStatus = "Cached " + previous.results.size + " result fields · " +
-                        previous.reports.size + " source-index rows · refresh for live data"
+                        apiReportCount + " source-index rows · " + restMetadataCount +
+                        " REST metadata rows · refresh for live data"
                     selectedTab = ResultsTab.OVERVIEW
                     loadStage = LoadStage.READY
                     statusText = "Encrypted local snapshot · refresh before clinical use."
