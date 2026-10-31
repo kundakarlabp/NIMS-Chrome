@@ -12,7 +12,7 @@ object SourceReportTables {
     private val detected = Regex("""(?i)^(?:not\s+detected|detected|negative|positive|non[\s-]*reactive|reactive|invalid|equivocal|inconclusive|indeterminate)$""")
     private val bloodReaction = Regex("""(?i)^(?:0|[1-4]\+|\+{1,4}|negative|positive|weak(?:\s+positive)?|mixed[\s-]*field|non[\s-]*reactive|reactive|not\s+tested|nt)$""")
     private val cellDelimiter = Regex("""\s*\|\s*|\t+|\s{2,}""")
-    private val bloodLabel = Regex("""(?i)^(?:anti[\s-]*a|anti[\s-]*b|anti[\s-]*ab|anti[\s-]*d|rh(?:\(d\))?|a1?\s*cells?|b\s*cells?|o\s*cells?|forward\s*(?:grouping|type)|reverse\s*(?:grouping|type)|antibody\s*screen(?:ing)?(?:\s*[12])?|abo(?:/rh)?(?:\s*grouping)?|blood\s*group(?:ing)?|final\s*result|interpretation|result\s*of\s*blood\s*group(?:ing)?)$""")
+    private val bloodLabel = Regex("""(?i)^(?:anti[\s-]*a|anti[\s-]*b|anti[\s-]*ab|anti[\s-]*d|rh(?:\(d\))?|a1?\s*cells?|b\s*cells?|o\s*cells?|forward\s*(?:grouping|type)|reverse\s*(?:grouping|type)|antibody\s*screen(?:ing)?(?:\s*[12])?|abo(?:/rh)?(?:\s*grouping)?|blood\s*group(?:ing)?|final\s*result|interpretation|result\s*of\s*blood\s*group(?:ing)?|method|controls?(?:\s*\d+)?|remarks?|comments?)$""")
     private val header = Regex("""(?i)^(?:test|target|pathogen|organism|analyte|interpretation|result|finding|reaction|method|comments|remarks|panel|normal\s*range|reference)$""")
 
     private fun label(value: String) = value.trim().trimEnd(':').replace(Regex("""\s+"""), " ")
@@ -51,7 +51,13 @@ object SourceReportTables {
             if (!bloodLabel.matches(name) || value.isEmpty() || value.length > 90) null
             else {
                 val conclusion = Regex("""(?i)\b(?:AB|A|B|O)\s*(?:(?:Rh\s*)?(?:positive|negative|pos|neg)|[+\-])\b""")
+                val reactions = value.split(Regex("""\\s+"""))
+                val isTableReactions = reactions.size in 2..6 &&
+                    reactions.all { bloodReaction.matches(it) }
+                val sourceNote = Regex("""(?i)^(?:method|controls?(?:\\s*\\d+)?|remarks?|comments?)$""")
+                    .matches(name) && value.length <= 120
                 val admissible = bloodReaction.matches(value) ||
+                    isTableReactions || sourceNote ||
                     detected.matches(value) || conclusion.containsMatchIn(value) ||
                     (name.contains("abo",true) && value.matches(Regex("""(?i)^(?:AB|A|B|O)$"""))) ||
                     (name.contains("screen",true) && value.length <= 35)
