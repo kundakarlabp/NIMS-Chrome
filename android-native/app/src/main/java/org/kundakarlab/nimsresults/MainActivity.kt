@@ -4026,6 +4026,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             fontWeight = FontWeight.SemiBold)
                                         Text("Study type: " + part.kind.name.replace('_',' '),
                                             fontSize=10.sp,color=Color(0xFF486581))
+                                        if(part.reportStage.isNotBlank()) Text(
+                                            "Report stage: " + part.reportStage,fontSize=10.sp)
                                         if (part.header.labNumber.isNotBlank()) Text(
                                             "Lab/study: " + part.header.labNumber, fontSize = 10.sp)
                                         if (part.sampleNumber.isNotBlank()) Text(
