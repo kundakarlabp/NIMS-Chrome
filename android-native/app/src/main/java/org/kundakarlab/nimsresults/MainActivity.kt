@@ -870,6 +870,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("diagnostics.format=v3")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sourceCommit=${BuildConfig.SOURCE_COMMIT}")
+            appendLine("app.signingCertSha256=" + ApkSigningIdentity.sha256(this@MainActivity))
             appendLine("app.lastCrash=" + CrashTrace.last(this@MainActivity))
             appendLine(ProcessHealth.snapshot(this@MainActivity))
             appendLine("app.sessionState=$sessionState")
