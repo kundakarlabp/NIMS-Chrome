@@ -3195,7 +3195,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(study.reportedIsExplicit) Text("Verified source-reported date",
+                            if(study.reportedIsExplicit) Text("Source-reported date",
                                 fontSize=10.sp,color=Color(0xFF486581))
                             val provenance=listOfNotNull(
                                 rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
@@ -3354,8 +3354,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         var range by remember(current.patient.crNo) { mutableStateOf("All") }
         if (subview == "Investigations") {
             ChronologyResultsScreen(current,scroll,
-                onSources={subview="Report index / PDFs"},
-                onOrders={subview="Enquiry orders"})
+                onSources={
+                    subview="Report index / PDFs"
+                    UiDiagnosticHistory.visit(this@MainActivity,"SOURCE_PDFS",current)
+                },
+                onOrders={
+                    subview="Enquiry orders"
+                    UiDiagnosticHistory.visit(this@MainActivity,"ENQUIRY_ORDERS",current)
+                })
             return
         }
         val days = when (range) {
