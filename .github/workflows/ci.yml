@@ -111,6 +111,33 @@ jobs:
         run: |
           node --check android-native/app/src/main/assets/nims_engine.js
           node --test android-native/tests/nims_engine_batches.test.cjs
+      - name: Restore persistent APK signer when configured
+        shell: bash
+        env:
+          NIMS_SIGNING_KEYSTORE_B64: ${{ secrets.NIMS_SIGNING_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.NIMS_SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.NIMS_SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.NIMS_SIGNING_KEY_PASSWORD }}
+          ORIGINAL_CERT_SHA256: ${{ secrets.NIMS_INSTALLED_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          echo "NIMS_APK_ARTIFACT_NAME=nims-results-debug-NOT-upgrade-verified" >> "$GITHUB_ENV"
+          if [[ -z "$NIMS_SIGNING_KEYSTORE_B64" ]]; then
+            echo "::warning::Original signing keystore unavailable: debug APK CANNOT be claimed update-compatible."
+            exit 0
+          fi
+          if [[ -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" || -z "$ORIGINAL_CERT_SHA256" ]]; then
+            echo "::error::Persistent signer must provide keystore, key credentials and original installed certificate SHA-256."
+            exit 1
+          fi
+          printf '%s' "$NIMS_SIGNING_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/nims-existing-signer.jks"
+          chmod 600 "$RUNNER_TEMP/nims-existing-signer.jks"
+          echo "NIMS_SIGNING_STORE_FILE=$RUNNER_TEMP/nims-existing-signer.jks" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "NIMS_EXPECTED_INSTALLED_CERT_SHA256=$ORIGINAL_CERT_SHA256" >> "$GITHUB_ENV"
+          echo "::notice::Persistent signer enabled. APK certificate verification is mandatory."
       - name: Build, unit test, lint, assemble
         run: gradle -p android-native clean test lintDebug assembleDebug --stacktrace --console=plain
       - name: Verify APK
@@ -120,9 +147,23 @@ jobs:
           apk="android-native/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$apk"
           unzip -t "$apk" >/dev/null
+          if [[ -n "${NIMS_SIGNING_STORE_FILE:-}" ]]; then
+            # Compare against the certificate of the ALREADY-INSTALLED app,
+            # not against a newly generated key or filename.
+            sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            signer="$(find "$sdk/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n 1)"
+            test -x "$signer"
+            actual="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+            expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+            if [[ -z "$actual" || "$actual" != "$expected" ]]; then
+              echo "::error::Signer mismatch: this APK MUST NOT replace the installed app."
+              exit 1
+            fi
+            echo "NIMS_APK_ARTIFACT_NAME=nims-results-existing-signer-verified" >> "$GITHUB_ENV"
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: nims-results-native-rebuild
+          name: ${{ env.NIMS_APK_ARTIFACT_NAME }}
           path: android-native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
