@@ -51,10 +51,10 @@ object SourceReportTables {
             if (!bloodLabel.matches(name) || value.isEmpty() || value.length > 90) null
             else {
                 val conclusion = Regex("""(?i)\b(?:AB|A|B|O)\s*(?:(?:Rh\s*)?(?:positive|negative|pos|neg)|[+\-])\b""")
-                val reactions = value.split(Regex("""\\s+"""))
+                val reactions = value.split(Regex("""\s+"""))
                 val isTableReactions = reactions.size in 2..6 &&
                     reactions.all { bloodReaction.matches(it) }
-                val sourceNote = Regex("""(?i)^(?:method|controls?(?:\\s*\\d+)?|remarks?|comments?)$""")
+                val sourceNote = Regex("""(?i)^(?:method|controls?(?:\s*\d+)?|remarks?|comments?)$""")
                     .matches(name) && value.length <= 120
                 val admissible = bloodReaction.matches(value) ||
                     isTableReactions || sourceNote ||
