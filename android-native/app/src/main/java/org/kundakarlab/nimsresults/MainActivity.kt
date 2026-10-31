@@ -867,7 +867,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val current = bundle
         return buildString {
             appendLine("NIMS Results diagnostics · entire app")
-            appendLine("diagnostics.format=v3")
+            appendLine("diagnostics.format=v4")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sourceCommit=${BuildConfig.SOURCE_COMMIT}")
             appendLine("app.signingCertSha256=" + ApkSigningIdentity.sha256(this@MainActivity))
@@ -887,6 +887,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("bulk.acceptedBatches=$bulkBatchCount")
             appendLine("bulk.fetchMode=$historyMode")
             appendLine("bulk.historyStatus=" + historyStatus.take(100))
+            append(UiDiagnosticHistory.snapshot(this@MainActivity))
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine(RestReportDiagnostics.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
@@ -1477,7 +1478,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 }
                 FilterChip(
                     selected = selectedTab == tab,
-                    onClick = { selectedTab = tab },
+                    onClick = {
+                        selectedTab = tab
+                        UiDiagnosticHistory.visit(this@MainActivity,tab.name,bundle)
+                    },
                     label = { Text(short, fontSize = 11.sp) }
                 )
             }
@@ -3139,7 +3143,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             chronology.forEach { day ->
                 item(key="date|"+day.date.toString()) {
                     Text(if(day.date==LocalDate.MIN) "Date unavailable"
-                        else LabPanelMatrix.displayDate(day.date.toString()),
+                        else LabPanelMatrix.displayDate(day.date.toString()) +
+                            " · NIMS source date",
                         fontSize=13.sp,fontWeight=FontWeight.Bold,
                         color=Color(0xFF102A43),
                         modifier=Modifier.padding(top=10.dp,bottom=4.dp))
@@ -3161,6 +3166,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     val inlineRows=remember(study.rows,study.visible) {
                         ClinicalChronology.inlineRows(study)
+                    }
+                    val unresolvedRows=remember(study.rows,study.visible) {
+                        ClinicalChronology.unresolvedRows(study)
+                    }
+                    var showSourceCodes by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
                     }
                     var pickPdf by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
@@ -3184,9 +3195,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            Text(if(study.reportedIsExplicit) "Reported date" else
-                                "NIMS result date · report timestamp unavailable",
-                                fontSize=10.sp,color=Color(0xFF66788A))
+                            if(study.reportedIsExplicit) Text("Verified source-reported date",
+                                fontSize=10.sp,color=Color(0xFF486581))
                             val provenance=listOfNotNull(
                                 rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
                                     .distinct().singleOrNull()?.let {
@@ -3278,6 +3288,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                     if(index<inlineRows.lastIndex) HorizontalDivider(
                                         color=Color(0xFFEDF1F5))
+                                }
+                            }
+                            if(unresolvedRows.isNotEmpty()) {
+                                TextButton(onClick={showSourceCodes=!showSourceCodes}) {
+                                    Text((if(showSourceCodes) "Hide" else "Review") +
+                                        " ${unresolvedRows.size} unverified source fields",
+                                        fontSize=10.sp,color=Color(0xFF875B22))
+                                }
+                                if(showSourceCodes) {
+                                    Text("Unmapped HIS codes are not clinical values. " +
+                                        "Use the original report to interpret these fields.",
+                                        fontSize=10.sp,color=Color(0xFF875B22))
+                                    unresolvedRows.forEach { original ->
+                                        Text(original.parameter + ": " + original.valueText,
+                                            fontSize=10.sp,color=Color(0xFF875B22))
+                                    }
                                 }
                             }
                         }
