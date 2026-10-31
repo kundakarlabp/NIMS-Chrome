@@ -614,9 +614,9 @@ class ReportActivity : Activity() {
             else -> emptyList()
         } else emptyList()
         val parsedTable = if (labelledCells.isEmpty()) "" else
-            "Explicitly labelled " + studyType + " source rows (not independently verified)\\n" +
-                labelledCells.joinToString("\\n") { it.label + "  |  " + it.value } +
-                "\\n\\nOriginal extracted source text\\n\\n"
+            "Explicitly labelled " + studyType + " source rows (not independently verified)\n" +
+                labelledCells.joinToString("\n") { it.label + "  |  " + it.value } +
+                "\n\nOriginal extracted source text\n\n"
         val content = parsedTable + when {
             tableView && cachedGeometryText.isNotBlank() ->
                 "PDF coordinate-aligned layout. Confirm against the original page.\n\n" + text
