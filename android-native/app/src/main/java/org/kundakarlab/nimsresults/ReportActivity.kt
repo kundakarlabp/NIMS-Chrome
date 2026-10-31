@@ -602,7 +602,22 @@ class ReportActivity : Activity() {
     }
 
     private fun showSourceText(text: String, tableView: Boolean) {
-        val content = when {
+        val studyType = when {
+            Regex("(?i)biofire|filmarray").containsMatchIn(text) -> "BioFire"
+            Regex("(?i)blood\\s+group|antibody\\s+screen|abo\\s*/\\s*rh")
+                .containsMatchIn(text) -> "BGT"
+            else -> ""
+        }
+        val labelledCells = if (tableView) when(studyType) {
+            "BioFire" -> SourceReportTables.biofire(text)
+            "BGT" -> SourceReportTables.bloodGrouping(text)
+            else -> emptyList()
+        } else emptyList()
+        val parsedTable = if (labelledCells.isEmpty()) "" else
+            "Explicitly labelled " + studyType + " source rows (not independently verified)\\n" +
+                labelledCells.joinToString("\\n") { it.label + "  |  " + it.value } +
+                "\\n\\nOriginal extracted source text\\n\\n"
+        val content = parsedTable + when {
             tableView && cachedGeometryText.isNotBlank() ->
                 "PDF coordinate-aligned layout. Confirm against the original page.\n\n" + text
             tableView -> ReportTableReader.present(text)
