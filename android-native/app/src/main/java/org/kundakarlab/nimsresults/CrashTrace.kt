@@ -16,14 +16,34 @@ object CrashTrace {
             val upstream = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
                 runCatching {
-                    val type = failure.javaClass.simpleName.take(48)
-                    val own = failure.stackTrace.firstOrNull {
+                    // Prefer our own frame; framework-only exceptions such as
+                    // FrameLayout.onMeasure still need a usable crash location.
+                    // Never persist exception messages, stack arguments, URLs or
+                    // patient information.
+                    val cause = failure.cause ?: failure
+                    val trace = if (cause.stackTrace.isNotEmpty()) cause.stackTrace
+                        else failure.stackTrace
+                    val frame = trace.firstOrNull {
                         it.className.startsWith("org.kundakarlab.nimsresults.")
-                    }
-                    val method = own?.className?.substringAfterLast('.')?.take(48).orEmpty() +
-                        "." + own?.methodName.orEmpty().take(48)
+                    } ?: trace.firstOrNull()
+                    val where = frame?.let {
+                        it.className.substringAfterLast('
+                }
+                if (upstream != null) upstream.uncaughtException(thread, failure)
+                else android.os.Process.killProcess(android.os.Process.myPid())
+            }
+            installed = true
+        }
+    }
+    fun last(context: Context): String = context.applicationContext
+        .getSharedPreferences(PREF, Context.MODE_PRIVATE).getString(KEY, "none").orEmpty()
+}
+).substringAfterLast('.')
+                            .take(48) + "." + it.methodName.take(48)
+                    } ?: "unknown"
+                    val type = cause.javaClass.simpleName.take(48)
                     application.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-                        .edit().putString(KEY, type + "@" + method).commit()
+                        .edit().putString(KEY, type + "@" + where).commit()
                 }
                 if (upstream != null) upstream.uncaughtException(thread, failure)
                 else android.os.Process.killProcess(android.os.Process.myPid())
