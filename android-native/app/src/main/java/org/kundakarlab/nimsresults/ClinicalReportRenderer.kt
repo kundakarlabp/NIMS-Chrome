@@ -51,6 +51,31 @@ object ClinicalReportRenderer {
             """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|control|[12]|a1\s*cells|b\s*cells|anti-[ab]|rh)$"""
         ).matches(name)
         if (panel && control) return true
+        // NIMS urine-routine cells can contain widget identifiers and
+        // enumeration integers, not measured concentrations. Keep those
+        // cells in the original source, never present them as clinical facts.
+        if (isUrineRoutine(row.test)) {
+            if (name.endsWith("(Investigation)", ignoreCase = true) ||
+                name.matches(Regex("""(?i)^/[hl]pf\s*\((?:result|investigation)\)$""")) ||
+                code == "-1") return true
+            val number = code.toDoubleOrNull()
+            if (number != null && (
+                    (name.matches(Regex("""(?i)^ph\s*\(result\)$""")) &&
+                        number !in 4.5..9.0) ||
+                    (name.matches(Regex("""(?i)^specific\s*gravity\s*\(result\)$""")) &&
+                        number !in 1.0..1.06)
+                )) return true
+            if (code.matches(Regex("[1-9]")) &&
+                name.matches(Regex(
+                    """(?i)^(?:negative|nitrite|ketones|blood|protein|bilirubin|glucose|urobilinogen)\s*\(result\)$"""
+                ))) return true
+        }
+        // Fluid sample type and gross appearance use local HIS choice codes.
+        // 1 or 2 does not establish which specimen or appearance was selected.
+        if (code.matches(Regex("[0-9]+")) &&
+            name.matches(Regex(
+                """(?i)^(?:nature\s+of\s+specimen|physical\s+appearance|fluid\s+appearance|fluid\s+colou?r)$"""
+            ))) return true
         // Generic /HPF or /LPF fields lack the named urinary sediment
         // analyte; an apparently numeric value must not be labeled as RBC/WBC.
         if (Regex("""(?i)^/[hl]pf\s*\(result\)$""").matches(name)) return true
