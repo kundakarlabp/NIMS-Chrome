@@ -2725,7 +2725,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
                 val sentDate = ClinicalPresentation.sentDate(rows)
+                    .ifBlank { verifiedPdf?.sentDate.orEmpty() }
+                val collectedDate = rows.firstOrNull {
+                    it.collectionDateTime.isNotBlank()
+                }?.collectionDateTime.orEmpty()
                     .ifBlank { verifiedPdf?.collectionDate.orEmpty() }
+                val sampleId = rows.firstOrNull {
+                    it.sampleNumber.isNotBlank()
+                }?.sampleNumber.orEmpty()
+                    .ifBlank { verifiedPdf?.sampleNumber.orEmpty() }
                 val reportedDate = ClinicalPresentation.reportedDate(rows)
                     .ifBlank { verifiedPdf?.reportedDate.orEmpty() }
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -2746,8 +2754,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             fontSize = 11.sp, color = Color(0xFF486581))
                         val verifiedFields=listOfNotNull(
                             accession.takeIf(String::isNotBlank)?.let { "Lab " + it },
-                            sentDate.takeIf(String::isNotBlank)?.let {
+                            sampleId.takeIf(String::isNotBlank)?.let { "Sample " + it },
+                            collectedDate.takeIf(String::isNotBlank)?.let {
                                 "Collected " + LabPanelMatrix.displayDateTime(it)
+                            },
+                            sentDate.takeIf(String::isNotBlank)?.let {
+                                "Sent " + LabPanelMatrix.displayDateTime(it)
                             },
                             reportedDate.takeIf(String::isNotBlank)?.let {
                                 "Reported " + LabPanelMatrix.displayDateTime(it)
@@ -2762,7 +2774,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             val possible = listOfNotNull(
                                 relatedHeader.labNumber.takeIf(String::isNotBlank)
                                     ?.let { "Lab " + it },
+                                relatedHeader.sampleNumber.takeIf(String::isNotBlank)
+                                    ?.let { "sample " + it },
                                 relatedHeader.collectionDate.takeIf(String::isNotBlank)
+                                    ?.let { "collected " + it },
+                                relatedHeader.sentDate.takeIf(String::isNotBlank)
                                     ?.let { "sent " + it },
                                 relatedHeader.reportedDate.takeIf(String::isNotBlank)
                                     ?.let { "reported " + it }
