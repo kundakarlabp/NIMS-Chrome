@@ -122,8 +122,7 @@ object PdfSourceEvidence {
                 // A shared accession can have distinct bottles, specimen
                 // identifiers, stains, and final/preliminary report sections.
                 // Never fold different known study types or specimen numbers.
-                (item.sampleNumber.isBlank() || last.sampleNumber.isBlank() ||
-                    item.sampleNumber == last.sampleNumber) &&
+                item.sampleNumber == last.sampleNumber &&
                 (item.kind == last.kind ||
                     item.kind == PdfStudyKind.OTHER ||
                     last.kind == PdfStudyKind.OTHER)) {
