@@ -33,6 +33,14 @@ object UiDiagnosticHistory {
         val sourceWithoutPdf = bundle?.reports.orEmpty().count {
             !it.sourceTag.startsWith("nims_rest_reportList") && it.url.isBlank()
         }
+        val flags = buildList {
+            if (bundle == null) add("NO_LOADED_RESULTS")
+            if (rows.isNotEmpty() && readable == 0) add("NO_READABLE_CLINICAL_FIELDS")
+            if (unverified > 0) add("UNMAPPED_LIS_FIELDS")
+            if (absentReportDates > 0) add("EXPLICIT_REPORT_TIME_MISSING")
+            if (rows.any { it.labNumber.isBlank() }) add("RESULT_ACCESSION_MISSING")
+            if (sourceWithoutPdf > 0) add("SOURCE_PDF_URL_MISSING")
+        }
         prefs.edit()
             .putInt("visits.$area", prefs.getInt("visits.$area", 0) + 1)
             .putLong("lastEpochMs.$area", System.currentTimeMillis())
@@ -41,6 +49,7 @@ object UiDiagnosticHistory {
             .putInt("unverified.$area", unverified)
             .putInt("reportDatesMissing.$area", absentReportDates)
             .putInt("sourcePdfMissing.$area", sourceWithoutPdf)
+            .putString("issues.$area", flags.joinToString(",").ifBlank { "none" })
             .apply()
     }
 
@@ -60,6 +69,7 @@ object UiDiagnosticHistory {
                 appendLine("$prefix.lastUnverifiedFields=${prefs.getInt("unverified.$area", 0)}")
                 appendLine("$prefix.lastFieldsWithoutReportTimestamp=${prefs.getInt("reportDatesMissing.$area", 0)}")
                 appendLine("$prefix.lastSourceWithoutPdf=${prefs.getInt("sourcePdfMissing.$area", 0)}")
+                appendLine("$prefix.lastIssueFlags=${prefs.getString("issues.$area", "none")}")
             }
             appendLine("ui.diagnostics.privacy=no_patient_identifiers_or_values")
         }
