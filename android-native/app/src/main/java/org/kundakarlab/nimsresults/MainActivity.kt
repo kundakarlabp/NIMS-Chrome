@@ -3385,9 +3385,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         study.title,inlineRows) &&
                                     !ClinicalResultsLayout.omitRedundantHeading(
                                         study.title,inlineRows)) {
-                                    Text(if(fluidChemistry!=null)
-                                        fluidChemistry.specimen+" — Chemistry"
-                                        else study.title,fontSize=13.sp,
+                                    Text(when {
+                                        fluidChemistry!=null ->
+                                            fluidChemistry.specimen+" — Chemistry"
+                                        isFluidStudy && study.title.contains("cell count",true) ->
+                                            "Fluid cell count"
+                                        isFluidStudy && Regex("""(?i)csf/pleural|ascitic/syno""")
+                                            .containsMatchIn(study.title) ->
+                                            "Fluid chemistry"
+                                        else -> study.title
+                                    },fontSize=13.sp,
                                         fontWeight=FontWeight.Bold,
                                         color=Color(0xFF102A43),
                                         modifier=Modifier.weight(1f))
