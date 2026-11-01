@@ -76,8 +76,8 @@ object SerologyReportDisplay {
         val section=raw.trim()
         // Cutoff text often contains another "Positive" or "Negative":
         // use only the explicit clinical result BEFORE that reference.
-        val referenceMatch=cutoff.find(section)
-        val clinical=section.take(referenceMatch?.range?.first ?: section.length)
+        val referenceMatches=cutoff.findAll(section).toList()
+        val clinical=section.take(referenceMatches.firstOrNull()?.range?.first ?: section.length)
         val match=reaction.find(clinical) ?: return null
         val result=match.value.lowercase().replace(Regex("""\s+"""),"-")
             .replaceFirstChar { it.uppercase() }
@@ -88,9 +88,9 @@ object SerologyReportDisplay {
         }.orEmpty()
         // Keep the PDF/HIS comparison operator, precision and reference
         // interpretation. Do not apply a generic manufacturer's cutoff.
-        val reference=referenceMatch?.let { m ->
+        val reference=referenceMatches.map { m ->
             m.value.trim().replace(Regex("""\s+""")," ")
-        }.orEmpty()
+        }.distinct().joinToString(" · ")
         return Finding(label,result,measured,reference)
     }
 }
