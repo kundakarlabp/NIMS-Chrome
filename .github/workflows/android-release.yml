@@ -92,7 +92,7 @@ jobs:
             echo "::error::APK signature mismatched the installed-app certificate."
             exit 1
           fi
-          info="$("$aapt" dump badging "$apk" | head -n 1)"
+          info="$("$aapt" dump badging "$apk" | sed -n '1p')"
           [[ "$info" == *"name='org.kundakarlab.nimsresults'"* ]] || exit 1
           version="$(printf '%s\n' "$info" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
           version_code="$(printf '%s\n' "$info" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
