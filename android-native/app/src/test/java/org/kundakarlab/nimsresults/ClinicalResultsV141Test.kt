@@ -17,7 +17,7 @@ class ClinicalResultsV141Test {
         val source=listOf(pdf("2026-04-23",test,"26CP165365"),
             pdf("2026-04-26",test,"26CP169832"),
             pdf("2026-05-07",test,"26CP188246"))
-        val chosen=SourceMetadataReview.candidates(listOf(row(test,"Hb","13.1")),source)
+        val chosen=SourceMetadataReview.pdfCandidates(listOf(row(test,"Hb","13.1")),source)
         assertEquals(listOf("26CP188246"),chosen.map{it.labNumber})
     }
 
@@ -28,13 +28,13 @@ class ClinicalResultsV141Test {
         val culture=listOf(row(test,"Result",
             "B15335 CULTURE REPORT CULTURE SHOWS GROWTH OF BURKHOLDERIA PSEUDOMALLEI",
             "2026-04-28"))
-        val chosen=SourceMetadataReview.candidates(culture,source)
+        val chosen=SourceMetadataReview.pdfCandidates(culture,source)
         assertEquals(listOf("B15335"),chosen.map{it.labNumber})
     }
 
     @Test fun mismatchedExplicitCultureAccessionNeverFallsBackToNearDate() {
         val test="Fan Blood Culture(1 set 1 bottle) Final"
-        val chosen=SourceMetadataReview.candidates(listOf(row(test,"Result",
+        val chosen=SourceMetadataReview.pdfCandidates(listOf(row(test,"Result",
             "B15335 CULTURE REPORT CULTURE SHOWS GROWTH",
             "2026-04-22")),listOf(pdf("2026-04-22",test,"B14327")))
         assertTrue(chosen.isEmpty())
