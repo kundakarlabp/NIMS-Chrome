@@ -50,6 +50,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -151,6 +152,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val tables: List<LabPanelMatrix.Table>
     )
     private var pendingLabExport: LabExport? = null
+    private var pendingClinicalCsv: String? = null
+    private val clinicalCsvLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        val content=pendingClinicalCsv
+        pendingClinicalCsv=null
+        if(uri!=null && content!=null) {
+            worker.execute {
+                val saved=runCatching {
+                    contentResolver.openOutputStream(uri)?.use { output ->
+                        output.write("\uFEFF".toByteArray(Charsets.UTF_8))
+                        output.write(content.toByteArray(Charsets.UTF_8))
+                    } ?: error("Destination is not writable")
+                }.isSuccess
+                runOnUiThread {
+                    Toast.makeText(this,
+                        if(saved) "Selected results CSV saved" else "Could not save results CSV",
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
     private val labPdfLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri ->
@@ -3108,6 +3131,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val chronology=remember(current.results,query,category,period) {
             ClinicalChronology.days(current.results,query,category,within)
         }
+        // Selection is scoped to the currently filtered, readable clinical
+        // results. All raw HIS rows and source files remain unchanged.
+        val exportRows=remember(chronology) {
+            chronology.flatMap { day ->
+                day.studies.flatMap { study ->
+                    ClinicalResultsLayout.ordered(study.title,
+                        ClinicalChronology.inlineRows(study))
+                }
+            }
+        }
+        val csvOptions=remember(exportRows) { SelectedResultsCsv.options(exportRows) }
+        var showCsv by remember(current.patient.crNo) { mutableStateOf(false) }
+        var selectedCsv by remember(current.patient.crNo) { mutableStateOf(setOf<String>()) }
         LazyColumn(state=scroll,modifier=Modifier.fillMaxSize(),
             contentPadding=PaddingValues(start=10.dp,end=17.dp,top=5.dp,bottom=18.dp),
             verticalArrangement=Arrangement.spacedBy(2.dp)) {
@@ -3120,6 +3156,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         label={Text("Source PDFs",fontSize=11.sp)})
                     FilterChip(selected=false,onClick=onOrders,
                         label={Text("Orders",fontSize=11.sp)})
+                    TextButton(onClick={showCsv=true},enabled=csvOptions.isNotEmpty()) {
+                        Text("CSV",fontSize=11.sp)
+                    }
                 }
                 OutlinedTextField(value=query,onValueChange={query=it},
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
@@ -3208,7 +3247,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     Spacer(Modifier.weight(1f))
                                 }
                                 if(candidates.isNotEmpty() &&
-                                    !ClinicalResultsLayout.omitRoutinePdf(study.title,inlineRows)) {
+                                    (!ClinicalResultsLayout.omitRoutinePdf(study.title,inlineRows) ||
+                                        CoagulationDisplay.missingPTComponents(
+                                            study.title,inlineRows).isNotEmpty())) {
                                     // PDF remains an optional source-review action;
                                     // it is not required to read any structured result.
                                     TextButton(onClick={pickPdf=true}) {
@@ -3386,6 +3427,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
+                            if(CoagulationDisplay.isPTPanel(study.title)) {
+                                val missing=CoagulationDisplay.missingPTComponents(
+                                    study.title,inlineRows)
+                                if(missing.isNotEmpty()) Text(
+                                    "Not in structured data: "+missing.joinToString(", ")+
+                                        ". Confirm in the original report.",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
+                                if(CoagulationDisplay.divergentINR(inlineRows)) Text(
+                                    "Multiple differing INR source values shown separately.",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
+                            }
                             if(unresolvedRows.isNotEmpty()) {
                                 TextButton(onClick={showSourceCodes=!showSourceCodes}) {
                                     Text((if(showSourceCodes) "Hide" else "Review") +
@@ -3437,6 +3489,57 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                 }
             }
+        }
+        if(showCsv) {
+            val available=csvOptions.map { it.id }.toSet()
+            val chosen=selectedCsv.intersect(available)
+            AlertDialog(
+                onDismissRequest={showCsv=false},
+                title={Text("Select results for CSV")},
+                text={
+                    Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment=Alignment.CenterVertically) {
+                            Checkbox(checked=chosen.isNotEmpty() && chosen.size==available.size,
+                                onCheckedChange={ all ->
+                                    selectedCsv=if(all) available else emptySet()
+                                })
+                            Text("Select all (${available.size})",fontSize=12.sp)
+                        }
+                        Text("Only readable result fields are exported; unknown HIS codes " +
+                            "and patient identifiers are excluded.",
+                            fontSize=10.sp,color=Color(0xFF66788A))
+                        LazyColumn(Modifier.heightIn(max=360.dp)) {
+                            items(csvOptions,key={it.id}) { option ->
+                                Row(Modifier.fillMaxWidth()
+                                    .clickable {
+                                        selectedCsv=if(option.id in chosen)
+                                            selectedCsv-option.id else selectedCsv+option.id
+                                    },
+                                    verticalAlignment=Alignment.CenterVertically) {
+                                    Checkbox(checked=option.id in chosen,
+                                        onCheckedChange={ check ->
+                                            selectedCsv=if(check) selectedCsv+option.id
+                                                else selectedCsv-option.id
+                                        })
+                                    Text(option.title,fontSize=11.sp,
+                                        modifier=Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton={
+                    TextButton(enabled=chosen.isNotEmpty(),onClick={
+                        pendingClinicalCsv=SelectedResultsCsv.render(exportRows,chosen)
+                        showCsv=false
+                        clinicalCsvLauncher.launch("NIMS-Results-"+
+                            java.time.LocalDate.now().toString()+".csv")
+                    }) {Text("Export (${chosen.size})")}
+                },
+                dismissButton={TextButton(onClick={showCsv=false}) {
+                    Text("Cancel")
+                }}
+            )
         }
     }
 
