@@ -103,6 +103,9 @@ object ClinicalChronology {
 
     fun parameterLabel(row: LabResult): String {
         CoagulationDisplay.label(row)?.let { return it }
+        return parameterLabelFallback(row)
+    }
+    fun parameterLabelFallback(row: LabResult): String {
         val name=row.parameter.ifBlank { row.test }
         val key=name.lowercase().replace(Regex("[^a-z0-9]"), "")
         return when {
