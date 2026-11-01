@@ -30,7 +30,7 @@ class ClinicalResultsV143Test {
         val provenance=ClinicalResultsLayout.cultureProvenance(values,listOf(index))
         assertTrue(provenance.contains("Lab B15336"))
         assertTrue(provenance.contains("Sample BLOOD-15336"))
-        assertTrue(provenance.contains("Source-index collected 22-Apr-2026 08:00"))
+        assertTrue(provenance.contains("Collected 22-04-2026 08:00"))
         assertFalse(provenance.any{it.startsWith("Sent ")})
     }
 
