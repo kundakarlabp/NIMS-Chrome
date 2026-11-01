@@ -35,7 +35,7 @@ object EnquirySourceBridge {
         else -> ""
     }
     private fun labelNumber(title:String,type:String):String =
-        Regex("""(?i)(\\d+)\\s*(?:st|nd|rd|th)?\\s*\\b$type\\b""")
+        Regex("""(?i)(\d+)\s*(?:st|nd|rd|th)?\s*\b$type\b""")
             .find(title)?.groupValues?.getOrNull(1).orEmpty()
     private fun compatible(order:String,source:String):Boolean {
         if(name(order)!=name(source))return false
