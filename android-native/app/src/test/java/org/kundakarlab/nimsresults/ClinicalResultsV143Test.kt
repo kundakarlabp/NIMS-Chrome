@@ -76,4 +76,30 @@ class ClinicalResultsV143Test {
         assertFalse(ClinicalResultsLayout.urineChemistryCode(
             row(cue,"Specific Gravity(Result)","1.018")))
     }
+    @Test fun cultureFinalMayReviewUniqueEarlierCollectionPdfButCbcMayNot() {
+        val culture="Fan Blood Culture(1 set 2 bottle) Final"
+        val study=listOf(row(culture,"Result","NO GROWTH","2026-04-28"))
+        val source=ReportRef(id="blood",title=culture,
+            date="2026-04-22",collectionDateTime="2026-04-22",
+            labNumber="B15336",url="https://www.nimsts.edu.in/blood.pdf",
+            sourceTag="nims_html_index")
+        assertEquals(listOf("B15336"),
+            SourceMetadataReview.pdfCandidates(study,listOf(source)).map{it.labNumber})
+        val cbc="CBC (HB, PCV,TLC, PLT, PS)"
+        val cbcSource=source.copy(id="cbc",title=cbc,labNumber="26CP169832",
+            url="https://www.nimsts.edu.in/cbc.pdf")
+        assertTrue(SourceMetadataReview.pdfCandidates(listOf(row(cbc,"Hb","13.1",
+            "2026-04-28")),listOf(cbcSource)).isEmpty())
+    }
+
+    @Test fun cultureCandidatesRejectAnotherSetOrStageEvenIfDateNear() {
+        val result=listOf(row("Fan Blood Culture(1 set 2 bottle) Final",
+            "Result","NO GROWTH","2026-04-28"))
+        val mismatch=ReportRef(id="bad",title="Fan Blood Culture(2 set 2 bottle) Final",
+            date="2026-04-22",collectionDateTime="2026-04-22",
+            labNumber="B15338",url="https://www.nimsts.edu.in/wrong.pdf",
+            sourceTag="nims_html_index")
+        assertTrue(SourceMetadataReview.pdfCandidates(result,listOf(mismatch)).isEmpty())
+    }
+
 }
