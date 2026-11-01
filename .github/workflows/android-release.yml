@@ -68,13 +68,13 @@ jobs:
           set -euo pipefail
           node --check android-native/app/src/main/assets/nims_engine.js
           node --test android-native/tests/nims_engine_batches.test.cjs
-          gradle -p android-native clean test lintDebug assembleDebug --stacktrace --console=plain
+          gradle -p android-native clean test lintRelease assembleRelease --stacktrace --console=plain
 
       - name: Verify APK certificate, package and version, generate release manifest
         shell: bash
         run: |
           set -euo pipefail
-          apk="android-native/app/build/outputs/apk/debug/app-debug.apk"
+          apk="android-native/app/build/outputs/apk/release/app-release.apk"
           test -s "$apk"
           unzip -t "$apk" >/dev/null
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
@@ -83,6 +83,12 @@ jobs:
           test -x "$signer"
           test -x "$aapt"
           "$signer" verify --verbose "$apk"
+          # Ensure a clinician-distributed package is not a debuggable build.
+          if "$aapt" dump xmltree "$apk" AndroidManifest.xml |
+            grep -Eq 'android:debuggable.*\\(type 0x12\\)0x1'; then
+            echo "::error::Release APK is debuggable; refuse distribution."
+            exit 1
+          fi
           actual="$("$signer" verify --print-certs "$apk" |
             sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
             tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
