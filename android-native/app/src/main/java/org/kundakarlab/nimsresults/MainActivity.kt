@@ -3508,7 +3508,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)
                                         else ClinicalChronology.parameterLabel(row)
-                                    val rawValue=ClinicalReadableSummaries.compactValue(row)
+                                    val rawValue=ClinicalReadableSummaries.compactValue(row)+
+                                        if(fluidChemistry!=null && row.unit.isBlank()) {
+                                            PdfFluidChemistry.unitFor(row.parameter,fluidChemistry)
+                                                .takeIf(String::isNotBlank)?.let { " "+it }.orEmpty()
+                                        } else ""
                                     val unmapped=ClinicalChronology.isUnmapped(row)
                                     val longText=ClinicalChronology.isNarrativeRow(study,row)
                                     val caption=if(unmapped)
