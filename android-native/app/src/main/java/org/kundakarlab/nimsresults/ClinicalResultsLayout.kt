@@ -38,6 +38,8 @@ object ClinicalResultsLayout {
     fun omitRoutineHeading(title: String, rows: List<LabResult>): Boolean {
         if(rows.isEmpty()) return false
         val t=key(title)
+        if(Regex("""(?i)csf|pleural|ascitic|synovial|fluidcellcount|pericardial""")
+                .containsMatchIn(t)) return false
         if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
         if(ClinicalReportRenderer.isUrineRoutine(test) ||
             Regex("""(?i)\b(?:hiv|hcv|hbsag|hbs\s*ag|hepatitis\s*[bc])\b""")
