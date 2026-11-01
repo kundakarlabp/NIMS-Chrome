@@ -26,10 +26,12 @@ object SourceMetadataReview {
             value == "serumurea" || value == "urea" -> "urea"
             value.startsWith("grams") || value.startsWith("gramstain") ||
                 value.startsWith("gramsmear") -> "gramstain"
-            value.startsWith("fungalfluorescen") ||
-                value.startsWith("calcofluor") -> "calcofluor"
-            value.startsWith("fungalkoh") || value.startsWith("kohpreparation") ||
-                value.startsWith("kohmount") -> "fungalkoh"
+            value.contains("calcofluor") || value.contains("calcoflour") ||
+                value.startsWith("fungalfluorescen") ||
+                value.startsWith("fungalfluorescent") -> "calcofluor"
+            value.contains("fungalkoh") || value.contains("kohpreparation") ||
+                value.contains("kohmount") || value.startsWith("kohfungal") ||
+                value.contains("fungalkohstaining") -> "fungalkoh"
             value.startsWith("afbsmear") || value.startsWith("afbstain") ||
                 value.startsWith("acidfastbacilli") -> "afbstain"
             value=="urineculture" || value=="urineaerobicculture" -> "urineculture"
