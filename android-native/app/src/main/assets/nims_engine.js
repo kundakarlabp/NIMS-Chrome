@@ -116,25 +116,43 @@
     return { name, crNo, age, sex };
   }
 
+  // The e-Sushrut portal sometimes changes the outer iframe ID, nests the
+  // investigation page in another same-origin frame, or paints the CR form
+  // directly into a frame's document. Identify the actual CR form instead of
+  // assuming a single fixed top-level iframe.
+  function trendsFrame() {
+    const matches = [];
+    for (const doc of collectDocuments()) {
+      let frames = [];
+      try { frames = [...doc.querySelectorAll('iframe,frame')]; } catch {}
+      for (const candidate of frames) {
+        try {
+          const inner = candidate.contentDocument;
+          if (!inner?.querySelector(UI.crInput)) continue;
+          if (!inner?.querySelector(UI.patientBar) &&
+              !inner?.querySelector(UI.customButton)) continue;
+          matches.push(candidate);
+        } catch {}  // Cross-origin content is never inspected.
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      const named = matches.filter(frame => frame.id === UI.trendFrameId);
+      if (named.length === 1) return named[0];
+      // Fail closed rather than capturing a different patient's document.
+      throw new Error('Ambiguous NIMS CR trends frames.');
+    }
+    return null;
+  }
+
   async function openTrends() {
     const state = probe();
     if (!state.authenticated) throw new Error('NIMS authentication required.');
 
-    let frame = document.getElementById(UI.trendFrameId);
-    try {
-      if (frame?.contentDocument?.querySelector(UI.crInput)) return frame;
-    } catch {}
+    const available = trendsFrame();
+    if (available) return available;
 
     const docs = () => collectDocuments();
-    const menuDocument = () => {
-      for (const doc of docs()) {
-        try {
-          const frame = doc.querySelector(UI.menuFrame);
-          if (frame?.contentDocument) return frame.contentDocument;
-        } catch {}
-      }
-      return null;
-    };
     const findAcrossDocs = (selector, labels) => {
       for (const doc of docs()) {
         try {
@@ -144,33 +162,35 @@
       }
       return null;
     };
+    const findTrendsLink = () =>
+      findAcrossDocs('a', LABELS.trends) ||
+      findAcrossDocs('button', LABELS.trends) ||
+      findAcrossDocs('[role="menuitem"]', LABELS.trends);
+    const findInvestigation = () =>
+      findAcrossDocs('a', LABELS.investigation) ||
+      findAcrossDocs('[role="tab"]', LABELS.investigation) ||
+      findAcrossDocs('button', LABELS.investigation);
 
-    let menuDoc = menuDocument();
-    let trendLink = menuDoc ? textExact(menuDoc, 'a', LABELS.trends) : null;
-    if (!trendLink) {
-      const investigation =
-        findAcrossDocs('a', LABELS.investigation) ||
-        findAcrossDocs('[role="tab"]', LABELS.investigation) ||
-        findAcrossDocs('button', LABELS.investigation);
+    let link = findTrendsLink();
+    if (!link) {
+      const investigation = findInvestigation();
       if (!investigation) throw new Error('NIMS Investigation menu was not found.');
       investigation.click();
-
-      trendLink = await waitFor(() => {
-        menuDoc = menuDocument();
-        return menuDoc ? textExact(menuDoc, 'a', LABELS.trends) : null;
-      }, 'CR trends service', 22000);
+      // Some NIMS skins load the page immediately after clicking Investigation;
+      // others expand a menu, and both patterns must be supported.
+      const next = await waitFor(
+        () => trendsFrame() || findTrendsLink(),
+        'CR trends service', 22000);
+      if (next?.contentDocument?.querySelector?.(UI.crInput)) return next;
+      link = next;
     }
 
-    trendLink.click();
+    if (!link) throw new Error('NIMS CR trends menu entry was not found.');
+    link.click();
 
-    frame = await waitFor(() => {
-      try {
-        const candidate = document.getElementById(UI.trendFrameId);
-        return candidate?.contentDocument?.querySelector(UI.crInput) ? candidate : null;
-      } catch { return null; }
-    }, 'CR trends page', 28000);
-
-    return frame;
+    // Do not mistake the authenticated shell for a successfully loaded
+    // Investigation page. The CR input and study controls must actually exist.
+    return await waitFor(() => trendsFrame(), 'CR trends page', 28000);
   }
 
   function bodyIsBulk(body) {

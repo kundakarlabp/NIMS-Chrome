@@ -367,12 +367,22 @@ object ClinicalResultsLayout {
         candidates: List<ReportRef>,
         verified: PdfDocumentHeader? = null
     ): String {
-        val metadata = microbiologyProvenance(rows,candidates,verified,false)
+        val blood=BloodCultureCard.isBloodCulture(rows.firstOrNull()?.test.orEmpty())
+        // Bottle identity cannot be proven by another same-day or same-lab
+        // PDF index entry. For blood cultures use only explicit row/narrative
+        // metadata or a separately patient-verified PDF header.
+        val metadata = microbiologyProvenance(
+            rows,if(blood) emptyList() else candidates,verified,blood)
         val lab = metadata.firstOrNull {
             it.startsWith("Lab ") || it.startsWith("Report index · Lab ")
         }?.removePrefix("Report index · ").orEmpty()
+        val sample = rows.map { it.sampleNumber.trim() }
+            .filter(String::isNotBlank).distinct().singleOrNull()
+            .orEmpty().ifBlank { verified?.sampleNumber.orEmpty() }
         val collection = metadata.firstOrNull { it.startsWith("Collected ") }
             ?.removePrefix("Collected ").orEmpty()
+        val sent = metadata.firstOrNull { it.startsWith("Sent ") }
+            ?.removePrefix("Sent ").orEmpty()
         val reporting = metadata.firstOrNull { it.startsWith("Reported ") }
             ?.removePrefix("Reported ").orEmpty()
         fun shortDate(raw:String):String {
@@ -384,7 +394,9 @@ object ClinicalResultsLayout {
         }
         return listOfNotNull(
             lab.takeIf(String::isNotBlank),
+            sample.takeIf(String::isNotBlank)?.let { "Sample "+it },
             shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
+            shortDate(sent).takeIf(String::isNotBlank)?.let { "Sent "+it },
             shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
         ).joinToString(" · ")
     }

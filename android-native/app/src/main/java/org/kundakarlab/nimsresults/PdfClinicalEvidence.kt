@@ -53,7 +53,7 @@ object PdfClinicalEvidence {
         ).findAll(source).toList()
         if (headings.isEmpty()) return null
         val value=Regex(
-            """(?i)^(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\s*[.]?$"""
+            """(?i)^(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg|[1-4]\s*\+)\s*[.]?$"""
         )
         val labelled=Regex(
             """(?i)^(?:final\s+)?(?:result|observation|interpretation|finding)\s*[:=\-]?\s*(.*)$"""
@@ -77,11 +77,12 @@ object PdfClinicalEvidence {
                 val control=Regex("""(?i)\bcontrol\s*[:=\-]?""")
                     .find(rawLine)?.range?.first ?: rawLine.length
                 val line=rawLine.substring(0,control).trim()
-                    .trimStart(':','=','-').trim()
+                    .trimStart('|',':','=','-').trim().trimEnd('|').trim()
                 if(line.isBlank() || Regex(
                     """(?i)^(?:reference|normal\s+range|method|comments?|remarks?|test\s+done\s+by)\b"""
                     ).containsMatchIn(line)) continue
-                val candidate=labelled.find(line)?.groupValues?.getOrNull(1)?.trim() ?: line
+                val candidate=(labelled.find(line)?.groupValues?.getOrNull(1)?.trim() ?: line)
+                    .trim('|').trim()
                 val direct=value.matchEntire(candidate)?.groupValues?.get(1)
                 if(direct!=null) found+=direct
                 else if (lineIndex>0) {
@@ -96,13 +97,58 @@ object PdfClinicalEvidence {
                 when(v.lowercase().trim()) {
                     "neg" -> "Negative"
                     "trace", "traces" -> "Traces"
-                    else -> v.lowercase().replaceFirstChar { it.uppercase() }
+                    else -> if(Regex("""[1-4]\s*\+""").matches(v.trim()))
+                        v.filterNot(Char::isWhitespace) else
+                        v.lowercase().replaceFirstChar { it.uppercase() }
                 }
             }.distinct()
             if(values.size>1) return null
             if(values.size==1) results+=values.single()
         }
         return results.distinct().singleOrNull()
+    }
+
+    /**
+     * Control is NOT the patient's DAT value. Show separately and only when
+     * it is explicitly labelled in a CR-verified source PDF.
+     */
+    fun coombsControl(test: String, document: String): String? {
+        if (!Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
+                .containsMatchIn(test) ||
+            Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT|ICT)\b""")
+                .containsMatchIn(test)) return null
+        val source=document.replace("\r\n","\n")
+        val start=Regex(
+            """(?im)^\s*(?:direct\s+(?:coombs|antiglobulin)(?:\s+test)?|DAT|DCT)""" +
+                """(?:\s*\(\s*(?:GEL|DAT|DCT)\s*\))?(?=\s|[:=\-|]|$)"""
+        ).find(source) ?: return null
+        val following=Regex(
+            """(?im)^\s*(?:direct|indirect)\s+(?:coombs|antiglobulin)\b|""" +
+                """^\s*(?:DAT|DCT|IAT|ICT)\b"""
+        ).find(source,start.range.last+1)?.range?.first ?: source.length
+        val section=source.substring(start.range.last+1,following).take(500)
+        val controls=Regex(
+            """(?i)\bcontrol\s*[:=\-]?\s*(?:\|\s*)?""" +
+                """([1-4]\s*\+|weak\s+positive|traces?|negative|positive|neg)"""
+        ).findAll(section).map { it.groupValues[1].filterNot(Char::isWhitespace) }
+            .distinct().toList()
+        return controls.singleOrNull()
+    }
+
+    /** Signed blood-bank remarks, shown once under DAT (not duplicated on IAT). */
+    fun coombsComment(document: String): String? {
+        val normalized=document.replace("\r\n","\n")
+        val matched=Regex("""(?im)^\s*(?:\|\s*)?comments?\s*[:=]\s*([^\r\n]*)""")
+            .find(normalized) ?: return null
+        val onLine=matched.groupValues[1].trim().trim('|').trim()
+        val next=normalized.substring(matched.range.last+1)
+            .lineSequence().map { it.trim().trim('|').trim() }
+            .firstOrNull(String::isNotBlank).orEmpty()
+        val text=onLine.ifBlank { next }
+        if(text.isBlank() || text.length>250 ||
+            Regex("""(?i)^(?:end of (?:the )?report|page\s+\d+|validated by)\b""")
+                .containsMatchIn(text)) return null
+        return text
     }
 
 }

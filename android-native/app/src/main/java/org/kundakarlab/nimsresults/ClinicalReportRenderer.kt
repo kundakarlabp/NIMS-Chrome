@@ -51,6 +51,12 @@ object ClinicalReportRenderer {
             """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|control|[12]|a1\s*cells|b\s*cells|anti-[ab]|rh)$"""
         ).matches(name)
         if (panel && control) return true
+        // Peripheral parasite smears and malaria strip tests may contain
+        // opaque HIS dropdown values 1/2 despite the PDF reporting
+        // "Negative". A number has no globally safe clinical interpretation.
+        if (code.matches(Regex("""[0-9]{1,2}""")) &&
+            Regex("""(?i)malaria|microfilaria|filaria|smear\s+for\s+mp|strip\s+test\s+for\s+mp""")
+                .containsMatchIn(row.test)) return true
         // NIMS urine-routine cells can contain widget identifiers and
         // enumeration integers, not measured concentrations. Keep those
         // cells in the original source, never present them as clinical facts.
