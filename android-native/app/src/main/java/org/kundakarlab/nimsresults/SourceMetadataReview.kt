@@ -33,10 +33,12 @@ object SourceMetadataReview {
             value.startsWith("afbsmear") || value.startsWith("afbstain") ||
                 value.startsWith("acidfastbacilli") -> "afbstain"
             value=="urineculture" || value=="urineaerobicculture" -> "urineculture"
-            value=="indirectcoombstestgel" || value=="indirectcoombstest" ||
-                value=="iat" -> "indirectcoombs"
-            value=="directcoombstestgel" || value=="directcoombstest" ||
-                value=="dat" -> "directcoombs"
+            value.startsWith("indirectcoombs") ||
+                value.startsWith("indirectantiglobulin") ||
+                value in setOf("iat","iatgel","ict","ictgel") -> "indirectcoombs"
+            value.startsWith("directcoombs") ||
+                value.startsWith("directantiglobulin") ||
+                value in setOf("dat","datgel","dct","dctgel") -> "directcoombs"
             else -> value
         }
     }
