@@ -103,6 +103,35 @@ class FluidResultsV151Test {
         assertEquals("4-6",parsed["Epithelial cells"])
     }
 
+    @Test fun combinedDATIATReportExtractsTracesAndNegativeSeparately() {
+        val combined="""
+            Direct Coombs Test
+            Traces     Control: Neg
+            Indirect Coombs Test
+            Result: NEGATIVE
+            Comments: For further workup advice Monospecific DAT
+        """.trimIndent()
+        assertEquals("Traces",PdfClinicalEvidence.coombs(
+            "Direct Coombs Test (GEL)",combined))
+        assertEquals("Negative",PdfClinicalEvidence.coombs(
+            "Indirect Coombs Test (GEL)",combined))
+        assertNull(PdfClinicalEvidence.coombs("Direct Coombs Test (GEL)",
+            "Indirect Coombs Test\nResult: NEGATIVE"))
+        val source=ReportRef(id="one",title=
+            "Direct Coombs Test (GEL), Indirect Coombs Test (GEL)",
+            url="https://www.nimsts.edu.in/lab/report", labNumber="26T032807",
+            collectionDateTime="2026-10-29")
+        val direct=SourceMetadataReview.pdfCandidates(
+            listOf(row("Direct Coombs Test (GEL)","cb1","2")),
+            listOf(source))
+        val indirect=SourceMetadataReview.pdfCandidates(
+            listOf(row("Indirect Coombs Test (GEL)","cb2","1")),
+            listOf(source))
+        assertEquals(1,direct.size)
+        assertEquals(1,indirect.size)
+        assertEquals(direct.single().url,indirect.single().url)
+    }
+
     @Test fun microMetadataContainsNeitherCandidateDisclaimerNorDoubleDate() {
         val pdf=ReportRef(id="pdf",title="GRAMS STAINING",
             url="https://www.nimsts.edu.in/report.pdf",labNumber="E18848",
