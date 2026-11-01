@@ -235,7 +235,7 @@ object ClinicalResultsLayout {
         val reporter = reporterMatch?.value?.trim().orEmpty()
         val body = if (reporterMatch == null) raw else raw.take(reporterMatch.range.first).trim()
         val headings = Regex(
-            """(?i)\b(CLINICAL\s+DIAGNOSIS|CLINICAL\s+HISTORY|EXAMINATION\s+PERFORMED\s+ON|TECHNIQUE|PROTOCOL|FINDINGS|OBSERVATIONS|IMPRESSION|CONCLUSION|RECOMMENDATIONS?)\s*(?::\s*[-–]?|[-–])\s*"""
+            """(?i)\b(CLINICAL\s+DIAGNOSIS|CLINICAL\s+HISTORY|EXAMINATION\s+PERFORMED\s+ON|TECHNIQUE|PROTOCOL|FINDINGS|OBSERVATIONS|IMPRESSION|CONCLUSION|RECOMMENDATIONS?)\b\s*(?::\s*[-–]?|[-–])?\s+"""
         ).findAll(body).toList()
         if (headings.isEmpty()) return Narrative(listOf(SourceSection("Report",body)),reporter)
         val parts = mutableListOf<SourceSection>()
