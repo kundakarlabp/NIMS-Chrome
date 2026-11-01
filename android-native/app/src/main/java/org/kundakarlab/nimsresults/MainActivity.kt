@@ -985,8 +985,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // report types. Never bulk-download a patient's hundreds of PDFs.
         val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
             when {
-                ClinicalReportRenderer.isUrineRoutine(it.title) -> 0
-                it.title.contains("coombs",true) -> 1
+                it.title.contains("coombs",true) -> 0
+                ClinicalReportRenderer.isUrineRoutine(it.title) -> 1
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(it.title) -> 2
                 ClinicalPresentation.isCulture(it.title) -> 3
@@ -998,10 +998,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
                 ClinicalPresentation.isCulture(study.title)
-        }.mapNotNull { study ->
-            SourceMetadataReview.pdfCandidates(study.rows,reports)
+        }.flatMap { study ->
+            val options=SourceMetadataReview.pdfCandidates(study.rows,reports)
                 .filter { it.url.isNotBlank() }.distinctBy { it.url }
-                .singleOrNull()
+            // DAT/IAT may have two separate signed report candidates.
+            // Inspect at most two; inspection is evidence acquisition,
+            // NOT automatic attribution of a candidate to a result.
+            if(study.title.contains("coombs",true)) options.take(2)
+            else options.singleOrNull()?.let(::listOf).orEmpty()
         }.distinctBy { it.url }.take(4)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
