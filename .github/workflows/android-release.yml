@@ -34,6 +34,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Signed patient release must run from main branch only."
+            exit 1
+          fi
           for var in NIMS_SIGNING_KEYSTORE_B64 NIMS_SIGNING_STORE_PASSWORD \
             NIMS_SIGNING_KEY_ALIAS NIMS_SIGNING_KEY_PASSWORD \
             NIMS_EXPECTED_INSTALLED_CERT_SHA256; do
@@ -83,9 +87,10 @@ jobs:
           test -x "$signer"
           test -x "$aapt"
           "$signer" verify --verbose "$apk"
-          # Ensure a clinician-distributed package is not a debuggable build.
-          if "$aapt" dump xmltree "$apk" AndroidManifest.xml |
-            grep -Eq 'android:debuggable.*\\(type 0x12\\)0x1'; then
+          # Fail closed if the release APK exposes android:debuggable=true.
+          manifest="$("$aapt" dump xmltree "$apk" AndroidManifest.xml)"
+          if printf '%s\\n' "$manifest" |
+            grep -Eq 'android:debuggable.*(0xffffffff|0x1)([[:space:]]|$)'; then
             echo "::error::Release APK is debuggable; refuse distribution."
             exit 1
           fi
