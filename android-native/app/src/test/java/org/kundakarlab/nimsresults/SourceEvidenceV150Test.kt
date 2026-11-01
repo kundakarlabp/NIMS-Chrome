@@ -78,14 +78,14 @@ class SourceEvidenceV150Test {
             "IAT (Gel)\nResult: Positive"))
     }
 
-    @Test fun unprovenReportIndexIsLabeledCandidateWithoutVerboseIndexText() {
+    @Test fun unprovenReportIndexStatusStaysInDiagnosticsNotClinicalHeader() {
         val r=row("GRAMS STAINING","Result","No organisms")
         val pdf=ReportRef(id="p",title="GRAMS STAINING",labNumber="E18848",
             sampleNumber="26BCT22946",collectionDateTime="2026-10-30")
         val compact=ClinicalResultsLayout.compactMicrobiologyHeader(
             listOf(r), listOf(pdf), null, LocalDate.parse("2026-10-30"))
         assertTrue(compact.size<=2)
-        assertTrue(compact.first().contains("PDF candidate"))
+        assertFalse(compact.joinToString(" ").contains("PDF candidate"))
         assertFalse(compact.joinToString(" ").contains("Report index"))
         assertTrue(compact.any { it.contains("E18848") })
     }
