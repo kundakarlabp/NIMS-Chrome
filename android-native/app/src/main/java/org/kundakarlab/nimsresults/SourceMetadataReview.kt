@@ -98,6 +98,16 @@ object SourceMetadataReview {
         val target = titleKey(test)
         val candidate = titleKey(source)
         if (target == candidate) return true
+        // One signed NIMS blood-bank report contains both DAT and IAT.
+        // Require BOTH explicit test names in the original title rather than
+        // a substring: "direct" also occurs inside "indirect".
+        val combinedCoombs =
+            Regex("""(?i)\bdirect\s+(?:coombs|antiglobulin)\b""")
+                .containsMatchIn(source) &&
+            Regex("""(?i)\bindirect\s+(?:coombs|antiglobulin)\b""")
+                .containsMatchIn(source)
+        if (combinedCoombs &&
+            target in setOf("directcoombs","indirectcoombs")) return true
         // One physical chemistry PDF often contains several separate HIS tests.
         val component = when(target) {
             "creatinine" -> "creatinine"
