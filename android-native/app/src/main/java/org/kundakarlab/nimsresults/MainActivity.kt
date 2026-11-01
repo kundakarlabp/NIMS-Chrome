@@ -3301,6 +3301,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     header.labNumber.equals(report.labNumber,true))
                         }?.let { ReportTitleCache.geometry(it.url).orEmpty() }.orEmpty()
                     }
+                    val verifiedParasite=remember(study.title,candidatePart,candidateGeometry) {
+                        sequenceOf(candidateGeometry,candidatePart)
+                            .firstNotNullOfOrNull { source ->
+                                PdfParasiteSmears.extract(study.title,source)
+                            }
+                    }
                     val verifiedUrine=remember(study.title,candidatePart,candidateGeometry) {
                         if(ClinicalReportRenderer.isUrineRoutine(study.title))
                             PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
@@ -3503,6 +3509,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     softWrap=true,
                                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
+                            if(verifiedParasite!=null)
+                                Text(verifiedParasite,fontSize=12.sp,
+                                    fontWeight=FontWeight.Medium,
+                                    color=Color(0xFF102A43))
                             if(verifiedCoombs!=null &&
                                 inlineRows.none { it.valueText.equals(verifiedCoombs,true) }) {
                                 Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
@@ -3540,7 +3550,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                             if(compactRows.isEmpty()) {
                                 if(verifiedBlood==null && verifiedCoombs==null &&
-                                    verifiedFluid.isBlank())
+                                    verifiedParasite==null && verifiedFluid.isBlank())
                                     Text(if(study.title.contains("coombs",true))
                                         "Result unavailable"
                                         else "No reported result",
