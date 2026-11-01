@@ -66,7 +66,10 @@ object ClinicalChronology {
      * bedside results. Unknown codes can be inspected without being mistaken
      * for reported values or silently discarded. */
     fun unresolvedRows(study: Study): List<LabResult> = study.rows.filter { row ->
-        row.valueText.isNotBlank() && !ClinicalPresentation.isTechnical(row) &&
+        // -1 is an empty LIS placeholder, not an unverified clinical finding.
+        // The original remains fully available in raw source diagnostics.
+        row.valueText.isNotBlank() && row.valueText.trim() != "-1" &&
+            !ClinicalPresentation.isTechnical(row) &&
             ClinicalReportRenderer.isUninterpretedCode(row)
     }
 

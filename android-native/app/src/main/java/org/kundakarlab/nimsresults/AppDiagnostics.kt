@@ -68,7 +68,7 @@ object AppDiagnostics {
         // Metadata-only candidate assessment: no network, no PDF fetch or
         // speculative specimen association. Runs off the UI thread when copied.
         val candidateCounts = groups.values.map { group ->
-            SourceMetadataReview.candidates(group, sourceReports)
+            SourceMetadataReview.pdfCandidates(group, sourceReports)
                 .map { it.url }.filter(String::isNotBlank).distinct().size
         }
         val clinicalPanels = LabPanelMatrix.build(
@@ -229,6 +229,26 @@ object AppDiagnostics {
             appendLine("diagnostics.results.source_date_not_verified_reporting=" +
                 studies.count { !it.reportedIsExplicit && it.date != java.time.LocalDate.MIN })
             appendLine("diagnostics.results.source_pdf_candidate_unverified=true")
+            appendLine("diagnostics.results.pdf_candidate_policy=exact_lab_or_same_source_date")
+            appendLine("diagnostics.results.culture_studies=" +
+                studies.count { it.title.contains("culture", ignoreCase=true) })
+            appendLine("diagnostics.results.culture_studies_with_labelled_accession=" +
+                studies.count { study ->
+                    study.title.contains("culture",ignoreCase=true) &&
+                    study.rows.any { MicrobiologyNarrativeMetadata.extract(it)
+                        ?.labNumber?.isNotBlank() == true }
+                })
+            appendLine("diagnostics.results.imaging_reports=" +
+                studies.count { study ->
+                    Regex("""(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology)\b""")
+                        .containsMatchIn(study.title)
+                })
+            appendLine("diagnostics.results.source_reference_ranges=" +
+                rows.count { it.refRange.isNotBlank() })
+            appendLine("diagnostics.results.unverified_missing_sentinels_hidden=" +
+                rows.count { it.valueText.trim() == "-1" })
+            appendLine("diagnostics.results.unique_pdf_candidates_same_day_or_lab=" +
+                candidateCounts.count { it == 1 })
 
             appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
