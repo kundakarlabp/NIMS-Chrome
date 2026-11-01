@@ -94,7 +94,13 @@ object ClinicalResultsLayout {
                     p.contains("globulin") -> 7
                     else -> 30
                 }
-                isCoag -> CoagulationDisplay.sortPriority(test,it.value)
+                isCoag -> when(CoagulationDisplay.displayLabel(it.value,rows)) {
+                    "PT (patient)", "aPTT (patient)" -> 0
+                    "PT (control)", "aPTT (control)" -> 1
+                    "INR (patient)", "INR" -> 2
+                    "INR (control)" -> 3
+                    else -> 20
+                }
                 isElectrolyte -> when(p) {
                     "na", "sodium", "serumsodium" -> 0
                     "k", "potassium", "serumpotassium" -> 1
@@ -197,18 +203,24 @@ object ClinicalResultsLayout {
         val match = sourceIndex.singleOrNull()?.takeIf { candidate ->
             lab.isBlank() || candidate.labNumber.equals(lab,true)
         }
+        val collection = rows.map { it.collectionDateTime.trim() }
+            .firstOrNull(String::isNotBlank)
+            .orEmpty().ifBlank { match?.collectionDateTime.orEmpty() }
+        val reportDate = reported.ifBlank { match?.reportedDate.orEmpty() }
         val trueSent = sent.ifBlank { match?.sentDate.orEmpty() }
         return listOfNotNull(
-            lab.takeIf(String::isNotBlank)?.let { "Lab " + it }
-                ?: match?.labNumber?.takeIf(String::isNotBlank)
-                    ?.let { "Source-index lab " + it },
+            (lab.ifBlank { match?.labNumber.orEmpty() })
+                .takeIf(String::isNotBlank)?.let { "Lab " + it },
+            collection.takeIf(String::isNotBlank)?.let {
+                "Collected " + LabPanelMatrix.displayDateTime(it) },
+            reportDate.takeIf(String::isNotBlank)?.let {
+                "Reported " + LabPanelMatrix.displayDateTime(it) },
             sample.takeIf(String::isNotBlank)?.let { "Sample " + it }
                 ?: match?.sampleNumber?.takeIf(String::isNotBlank)
-                    ?.let { "Source-index sample " + it },
-            trueSent.takeIf(String::isNotBlank)?.let { "Sent " + it },
-            reported.takeIf(String::isNotBlank)?.let { "Reported " + it },
-            match?.collectionDateTime?.takeIf { it.isNotBlank() }
-                ?.let { "Source-index collected " + it }
+                    ?.let { "Sample " + it },
+            trueSent.takeIf { it.isNotBlank() &&
+                RecentReportDates.parse(it) != RecentReportDates.parse(collection) }
+                ?.let { "Sent " + LabPanelMatrix.displayDateTime(it) }
         )
     }
 
@@ -223,7 +235,7 @@ object ClinicalResultsLayout {
         val reporter = reporterMatch?.value?.trim().orEmpty()
         val body = if (reporterMatch == null) raw else raw.take(reporterMatch.range.first).trim()
         val headings = Regex(
-            """(?i)\b(EXAMINATION\s+PERFORMED\s+ON|TECHNIQUE|PROTOCOL|FINDINGS|OBSERVATIONS|IMPRESSION|CONCLUSION|RECOMMENDATIONS?)\s*[:\-]?\s+"""
+            """(?i)\b(CLINICAL\s+DIAGNOSIS|CLINICAL\s+HISTORY|EXAMINATION\s+PERFORMED\s+ON|TECHNIQUE|PROTOCOL|FINDINGS|OBSERVATIONS|IMPRESSION|CONCLUSION|RECOMMENDATIONS?)\s*(?::\s*[-–]?|[-–])\s*"""
         ).findAll(body).toList()
         if (headings.isEmpty()) return Narrative(listOf(SourceSection("Report",body)),reporter)
         val parts = mutableListOf<SourceSection>()
