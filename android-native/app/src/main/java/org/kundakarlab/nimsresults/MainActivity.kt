@@ -3291,11 +3291,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfClinicalSummaries.bloodGrouping(candidatePart)
                         else null
                     }
-                    val verifiedUrine=remember(study.title,candidatePart,candidateGeometry) {
-                        if(ClinicalReportRenderer.isUrineRoutine(study.title))
-                            PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
-                        else emptyList()
-                    }
                     val candidateGeometry=remember(candidates,reportTitleEpoch,current.patient.crNo) {
                         candidates.singleOrNull()?.takeIf { report ->
                             val header=ReportTitleCache.header(report.url)
@@ -3303,6 +3298,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 (report.labNumber.isBlank() ||
                                     header.labNumber.equals(report.labNumber,true))
                         }?.let { ReportTitleCache.geometry(it.url).orEmpty() }.orEmpty()
+                    }
+                    val verifiedUrine=remember(study.title,candidatePart,candidateGeometry) {
+                        if(ClinicalReportRenderer.isUrineRoutine(study.title))
+                            PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
+                        else emptyList()
                     }
                     val verifiedCoombs=remember(study.title,candidatePart,rows) {
                         ClinicalSourceQualitative.coombs(rows)
