@@ -14,8 +14,42 @@ object EnquirySourceBridge {
     private fun id(s: String) = s.trim().uppercase(Locale.US)
     private fun name(s: String): String {
         val a=s.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
-        return if (a == "cbc" || a.startsWith("cbc") ||
-            a == "completebloodcount" || a == "completehemogram") "cbc" else a
+        return when {
+            a=="cbc" || a.startsWith("cbc") || a.startsWith("hemogram") ||
+                a.startsWith("haemogram") || a=="completebloodcount" ||
+                a=="completehemogram" -> "cbc"
+            a.contains("bloodculture") -> "bloodculture"
+            a.contains("urineaerobicculture") -> "urineculture"
+            a=="aerobicculture" -> "aerobicculture"
+            a.contains("gramstain") || a.contains("gramsmear") -> "gramstain"
+            a.contains("fungalstain") -> "fungalstain"
+            a.contains("afbstain") -> "afbstain"
+            else -> a
+        }
+    }
+
+    private fun stage(title:String):String = when {
+        title.contains("final",true) -> "FINAL"
+        title.contains("48 hrs",true) || title.contains("48 hours",true) -> "48H"
+        title.contains("24 hrs",true) || title.contains("24 hours",true) -> "24H"
+        else -> ""
+    }
+    private fun labelNumber(title:String,type:String):String =
+        Regex("""(?i)(\\d+)\\s*(?:st|nd|rd|th)?\\s*\\b$type\\b""")
+            .find(title)?.groupValues?.getOrNull(1).orEmpty()
+    private fun compatible(order:String,source:String):Boolean {
+        if(name(order)!=name(source))return false
+        val wantedStage=stage(order)
+        if(wantedStage.isNotBlank() && stage(source).isNotBlank() &&
+            wantedStage!=stage(source)) return false
+        if(name(order)=="bloodculture") {
+            for (field in listOf("set","bottle")) {
+                val a=labelNumber(order,field)
+                val b=labelNumber(source,field)
+                if(a.isNotBlank() && b.isNotBlank() && a!=b)return false
+            }
+        }
+        return true
     }
     fun assess(order: EnquiryOrder, reports: List<ReportRef>): Decision {
         val sample=id(order.sampleNumber)
@@ -24,7 +58,7 @@ object EnquirySourceBridge {
         val test=name(order.testName)
         if (test.isBlank()) return Decision(State.UNMATCHED)
         val matches=reports.filter {
-            name(it.title) == test &&
+            compatible(order.testName,it.title) &&
                 (sample.isEmpty() || id(it.sampleNumber) == sample) &&
                 (lab.isEmpty() || id(it.labNumber) == lab)
         }.distinctBy {
