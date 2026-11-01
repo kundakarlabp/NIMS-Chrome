@@ -356,6 +356,39 @@ object ClinicalResultsLayout {
             dates.distinct().joinToString(" · ")).filter(String::isNotBlank)
     }
 
+    /**
+     * Routine clinical metadata is one line: lab, collection, reporting.
+     * Never show specimen accession/number here (raw source stays intact).
+     * A reporting time from a CR-checked PDF is shown even if it falls
+     * on the date already used as the chronology heading.
+     */
+    fun oneLineMicrobiologyMetadata(
+        rows: List<LabResult>,
+        candidates: List<ReportRef>,
+        verified: PdfDocumentHeader? = null
+    ): String {
+        val metadata = microbiologyProvenance(rows,candidates,verified,false)
+        val lab = metadata.firstOrNull {
+            it.startsWith("Lab ") || it.startsWith("Report index · Lab ")
+        }?.removePrefix("Report index · ").orEmpty()
+        val collection = metadata.firstOrNull { it.startsWith("Collected ") }
+            ?.removePrefix("Collected ").orEmpty()
+        val reporting = metadata.firstOrNull { it.startsWith("Reported ") }
+            ?.removePrefix("Reported ").orEmpty()
+        fun shortDate(raw:String):String {
+            if (raw.isBlank()) return ""
+            val day=RecentReportDates.parse(raw) ?: return ""
+            val clock=Regex("""\b\d{1,2}:\d{2}\b""").find(raw)?.value
+            return day.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM")) +
+                (clock?.let { " "+it } ?: "")
+        }
+        return listOfNotNull(
+            lab.takeIf(String::isNotBlank),
+            shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
+            shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
+        ).joinToString(" · ")
+    }
+
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
     /** Split the explicit headings of flattened NIMS imaging narratives. */
     fun radiology(text: String): Narrative {
