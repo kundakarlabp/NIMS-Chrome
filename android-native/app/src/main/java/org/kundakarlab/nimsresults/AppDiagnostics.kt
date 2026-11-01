@@ -68,7 +68,7 @@ object AppDiagnostics {
         // Metadata-only candidate assessment: no network, no PDF fetch or
         // speculative specimen association. Runs off the UI thread when copied.
         val candidateCounts = groups.values.map { group ->
-            SourceMetadataReview.candidates(group, sourceReports)
+            SourceMetadataReview.pdfCandidates(group, sourceReports)
                 .map { it.url }.filter(String::isNotBlank).distinct().size
         }
         val clinicalPanels = LabPanelMatrix.build(
