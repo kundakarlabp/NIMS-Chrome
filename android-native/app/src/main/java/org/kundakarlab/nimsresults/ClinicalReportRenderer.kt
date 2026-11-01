@@ -70,14 +70,22 @@ object ClinicalReportRenderer {
                     """(?i)^(?:negative|nitrite|ketones|blood|protein|bilirubin|glucose|urobilinogen)\s*\(result\)$"""
                 ))) return true
         }
+        // Fluid-cell count enquiry sends non-result column headings as
+        // actual row values; these are not cytology observations.
+        if (Regex("""(?i)fluid\s+cell\s+count""").containsMatchIn(row.test) &&
+            name.endsWith("(Investigation)",true)) return true
+        // Normalise LIS suffixes BEFORE checking specimen selection codes.
+        // e.g. "Nature of Specimen(Result): 3" is not clinical value 3.
+        val field=name.replace(Regex("""(?i)\s*\(result\)\s*$"""), "")
+            .trim().replace(Regex("""\s+"""), " ")
         // Choice controls may return numeric IDs, punctuation, or meaningful
         // named values. Only explicitly recognised names are clinical facts.
         // Never guess the meaning of an LIS select value ("3", "8", "+").
-        if (name.matches(Regex(
+        if (field.matches(Regex(
                 """(?i)^(?:nature\s+of\s+specimen|physical\s+appearance|fluid\s+appearance|fluid\s+colou?r)$"""
             ))) {
             val clean=code.trim()
-            if (name.equals("Nature Of Specimen", true)) {
+            if (field.equals("Nature Of Specimen", true)) {
                 return PdfClinicalEvidence.specimen("Specimen: " + clean).isBlank()
             }
             return !Regex("""(?i)^(?:clear|hazy|turbid|cloudy|straw\s*colou?red|yellow|colourless|colorless|bloody|hemorrhagic|haemorrhagic|purulent|milky|serous|amber|red|pink|brown|transparent|opaque)$""")
