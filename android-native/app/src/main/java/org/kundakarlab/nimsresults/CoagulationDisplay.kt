@@ -27,8 +27,16 @@ object CoagulationDisplay {
     fun label(row: LabResult): String? {
         val name=normalized(row.parameter.ifBlank { row.test })
         val test=row.test
-        val aptt=isAPTTPanel(test) && !isPTPanel(test)
-        val pt=isPTPanel(test)
+        val combined=normalized(test).let { it=="ptaptt" || it=="apttpt" }
+        val explicitlyPT=name.contains("prothrombin") || name.startsWith("pt")
+        val explicitlyAPTT=name.contains("aptt") ||
+            name.contains("partialthromboplastin")
+        val aptt=isAPTTPanel(test) &&
+            (explicitlyAPTT || (!combined && !isPTPanel(test)))
+        val pt=!aptt && (isPTPanel(test) || (combined && explicitlyPT))
+        // An unqualified "Control" in a combined PT/aPTT panel is ambiguous.
+        if(combined && !explicitlyPT && !explicitlyAPTT &&
+            name!="inr" && name!="internationalnormalizedratio") return null
         if (!pt && !aptt && name != "inr" &&
             name != "internationalnormalizedratio") return null
         if(name == "inr" || name == "ptinr" ||
