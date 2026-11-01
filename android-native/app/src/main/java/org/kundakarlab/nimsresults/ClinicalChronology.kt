@@ -106,7 +106,12 @@ object ClinicalChronology {
         return parameterLabelFallback(row)
     }
     fun parameterLabelFallback(row: LabResult): String {
-        val name=row.parameter.ifBlank { row.test }
+        val original=row.parameter.ifBlank { row.test }
+        // The `(Result)` suffix is a technical HIS column name, not a
+        // clinical analyte; retain the raw field in LabResult for auditing.
+        val name=if(ClinicalReportRenderer.isUrineRoutine(row.test))
+            original.replace(Regex("""(?i)\s*\(result\)\s*$"""), "").trim()
+        else original
         val key=name.lowercase().replace(Regex("[^a-z0-9]"), "")
         return when {
             key.startsWith("prothrombintimeptcontrol") || key == "ptcontrol" ->
