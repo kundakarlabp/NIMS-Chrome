@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private val worker = Executors.newSingleThreadExecutor()
     private val inventoryWorker = Executors.newSingleThreadExecutor()
     private val diagnosticsWorker = Executors.newSingleThreadExecutor()
+    private val pdfEvidenceWorker = Executors.newSingleThreadExecutor()
      @Volatile private var pdfIndexSelection = ""
     private var pdfInspectedCount by mutableStateOf(0)
     private var pdfConfirmedCount by mutableStateOf(0)
@@ -784,6 +785,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     current.results.size.toString() + " structured fields · " +
                         htmlCount + " report-index rows · " +
                         restCount + " REST metadata records (identities separate)"
+                if (sources.any { it.url.isNotBlank() }) {
+                    startPdfIndex(requestId,cr,sources)
+                }
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -963,14 +967,53 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
-        // A report list can contain hundreds of multi-page PDFs. Fetching
-        // and parsing them automatically competes with clinical navigation
-        // and can trigger Android low-memory process termination. Keep the
-        // verified inventory; inspect PDF text only when its source is opened.
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = reports.map { it.url }.filter(String::isNotBlank).distinct().size
+        if (sessionState != SessionState.CONNECTED) return
+        val studies = ClinicalChronology.days(bundle?.results.orEmpty())
+            .flatMap { it.studies }
+        // Bounded, serial source check of only the clinically unresolved
+        // report types. Never bulk-download a patient's hundreds of PDFs.
+        val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
+            when {
+                ClinicalReportRenderer.isUrineRoutine(it.title) -> 0
+                it.title.contains("coombs",true) -> 1
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\\s+cell""")
+                    .containsMatchIn(it.title) -> 2
+                else -> 10
+            }
+        }.thenByDescending { it.date }).filter { study ->
+            ClinicalReportRenderer.isUrineRoutine(study.title) ||
+                study.title.contains("coombs",true) ||
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\\s+cell""")
+                    .containsMatchIn(study.title)
+        }.mapNotNull { study ->
+            SourceMetadataReview.pdfCandidates(study.rows,reports)
+                .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                .singleOrNull()
+        }.distinctBy { it.url }.take(3)
+        if(targets.isEmpty()) return
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            targets.forEach { report ->
+                val selected={ requestId==activeRequestId &&
+                    requestId==pdfIndexSelection && cr==activeCr &&
+                    !Thread.currentThread().isInterrupted }
+                if(!selected()) return@execute
+                val ok=enricher.inspect(report,cr,selected)
+                runOnUiThread {
+                    if(requestId!=activeRequestId || cr!=bundle?.patient?.crNo)
+                        return@runOnUiThread
+                    pdfInspectedCount++
+                    if(ok) {
+                        pdfConfirmedCount++
+                        reportTitleEpoch++
+                    } else DiagnosticEvents.record("TARGET_PDF_EVIDENCE_UNAVAILABLE")
+                }
+            }
+        }
     }
 
     private fun openReport(url: String) {
