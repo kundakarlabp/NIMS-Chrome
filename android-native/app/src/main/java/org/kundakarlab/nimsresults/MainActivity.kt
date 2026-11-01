@@ -3266,6 +3266,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     var showCultureGuidance by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
+                    var showSourceComment by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
+                    }
                     var pickPdf by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
@@ -3457,7 +3460,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     "Reported by: " + structured.reporter,
                                                     fontSize=10.sp,color=Color(0xFF486581))
                                             } else {
-                                                Text(rawValue,fontSize=12.sp,
+                                                val summary=ClinicalReadableSummaries.crp(
+                                                    study.title,row.valueText)
+                                                    ?:ClinicalReadableSummaries.hiv(
+                                                        study.title,row.valueText)
+                                                if(summary!=null) {
+                                                    Text(summary.finding,fontSize=12.sp,
+                                                        fontWeight=FontWeight.Medium,
+                                                        color=abnormalColor(row.abnormal))
+                                                    if(summary.comment.isNotBlank()) {
+                                                        TextButton(onClick={
+                                                            showSourceComment=!showSourceComment
+                                                        }) {Text(if(showSourceComment)
+                                                            "Hide laboratory comment"
+                                                            else "Read laboratory comment",
+                                                            fontSize=10.sp)}
+                                                        if(showSourceComment)
+                                                            Text(summary.comment,fontSize=11.sp,
+                                                                color=Color(0xFF486581))
+                                                    }
+                                                } else Text(rawValue,fontSize=12.sp,
                                                     color=abnormalColor(row.abnormal))
                                             }
                                             // Culture provenance is displayed with the
