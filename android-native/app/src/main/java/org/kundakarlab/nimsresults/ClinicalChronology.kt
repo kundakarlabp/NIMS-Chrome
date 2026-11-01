@@ -23,7 +23,9 @@ object ClinicalChronology {
             val display=ClinicalReportRenderer.preferredRows(source)
             Study(identity.joinToString("|"), label(identity[0]), date ?: LocalDate.MIN,
                 source, display, provenance == "Reported")
-        }.sortedWith(compareByDescending<Study> { it.date }.thenBy { it.title })
+        }.sortedWith(compareByDescending<Study> { it.date }
+            .thenBy { ClinicalResultsLayout.studyPriority(it.title) }
+            .thenBy { it.title })
         val latest=studies.firstOrNull { it.date != LocalDate.MIN }?.date
         val filtered=studies.filter { record ->
             val test=record.rows.firstOrNull()?.test.orEmpty()
@@ -58,6 +60,8 @@ object ClinicalChronology {
      * All raw rows remain intact in ClinicalBundle for separate source review. */
     fun inlineRows(study: Study): List<LabResult> = study.rows.filter { row ->
         row.valueText.isNotBlank() && !ClinicalReportRenderer.isPlaceholder(row) &&
+            !CoagulationDisplay.isAbsentValue(row) &&
+            !ClinicalResultsLayout.suppressCbcRow(row) &&
             !ClinicalPresentation.isTechnical(row) &&
             study.visible.any { it === row }
     }
@@ -99,6 +103,9 @@ object ClinicalChronology {
 
     fun parameterLabel(row: LabResult): String {
         CoagulationDisplay.label(row)?.let { return it }
+        return parameterLabelFallback(row)
+    }
+    fun parameterLabelFallback(row: LabResult): String {
         val name=row.parameter.ifBlank { row.test }
         val key=name.lowercase().replace(Regex("[^a-z0-9]"), "")
         return when {

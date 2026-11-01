@@ -65,7 +65,7 @@ class ClinicalResultsV142Test {
         val r=result(culture,"Result","B15335 CULTURE REPORT SHOWS GROWTH",
             sent="2026-04-23 10:45")
         val meta=ClinicalResultsLayout.cultureProvenance(listOf(r))
-        assertEquals(listOf("Lab B15335","Sent 2026-04-23 10:45"),meta)
+        assertEquals(listOf("Lab B15335","Sent 23-04-2026 10:45"),meta)
     }
 
     @Test fun distinctCollectionDateNeverCalledSentDate() {
@@ -74,7 +74,7 @@ class ClinicalResultsV142Test {
         val source=ReportRef(id="pdf",title=test,date="2026-04-23",
             labNumber="B15335",collectionDateTime="2026-04-22 09:00")
         val meta=ClinicalResultsLayout.cultureProvenance(listOf(r),listOf(source))
-        assertTrue(meta.contains("Source-index collected 2026-04-22 09:00"))
+        assertTrue(meta.contains("Collected 22-04-2026 09:00"))
         assertFalse(meta.any { it.startsWith("Sent") })
     }
 }
