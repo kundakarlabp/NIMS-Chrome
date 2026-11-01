@@ -263,6 +263,19 @@ object AppDiagnostics {
                         .any { it.startsWith("Sent ") }
                 })
             appendLine("diagnostics.results.reference_layout=inline_compact")
+            appendLine("diagnostics.results.culture_index_single_candidate=" +
+                studies.count { study ->
+                    study.title.contains("culture",ignoreCase=true) &&
+                    SourceMetadataReview.pdfCandidates(study.rows,sourceReports).size == 1
+                })
+            appendLine("diagnostics.results.culture_index_ambiguous=" +
+                studies.count { study ->
+                    study.title.contains("culture",ignoreCase=true) &&
+                    SourceMetadataReview.pdfCandidates(study.rows,sourceReports).size > 1
+                })
+            appendLine("diagnostics.results.urine_source_codes_need_mapping=" +
+                rows.count(ClinicalResultsLayout::urineChemistryCode))
+            appendLine("diagnostics.enquiry_source_fallback=report_index_labelled_not_orders")
 
             appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
