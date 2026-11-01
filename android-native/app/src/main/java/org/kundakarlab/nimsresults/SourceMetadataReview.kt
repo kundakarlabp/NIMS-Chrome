@@ -50,6 +50,35 @@ object SourceMetadataReview {
             }.distinctBy { it.url }.take(8).toList()
     }
 
+    fun candidates(rows: List<LabResult>, sourceIndex: List<ReportRef>): List<ReportRef> {
+        val test = rows.firstOrNull()?.test.orEmpty()
+        val key = titleKey(test)
+        val date = rows.firstNotNullOfOrNull { RecentReportDates.parse(it.date) }
+        if (key.isBlank() || date == null) return emptyList()
+        return sourceIndex.filter { report ->
+            // REST reportList contains only testname/reportdate on this HIS
+            // deployment. Such rows must not be presented as specimen-linked
+            // source records or as candidate PDFs with unknown identifiers.
+            if (report.sourceTag.startsWith("nims_rest_reportList")) return@filter false
+            if (report.url.isBlank() && report.labNumber.isBlank() &&
+                report.sampleNumber.isBlank() && report.reportNumber.isBlank())
+                return@filter false
+            if (titleKey(report.title) != key) return@filter false
+            val collection = RecentReportDates.parse(
+                report.collectionDateTime.ifBlank { report.sentDate }.ifBlank { report.date }
+            ) ?: return@filter false
+            ChronoUnit.DAYS.between(collection, date) in 0L..14L
+        // A bundled NIMS PDF can be indexed in several rows. Present a single
+        // review choice per physical PDF, never five copies of "unknown".
+        }.distinctBy { report ->
+            if (report.url.isNotBlank()) "document:" + report.url
+            else "metadata:" + report.id + "|" + report.labNumber +
+                "|" + report.sampleNumber + "|" + report.reportNumber
+        }.sortedWith(compareByDescending<ReportRef> {
+            RecentReportDates.parse(it.collectionDateTime.ifBlank { it.date })
+        }.thenBy { it.labNumber }.thenBy { it.reportNumber })
+    }
+
     private fun sameInvestigation(test: String, source: String): Boolean {
         val target = titleKey(test)
         val candidate = titleKey(source)
@@ -89,7 +118,7 @@ object SourceMetadataReview {
      * historical +/-14 day scan caused unrelated CBC/culture PDFs to appear.
      * Date alone is a review candidate, never a verified specimen link.
      */
-    fun candidates(rows: List<LabResult>, sourceIndex: List<ReportRef>): List<ReportRef> {
+    fun pdfCandidates(rows: List<LabResult>, sourceIndex: List<ReportRef>): List<ReportRef> {
         val test = rows.firstOrNull()?.test.orEmpty()
         val date = rows.firstNotNullOfOrNull { RecentReportDates.parse(it.date) }
         if (test.isBlank()) return emptyList()
