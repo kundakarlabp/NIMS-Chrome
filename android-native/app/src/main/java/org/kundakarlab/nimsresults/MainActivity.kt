@@ -3153,7 +3153,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val rows=study.rows
                     val relevant=study.visible
                     val candidates=remember(rows,current.reports) {
-                        SourceMetadataReview.candidates(rows,current.reports)
+                        SourceMetadataReview.pdfCandidates(rows,current.reports)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
                                 val sourceDate=RecentReportDates.parse(
