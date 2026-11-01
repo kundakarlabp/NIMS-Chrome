@@ -1005,7 +1005,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // Inspect at most two; inspection is evidence acquisition,
             // NOT automatic attribution of a candidate to a result.
             if(study.title.contains("coombs",true)) options.take(2)
-            else options.singleOrNull()?.let(::listOf).orEmpty()
+            else options.singleOrNull()?.let { listOf(it) } ?: emptyList()
         }.distinctBy { it.url }.take(4)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
