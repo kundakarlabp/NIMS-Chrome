@@ -888,6 +888,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("bulk.fetchMode=$historyMode")
             appendLine("bulk.historyStatus=" + historyStatus.take(100))
             append(UiDiagnosticHistory.snapshot(this@MainActivity))
+            append(EnquiryCaptureDiagnostics.snapshot(this@MainActivity))
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine(RestReportDiagnostics.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
@@ -3608,15 +3609,42 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (subview == "Enquiry orders") {
                 item {
                     Text(if (current.enquiryOrders.isEmpty())
-                        "No enquiry orders captured. NIMS Enquiry provides order, " +
-                            "sample and accession details when available."
+                        "No Enquiry orders imported. NIMS currently displays a " +
+                            "maintenance page in the Enquiry browser. " +
+                            "The separate source-report index remains available."
                     else "${current.enquiryOrders.size} imported enquiry orders · " +
                         "source identifiers preserved",
                         fontSize = 12.sp, color = Color(0xFF486581))
-                    Button(onClick = { openEnquiryReview() }) {
-                        Text(if (current.enquiryOrders.isEmpty())
-                            "Import from NIMS Enquiry" else "Update enquiry orders",
-                            fontSize = 12.sp)
+                    Row(horizontalArrangement=Arrangement.spacedBy(7.dp)) {
+                        Button(onClick = { openEnquiryReview() }) {
+                            Text(if (current.enquiryOrders.isEmpty())
+                                "Check NIMS Enquiry" else "Update enquiry orders",
+                                fontSize = 11.sp)
+                        }
+                        if(current.enquiryOrders.isEmpty()) {
+                            TextButton(onClick={ subview="Report index / PDFs" }) {
+                                Text("View source reports",fontSize=11.sp)
+                            }
+                        }
+                    }
+                    if(current.enquiryOrders.isEmpty()) {
+                        val available=current.reports.filter { ref ->
+                            !ref.sourceTag.startsWith("nims_rest_reportList") &&
+                                ref.labNumber.isNotBlank() && ref.url.isNotBlank()
+                        }
+                        Text(available.size.toString() +
+                            " original source-index entries have lab/study identifiers. " +
+                            "These are reports, NOT verified Enquiry order rows.",
+                            fontSize=11.sp,color=Color(0xFF486581))
+                        available.take(12).forEach { report ->
+                            Text(report.title+" · Lab "+report.labNumber+
+                                if(report.collectionDateTime.isBlank()) ""
+                                else " · Collected "+LabPanelMatrix.displayDateTime(
+                                    report.collectionDateTime),
+                                fontSize=10.sp,color=Color(0xFF486581))
+                        }
+                        if(available.size>12) Text("View Source reports for the complete index",
+                            fontSize=10.sp,color=Color(0xFF66788A))
                     }
                 }
                 items(current.enquiryOrders.mapIndexed { index, order -> index to order },
