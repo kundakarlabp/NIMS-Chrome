@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults"
         minSdk = 26
         targetSdk = 35
-        versionCode = 49
-        versionName = "1.0.48-native"
+        versionCode = 10049
+        versionName = "1.0.49-native"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
@@ -47,7 +47,13 @@ android {
             }
         }
         buildTypes {
+            // Local unit-test artifacts can still use a debug variant,
+            // but clinician-distributed builds MUST be non-debuggable.
             getByName("debug") {
+                signingConfig = signingConfigs.getByName("nimsPersistent")
+            }
+            getByName("release") {
+                isDebuggable = false
                 signingConfig = signingConfigs.getByName("nimsPersistent")
             }
         }
@@ -60,6 +66,15 @@ android {
 
     packaging {
         resources.excludes += setOf(
+            // Unused post-quantum-cryptography lookup tables bundled by a
+            // transitive PDFBox/BouncyCastle dependency. Clinical PDF read,
+            // page rendering, and conventional encrypted PDF functionality
+            // do not depend on SIKE or Picnic algorithm parameter tables.
+            "org/bouncycastle/pqc/crypto/picnic/lowmc.properties",
+            "org/bouncycastle/pqc/crypto/sike/p434.properties",
+            "org/bouncycastle/pqc/crypto/sike/p503.properties",
+            "org/bouncycastle/pqc/crypto/sike/p610.properties",
+            "org/bouncycastle/pqc/crypto/sike/p751.properties",
             "META-INF/DEPENDENCIES",
             "META-INF/LICENSE",
             "META-INF/LICENSE.txt",

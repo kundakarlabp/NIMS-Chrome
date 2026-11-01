@@ -1,0 +1,139 @@
+name: Android signed in-place update (original key only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-signed-release
+  cancel-in-progress: false
+
+jobs:
+  signed-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NIMS_SIGNING_KEYSTORE_B64: ${{ secrets.NIMS_SIGNING_KEYSTORE_B64 }}
+      NIMS_SIGNING_STORE_PASSWORD: ${{ secrets.NIMS_SIGNING_STORE_PASSWORD }}
+      NIMS_SIGNING_KEY_ALIAS: ${{ secrets.NIMS_SIGNING_KEY_ALIAS }}
+      NIMS_SIGNING_KEY_PASSWORD: ${{ secrets.NIMS_SIGNING_KEY_PASSWORD }}
+      NIMS_EXPECTED_INSTALLED_CERT_SHA256: ${{ secrets.NIMS_INSTALLED_CERT_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Require original installed-app signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Signed patient release must run from main branch only."
+            exit 1
+          fi
+          for var in NIMS_SIGNING_KEYSTORE_B64 NIMS_SIGNING_STORE_PASSWORD \
+            NIMS_SIGNING_KEY_ALIAS NIMS_SIGNING_KEY_PASSWORD \
+            NIMS_EXPECTED_INSTALLED_CERT_SHA256; do
+            if [[ -z "${!var}" ]]; then
+              echo "::error::$var is missing. No signed release will be generated."
+              exit 1
+            fi
+          done
+          umask 077
+          keystore="$RUNNER_TEMP/original-installed-app-signer.jks"
+          printf '%s' "$NIMS_SIGNING_KEYSTORE_B64" | base64 --decode > "$keystore"
+          test -s "$keystore"
+          echo "NIMS_SIGNING_STORE_FILE=$keystore" >> "$GITHUB_ENV"
+          # Confirm that the supplied private key's signing certificate is
+          # the one from the actual installed app, not a newly generated key.
+          actual="$(keytool -list -v -keystore "$keystore" \
+            -storepass "$NIMS_SIGNING_STORE_PASSWORD" \
+            -alias "$NIMS_SIGNING_KEY_ALIAS" 2>/dev/null |
+            sed -n 's/^.*SHA256: //p' | head -n 1 |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [[ -z "$actual" || "$actual" != "$expected" ]]; then
+            echo "::error::Supplied signer certificate does not match the currently installed app."
+            exit 1
+          fi
+          echo "::notice::Original installed-app certificate fingerprint matched."
+
+      - name: Run tests and assemble with verified persistent signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check android-native/app/src/main/assets/nims_engine.js
+          node --test android-native/tests/nims_engine_batches.test.cjs
+          gradle -p android-native clean test lintRelease assembleRelease --stacktrace --console=plain
+
+      - name: Verify APK certificate, package and version, generate release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="android-native/app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          unzip -t "$apk" >/dev/null
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          signer="$(find "$sdk/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n 1)"
+          aapt="$(find "$sdk/build-tools" -maxdepth 2 -name aapt -type f | sort -V | tail -n 1)"
+          test -x "$signer"
+          test -x "$aapt"
+          "$signer" verify --verbose "$apk"
+          # Fail closed if the release APK exposes android:debuggable=true.
+          manifest="$("$aapt" dump xmltree "$apk" AndroidManifest.xml)"
+          if printf '%s\\n' "$manifest" |
+            grep -Eq 'android:debuggable.*(0xffffffff|0x1)([[:space:]]|$)'; then
+            echo "::error::Release APK is debuggable; refuse distribution."
+            exit 1
+          fi
+          actual="$("$signer" verify --print-certs "$apk" |
+            sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [[ -z "$actual" || "$actual" != "$expected" ]]; then
+            echo "::error::APK signature mismatched the installed-app certificate."
+            exit 1
+          fi
+          info="$("$aapt" dump badging "$apk" | sed -n '1p')"
+          [[ "$info" == *"name='org.kundakarlab.nimsresults'"* ]] || exit 1
+          version="$(printf '%s\n' "$info" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+          version_code="$(printf '%s\n' "$info" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+          test -n "$version"
+          [[ "$version_code" =~ ^[0-9]+$ ]]
+          mkdir -p dist
+          cp "$apk" "dist/NIMS-Results-${version}-SIGNED.apk"
+          {
+            printf 'package=org.kundakarlab.nimsresults\n'
+            printf 'versionName=%s\n' "$version"
+            printf 'versionCode=%s\n' "$version_code"
+            printf 'sourceCommit=%s\n' "$GITHUB_SHA"
+            printf 'signerSha256=%s\n' "$actual"
+            printf 'apkSha256='
+            sha256sum "dist/NIMS-Results-${version}-SIGNED.apk" | cut -d' ' -f1
+            printf 'status=certificate-matched-to-configured-installed-certificate\n'
+            printf 'device-install-upgrade-test=not-run\n'
+          } > dist/APK_BUILD_IDENTITY.txt
+          echo "NIMS_SIGNED_ARTIFACT_NAME=NIMS-Results-${version}-ORIGINAL-SIGNER-VERIFIED" >> "$GITHUB_ENV"
+          echo "::notice::APK and original signer verified. No on-device update test was run."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NIMS_SIGNED_ARTIFACT_NAME }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Erase temporary signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/original-installed-app-signer.jks"
