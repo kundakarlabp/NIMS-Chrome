@@ -23,27 +23,68 @@ object PdfClinicalEvidence {
         }.distinct()
         return mapped.singleOrNull().orEmpty()
     }
-    fun coombs(test:String,document:String):String? {
-        // A signed report may place Result on a separate line from the test.
-        PdfClinicalSummaries.coombs(test,document)?.let { return it }
-        val expected=when {
-            test.contains("indirect",true) -> "indirect"
-            test.contains("direct",true) -> "direct"
+    /**
+     * Resolve DAT and IAT independently, even when both sections are in one
+     * CR-verified PDF. Never infer results from com1/com2/dropdown codes.
+     * Reject conflicting or unlabelled conclusions.
+     */
+    fun coombs(test: String, document: String): String? {
+        val expected = when {
+            Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT)\b""")
+                .containsMatchIn(test) -> "indirect"
+            Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT)\b""")
+                .containsMatchIn(test) -> "direct"
             else -> return null
         }
-        val other=if(expected=="direct") "indirect" else "direct"
-        val section=Regex(
-            """(?is)(?:^|\n)\s*"""+expected+
-                """\s+(?:coombs|antiglobulin)(?:\s+test)?(?:\s*\(GEL\))?""" +
-                """\s*(?:[:=\-]|\r?\n|\s)+\s*(?:(?:Result|Observation)\s*[:=\-]?\s*)?""" +
-                """(negative|positive|non[\s-]*reactive|reactive|weak\s+positive)\b"""
-        ).findAll(document).map { it.groupValues[1].trim() }
-            .distinctBy { it.lowercase() }.toList()
-        if(section.size!=1) return null
-        // Avoid using conclusions from a document with both coombs modalities
-        // when the parts cannot be individually established.
-        if(Regex("""(?i)\b"""+other+"""\s+(?:coombs|antiglobulin)""")
-                .containsMatchIn(document)) return null
-        return section.single().replaceFirstChar { it.uppercase() }
+        if (document.isBlank()) return null
+        val source = document.replace("\r\n", "\n")
+        // Heading must identify the specific modality: a "Result: Negative"
+        // elsewhere on the page is not sufficient for DAT or IAT.
+        val heading = Regex(
+            """(?im)^\s*(?:\d+[.)]\s*)?(direct|indirect)\s+""" +
+                """(?:coombs|antiglobulin)(?:\s+test)?""" +
+                """(?:\s*\(\s*(?:GEL|DAT|IAT)\s*\))?\b"""
+        )
+        val parts = heading.findAll(source).toList()
+        if (parts.isEmpty()) return null
+        val word = Regex("""(?i)\b(weak\s+positive|non[\s-]*reactive|negative|positive|reactive)\b""")
+        val answers = mutableListOf<String>()
+        parts.forEachIndexed { index, match ->
+            if (!match.groupValues[1].equals(expected, true)) return@forEachIndexed
+            val end = parts.getOrNull(index + 1)?.range?.first ?: source.length
+            // A section is limited to its own result header and adjacent
+            // output; not distant reference ranges, comments or later tests.
+            val section = source.substring(match.range.last + 1, end)
+                .take(650).lines().take(9)
+            val observations = mutableListOf<String>()
+            section.forEachIndexed { n, line ->
+                val clean = line.trim()
+                if (clean.isEmpty()) return@forEachIndexed
+                if (Regex("""(?i)^(?:reference|normal|method|remarks?|comments?|interpretation\s+guide)\b""")
+                        .containsMatchIn(clean)) return@forEachIndexed
+                val labelled = Regex(
+                    """(?i)^(?:[:=\-]\s*)?(?:(?:final\s+)?(?:result|observation|interpretation|finding)\s*[:=\-]?\s*)?""" +
+                        """(weak\s+positive|non[\s-]*reactive|negative|positive|reactive)\s*[.]?$"""
+                ).find(clean)
+                if (labelled != null) observations += labelled.groupValues[1]
+                else if (n < 5) {
+                    // Report tables sometimes put "Result" on one line
+                    // and the value immediately below it.
+                    val prior = section.getOrNull(n - 1)?.trim().orEmpty()
+                    if (Regex("""(?i)^(?:result|observation|interpretation)\s*[:=\-]?$""")
+                            .matches(prior)) {
+                        word.find(clean)?.groupValues?.get(1)?.let(observations::add)
+                    }
+                }
+            }
+            val unique = observations.map {
+                it.trim().replace(Regex("""\s+"""), " ").lowercase()
+            }.distinct()
+            if (unique.size == 1) answers += unique.single()
+        }
+        val uniqueResults = answers.distinct()
+        if (uniqueResults.size != 1) return null
+        return uniqueResults.single().replaceFirstChar { it.uppercase() }
     }
+
 }
