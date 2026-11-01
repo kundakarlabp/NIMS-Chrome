@@ -65,7 +65,7 @@ class ClinicalResultsV142Test {
         val r=result(culture,"Result","B15335 CULTURE REPORT SHOWS GROWTH",
             sent="2026-04-23 10:45")
         val meta=ClinicalResultsLayout.cultureProvenance(listOf(r))
-        assertEquals(listOf("Lab B15335","Sent 2026-04-23 10:45"),meta)
+        assertEquals(listOf("Lab B15335","Sent 23-04-2026 10:45"),meta)
     }
 
     @Test fun distinctCollectionDateNeverCalledSentDate() {
