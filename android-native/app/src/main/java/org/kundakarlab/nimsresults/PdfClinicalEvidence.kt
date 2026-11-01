@@ -113,23 +113,23 @@ object PdfClinicalEvidence {
      * it is explicitly labelled in a CR-verified source PDF.
      */
     fun coombsControl(test: String, document: String): String? {
-        if (!Regex("""(?i)\\b(?:direct\\s+(?:coombs|antiglobulin)|DAT|DCT)\\b""")
+        if (!Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
                 .containsMatchIn(test) ||
-            Regex("""(?i)\\b(?:indirect\\s+(?:coombs|antiglobulin)|IAT|ICT)\\b""")
+            Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT|ICT)\b""")
                 .containsMatchIn(test)) return null
-        val source=document.replace("\\r\\n","\\n")
+        val source=document.replace("\r\n","\n")
         val start=Regex(
-            """(?im)^\\s*(?:direct\\s+(?:coombs|antiglobulin)(?:\\s+test)?|DAT|DCT)""" +
-                """(?:\\s*\\(\\s*(?:GEL|DAT|DCT)\\s*\\))?(?=\\s|[:=\\-|]|$)"""
+            """(?im)^\s*(?:direct\s+(?:coombs|antiglobulin)(?:\s+test)?|DAT|DCT)""" +
+                """(?:\s*\(\s*(?:GEL|DAT|DCT)\s*\))?(?=\s|[:=\-|]|$)"""
         ).find(source) ?: return null
         val following=Regex(
-            """(?im)^\\s*(?:direct|indirect)\\s+(?:coombs|antiglobulin)\\b|""" +
-                """^\\s*(?:DAT|DCT|IAT|ICT)\\b"""
+            """(?im)^\s*(?:direct|indirect)\s+(?:coombs|antiglobulin)\b|""" +
+                """^\s*(?:DAT|DCT|IAT|ICT)\b"""
         ).find(source,start.range.last+1)?.range?.first ?: source.length
         val section=source.substring(start.range.last+1,following).take(500)
         val controls=Regex(
-            """(?i)\\bcontrol\\s*[:=\\-]?\\s*(?:\\|\\s*)?""" +
-                """([1-4]\\s*\\+|weak\\s+positive|traces?|negative|positive|neg)\\b?"""
+            """(?i)\bcontrol\s*[:=\-]?\s*(?:\|\s*)?""" +
+                """([1-4]\s*\+|weak\s+positive|traces?|negative|positive|neg)"""
         ).findAll(section).map { it.groupValues[1].filterNot(Char::isWhitespace) }
             .distinct().toList()
         return controls.singleOrNull()
@@ -137,8 +137,8 @@ object PdfClinicalEvidence {
 
     /** Signed blood-bank remarks, shown once under DAT (not duplicated on IAT). */
     fun coombsComment(document: String): String? {
-        val normalized=document.replace("\\r\\n","\\n")
-        val matched=Regex("""(?im)^\\s*(?:\\|\\s*)?comments?\\s*[:=]\\s*([^\\r\\n]*)""")
+        val normalized=document.replace("\r\n","\n")
+        val matched=Regex("""(?im)^\s*(?:\|\s*)?comments?\s*[:=]\s*([^\r\n]*)""")
             .find(normalized) ?: return null
         val onLine=matched.groupValues[1].trim().trim('|').trim()
         val next=normalized.substring(matched.range.last+1)
@@ -146,7 +146,7 @@ object PdfClinicalEvidence {
             .firstOrNull(String::isNotBlank).orEmpty()
         val text=onLine.ifBlank { next }
         if(text.isBlank() || text.length>250 ||
-            Regex("""(?i)^(?:end of (?:the )?report|page\\s+\\d+|validated by)\\b""")
+            Regex("""(?i)^(?:end of (?:the )?report|page\s+\d+|validated by)\b""")
                 .containsMatchIn(text)) return null
         return text
     }
