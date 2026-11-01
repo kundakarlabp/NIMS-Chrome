@@ -25,7 +25,9 @@ object ClinicalResultsLayout {
             t == "ptaptt" || t == "inr"
         if (!isLft && !isCbc && !isCoag) return rows
         return rows.withIndex().sortedWith(compareBy<IndexedValue<LabResult>> {
-            val p = key(it.value.parameter)
+            // Order by the normalized clinical display label so NIMS
+            // variants such as "Sr. Alk. Phosphatase" still sort as ALP.
+            val p = key(ClinicalChronology.parameterLabel(it.value))
             when {
                 isLft -> when {
                     p.contains("bilirubin") && p.contains("total") -> 0
@@ -136,16 +138,24 @@ object ClinicalResultsLayout {
             ?: narrative.map { it.sentDate }.firstOrNull(String::isNotBlank).orEmpty()
         val reported = rows.map { it.reportedDate.trim() }.firstOrNull(String::isNotBlank)
             ?: narrative.map { it.reportedDate }.firstOrNull(String::isNotBlank).orEmpty()
-        val match = sourceIndex.singleOrNull { it.labNumber.equals(lab, true) && lab.isNotBlank() }
+        // This list is already filtered by lab accession or same-date/title
+        // in SourceMetadataReview.pdfCandidates. Never borrow provenance
+        // when there are multiple candidates (bottles/stages may differ).
+        val match = sourceIndex.singleOrNull()?.takeIf { candidate ->
+            lab.isBlank() || candidate.labNumber.equals(lab,true)
+        }
         val trueSent = sent.ifBlank { match?.sentDate.orEmpty() }
         return listOfNotNull(
-            lab.takeIf(String::isNotBlank)?.let { "Lab " + it },
-            sample.takeIf(String::isNotBlank)?.let { "Sample " + it },
+            lab.takeIf(String::isNotBlank)?.let { "Lab " + it }
+                ?: match?.labNumber?.takeIf(String::isNotBlank)
+                    ?.let { "Source-index lab " + it },
+            sample.takeIf(String::isNotBlank)?.let { "Sample " + it }
+                ?: match?.sampleNumber?.takeIf(String::isNotBlank)
+                    ?.let { "Source-index sample " + it },
             trueSent.takeIf(String::isNotBlank)?.let { "Sent " + it },
             reported.takeIf(String::isNotBlank)?.let { "Reported " + it },
-            match?.collectionDateTime?.takeIf {
-                it.isNotBlank() && sent.isBlank() && match.sentDate.isBlank()
-            }?.let { "Source-index collected " + it }
+            match?.collectionDateTime?.takeIf { it.isNotBlank() }
+                ?.let { "Source-index collected " + it }
         )
     }
 
