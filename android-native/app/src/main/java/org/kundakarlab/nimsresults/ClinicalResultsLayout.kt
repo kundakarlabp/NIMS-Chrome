@@ -298,7 +298,10 @@ object ClinicalResultsLayout {
         bloodCulture: Boolean = false
     ): List<String> {
         val metadata = microbiologyProvenance(rows, candidates, verified, bloodCulture)
-        val fromUnprovenPdf = verified == null &&
+        // A PDF's patient CR alone never proves its specimen belongs to this
+        // source row. Even a CR-verified PDF remains a candidate without an
+        // accession independently present in the structured/narrative result.
+        val fromUnprovenPdf =
             rows.none { it.labNumber.isNotBlank() } &&
             rows.none { MicrobiologyNarrativeMetadata.extract(it)?.labNumber?.isNotBlank() == true } &&
             candidates.size == 1
