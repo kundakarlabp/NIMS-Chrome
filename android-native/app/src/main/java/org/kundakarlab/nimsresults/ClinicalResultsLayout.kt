@@ -57,7 +57,8 @@ object ClinicalResultsLayout {
                     p.contains("monocyte") -> 4
                     p.contains("eosinophil") -> 5
                     p.contains("basophil") -> 6
-                    p == "platelets" || p.contains("plateletcount") -> 7
+                    (p == "platelets" || p.contains("plateletcount")) &&
+                        it.value.valueText.trim().toDoubleOrNull() != null -> 7
                     p == "redcellcount" || p == "rbccount" || p == "rbc" -> 8
                     p == "pcv" || p.contains("hematocrit") -> 9
                     p == "mcv" -> 10
