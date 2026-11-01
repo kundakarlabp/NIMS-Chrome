@@ -74,7 +74,7 @@ class ClinicalResultsV142Test {
         val source=ReportRef(id="pdf",title=test,date="2026-04-23",
             labNumber="B15335",collectionDateTime="2026-04-22 09:00")
         val meta=ClinicalResultsLayout.cultureProvenance(listOf(r),listOf(source))
-        assertTrue(meta.contains("Source-index collected 2026-04-22 09:00"))
+        assertTrue(meta.contains("Collected 22-04-2026 09:00"))
         assertFalse(meta.any { it.startsWith("Sent") })
     }
 }
