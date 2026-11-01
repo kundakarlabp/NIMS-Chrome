@@ -60,4 +60,22 @@ object PdfClinicalSummaries {
             antibodyScreen = antibodyResults.singleOrNull().orEmpty()
         )
     }
+    /** Require explicitly labelled direct/indirect antiglobulin result in a
+     * patient-verified PDF; an anonymous dropdown number is never interpreted. */
+    fun coombs(test:String, text:String):String? {
+        val mode=when {
+            test.contains("indirect",true) || test.contains("IAT",true) -> "indirect"
+            test.contains("direct",true) || test.contains("DAT",true) -> "direct"
+            else -> return null
+        }
+        val label=if(mode=="indirect")
+            """(?:indirect\s+coombs(?:\s+test)?|indirect\s+antiglobulin(?:\s+test)?|\bIAT\b)"""
+            else """(?:direct\s+coombs(?:\s+test)?|direct\s+antiglobulin(?:\s+test)?|\bDAT\b)"""
+        val re=Regex("""(?im)^\s*(?:\d+[.)]\s*)?"""+label+
+            """(?:\s*\(\s*GEL\s*\))?\s*[:=\-]?\s*(negative|positive|non[\s-]*reactive|reactive|weak\s+positive)\b""")
+        val results=re.findAll(text).map { it.groupValues[1].trim() }
+            .distinctBy { it.lowercase() }.toList()
+        return results.singleOrNull()
+    }
+
 }
