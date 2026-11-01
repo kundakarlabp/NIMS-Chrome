@@ -10,11 +10,14 @@ object PdfUrineSummaries {
     private val fields=listOf(
         "pH" to Regex("""(?i)^\s*(?:urine\s*)?p\s*H\s*[:=]?\s*(\d(?:\.\d+)?)\s*(?:$|\s|\t)"""),
         "Specific gravity" to Regex("""(?i)^\s*(?:urine\s*)?specific\s+gravity\s*[:=]?\s*(1\.\d{2,3})\s*(?:$|\s|\t)"""),
-        "Ketones" to Regex("""(?i)^\s*(?:urine\s*)?ketones?\s*[:=]?\s*(negative|positive|nil|trace|small|moderate|large|\+{1,4})(?=\s|$)"""),
+        "Ketones" to Regex("""(?i)^\s*(?:urine\s*)?ketones?(?:\s*\(urine\))?\s*[:=\-]?\s*(negative|positive|nil|absent|trace|small|moderate|large|\+{1,4}|\+/-|\-)(?=\s|$)"""),
         "Protein" to Regex("""(?i)^\s*(?:urine\s*)?protein\s*[:=]?\s*(negative|positive|nil|trace|\+{1,4}|\d+(?:\.\d+)?\s*(?:mg/dl|g/l))(?=\s|$)"""),
         "Nitrite" to Regex("""(?i)^\s*(?:urine\s*)?nitrites?\s*[:=]?\s*(negative|positive|nil)\b"""),
-        "Glucose" to Regex("""(?i)^\s*(?:urine\s*)?(?:(?:sugar\s*[:=]?\s*\()?glucose\)?|glucose)\s*[:=]?\s*(negative|positive|nil|trace|\+{1,4})(?=\s|$)""")
+        "Glucose" to Regex("""(?i)^\s*(?:urine\s*)?(?:(?:sugar\s*[:=]?\s*\()?glucose\)?|glucose|sugar)(?:\s*\(urine\))?\s*[:=\-]?\s*(negative|positive|nil|absent|trace|\+{1,4}|\+/-|\-)(?=\s|$)""")
     )
+    /** Preserve reported words/symbols; never translate arbitrary HIS codes.
+     * A single identifiable PDF cell must have one non-conflicting conclusion.
+     */
     fun extract(text:String):List<Field> {
         val result=mutableListOf<Field>()
         val lines=text.replace("\r\n","\n").lines()
