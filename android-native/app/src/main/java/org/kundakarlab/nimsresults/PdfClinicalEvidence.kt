@@ -16,7 +16,15 @@ object PdfClinicalEvidence {
         val raw=specimenRegex.findAll(text).map { it.groupValues[1].trim() }
             .filter(String::isNotBlank).toList()
         val mapped=raw.mapNotNull { label ->
-            val normalized=label.substringBefore('/').trim().lowercase()
+            val elements=label.split('/').map(String::trim)
+            // "Pleural Fluid/P5631" is a named sample plus accession;
+            // "CSF/Pleural/Ascitic" is a generic panel heading, NOT a sample.
+            if (elements.drop(1).any { item ->
+                    specimenTypes.any { (name,_) ->
+                        item.equals(name,true) || item.startsWith(name+" ",true)
+                    }
+                }) return@mapNotNull null
+            val normalized=elements.first().lowercase()
             specimenTypes.firstOrNull { (key,_) ->
                 normalized==key || normalized.startsWith(key+" ")
             }?.second
