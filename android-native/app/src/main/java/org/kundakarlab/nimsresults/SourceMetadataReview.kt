@@ -150,7 +150,14 @@ object SourceMetadataReview {
             val candidateDate = RecentReportDates.parse(
                 report.collectionDateTime.ifBlank { report.sentDate }.ifBlank { report.date }
             )
-            candidateDate != null && candidateDate == date
+            if(candidateDate == null) return@filter false
+            if(ClinicalReportRenderer.isMicrobiologyInvestigation(test) &&
+                test.contains("culture",ignoreCase=true)) {
+                // Culture FINAL results may be recorded days after specimen
+                // collection. A title+set+bottle+stage match in the same
+                // 0–7 day episode can be offered for review, never auto-linked.
+                ChronoUnit.DAYS.between(candidateDate,date) in 0L..7L
+            } else candidateDate == date
         }.sortedWith(compareBy<ReportRef> { it.title }.thenBy { it.labNumber })
     }
 
