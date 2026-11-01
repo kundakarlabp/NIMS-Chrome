@@ -3312,9 +3312,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
-                    val microIndex=remember(rows,candidates,verifiedHeader) {
-                        if(isMicro) ClinicalResultsLayout.microbiologyProvenance(
-                            rows,candidates,verifiedHeader,
+                    val microIndex=remember(rows,candidates,verifiedHeader,study.date) {
+                        if(isMicro) ClinicalResultsLayout.compactMicrobiologyHeader(
+                            rows,candidates,verifiedHeader,study.date,
                             bloodCulture=isCulture && study.title.contains("blood",true))
                         else emptyList()
                     }
@@ -3396,14 +3396,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 else "Specimen type not identified in available source data",
                                 fontSize=10.sp,color=if(verifiedFluid.isNotBlank())
                                     Color(0xFF486581) else Color(0xFF875B22))
-                            if(isMicro && !isCulture && microIndex.isNotEmpty())
-                                Text(microIndex.joinToString(" · "),fontSize=10.sp,
-                                    color=Color(0xFF486581))
-                            if(isCulture && microIndex.isNotEmpty() &&
-                                inlineRows.none {
-                                    ClinicalChronology.isNarrativeRow(study,it)
-                                }) Text(microIndex.joinToString(" · "),
-                                fontSize=10.sp,color=Color(0xFF486581))
+                            // One identity line + one collection/sent/report line.
+                            // Never repeat the day-heading's reported date or
+                            // attach a separate report-status metadata footer.
+                            if(isMicro) microIndex.forEach { headerLine ->
+                                Text(headerLine,fontSize=9.sp,
+                                    color=Color(0xFF486581),maxLines=2,
+                                    lineHeight=11.sp)
+                            }
                             if(verifiedCoombs!=null) {
                                 Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
                                     fontWeight=FontWeight.Medium,
@@ -3469,30 +3469,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 """(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology|echocardiography|x.?ray|pet|fdg|nuclear|cardiac\s+study)\b"""
                                                 ).containsMatchIn(study.title)
                                             if(culture != null) {
-                                                val cultureInfo = listOfNotNull(
-                                                    culture.set.takeIf(String::isNotBlank)
-                                                        ?.let { "Set " + it },
-                                                    culture.bottle.takeIf(String::isNotBlank)
-                                                        ?.let { "Bottle " + it },
-                                                    culture.stage.takeIf { it != "Stage not supplied" },
-                                                    )
-                                                val reportedFromPdf=verifiedHeader?.reportedDate
-                                                    ?.takeIf(String::isNotBlank)?.let {
-                                                        "Reported "+LabPanelMatrix.displayDateTime(it)
-                                                    }
-                                                val collectedFromPdf=verifiedHeader?.collectionDate
-                                                    ?.takeIf { it.isNotBlank() &&
-                                                        microIndex.none { x -> x.contains("Collected ") } }
-                                                    ?.let {
-                                                        "Collected "+LabPanelMatrix.displayDateTime(it)
-                                                    }
-                                                val fullInfo=(cultureInfo + microIndex +
-                                                    listOfNotNull(collectedFromPdf,reportedFromPdf))
-                                                    .distinct()
-                                                if(fullInfo.isNotEmpty()) Text(
-                                                    fullInfo.joinToString(" · "),
-                                                    fontSize=10.sp,fontWeight=FontWeight.Medium,
-                                                    color=Color(0xFF24496A))
                                                 val cultureSections=if(study.title.contains(
                                                         "urine",true))
                                                     ClinicalReadableSummaries.urineCulture(
