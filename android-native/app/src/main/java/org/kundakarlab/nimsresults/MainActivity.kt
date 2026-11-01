@@ -3308,8 +3308,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
                         else emptyList()
                     }
-                    val verifiedCoombs=remember(study.title,candidatePart,rows) {
+                    val verifiedCoombs=remember(study.title,candidatePart,
+                        candidateGeometry,rows) {
                         ClinicalSourceQualitative.coombs(rows)
+                            ?: PdfClinicalEvidence.coombs(study.title,candidateGeometry)
                             ?: PdfClinicalEvidence.coombs(study.title,candidatePart)
                     }
                     val isFluidStudy=remember(study.title) {
@@ -3351,16 +3353,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         } else inlineRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
-                    val microSpecimen=remember(rows,candidates,verifiedHeader,
-                        candidatePart,study.date) {
-                        if(isMicro) MicrobiologyReportDisplay.specimen(
-                            rows,candidates.singleOrNull(),verifiedHeader,
-                            candidatePart,study.date)
-                        else ""
+                    val resolvedMicro=remember(rows,candidates,reportTitleEpoch,
+                        current.patient.crNo,study.date) {
+                        if(isMicro) MicrobiologyReportDisplay.uniqueReport(
+                            rows,candidates,current.patient.crNo,study.date)
+                        else null
                     }
-                    val microLine=remember(rows,candidates,verifiedHeader) {
+                    val microSpecimen=resolvedMicro?.specimen.orEmpty()
+                    val microLine=remember(rows,candidates,verifiedHeader,resolvedMicro) {
                         if(isMicro) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
-                            rows,candidates,verifiedHeader)
+                            rows,resolvedMicro?.let { listOf(it.report) } ?: candidates,
+                            resolvedMicro?.header ?: verifiedHeader)
                         else ""
                     }
                     val urineCodes=remember(study.rows) {
