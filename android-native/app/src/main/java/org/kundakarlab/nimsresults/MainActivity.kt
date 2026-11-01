@@ -3499,8 +3499,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             // PDF-source verification details in diagnostics.
                             if(isMicro && microLine.isNotBlank())
                                 Text(microLine,fontSize=9.sp,
-                                    color=Color(0xFF486581),maxLines=1,
-                                    softWrap=false,
+                                    color=Color(0xFF486581),maxLines=2,
+                                    softWrap=true,
                                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
                             if(verifiedCoombs!=null &&
