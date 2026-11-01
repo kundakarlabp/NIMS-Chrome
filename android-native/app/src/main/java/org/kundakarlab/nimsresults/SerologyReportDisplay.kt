@@ -24,6 +24,19 @@ object SerologyReportDisplay {
     private val dengueIg=Regex("""(?i)\b(?:anti\s+)?dengue(?:\s+virus)?\s+(IgG|IgM)\b""")
     private val dengueNs1=Regex("""(?i)\b(?:dengue(?:\s+virus)?\s+)?NS1\s*(?:Ag|antigen)?\b""")
     private val leptospira=Regex("""(?i)\bleptospira\s+IgM\b""")
+    private fun assay(test:String,section:String):String {
+        val full=section+" "+test
+        return when {
+            Regex("""(?i)\bdot\s*blot\s*ELISA\b""").containsMatchIn(full) ->
+                "Dot blot ELISA"
+            Regex("""(?i)\bELFA\b""").containsMatchIn(full) -> "ELFA"
+            Regex("""(?i)\bELISA\b""").containsMatchIn(full) -> "ELISA"
+            else -> ""
+        }
+    }
+    private fun titled(label:String,test:String,section:String):String =
+        label+assay(test,section).takeIf(String::isNotBlank)
+            ?.let { " ("+it+")" }.orEmpty()
 
     fun isSerology(test:String):Boolean =
         Regex("""(?i)\b(?:dengue|hiv|hcv|hepatitis\s+c|leptospira|NS1)\b""")
@@ -39,22 +52,22 @@ object SerologyReportDisplay {
             return dengue.mapNotNull { m ->
                 val next=dengue.firstOrNull { it.range.first > m.range.first }
                     ?.range?.first ?: source.length
-                finding("Dengue "+m.groupValues[1]+" (ELFA)",
-                    source.substring(m.range.last+1,next))
+                val section=source.substring(m.range.last+1,next)
+                finding(titled("Dengue "+m.groupValues[1],test,section),section)
             }
         }
         if(dengueNs1.containsMatchIn(source) || test.contains("NS1",true))
-            return finding("Dengue NS1 Ag (ELFA)",source)?.let(::listOf)
+            return finding(titled("Dengue NS1 Ag",test,source),source)?.let(::listOf)
                 ?: emptyList()
         if(leptospira.containsMatchIn(source) ||
             test.contains("leptospira",true))
-            return finding("Leptospira IgM (ELISA)",source)?.let(::listOf)
+            return finding(titled("Leptospira IgM",test,source),source)?.let(::listOf)
                 ?: emptyList()
         if(Regex("""(?i)\bHCV\b|hepatitis\s+c""").containsMatchIn(test))
-            return finding("HCV antibody",source)?.let(::listOf)
+            return finding(titled("HCV antibody",test,source),source)?.let(::listOf)
                 ?: emptyList()
         if(Regex("""(?i)\bHIV\b""").containsMatchIn(test))
-            return finding("HIV",source)?.let(::listOf)
+            return finding(titled("HIV",test,source),source)?.let(::listOf)
                 ?: emptyList()
         return emptyList()
     }
