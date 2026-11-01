@@ -1465,7 +1465,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         ) {
             // Prioritize bedside review destinations; preserve all legacy screens.
             listOf(ResultsTab.OVERVIEW, ResultsTab.ALL, ResultsTab.LABS,
-                ResultsTab.ID, ResultsTab.MICROBIOLOGY, ResultsTab.RECENT,
+                ResultsTab.ID, ResultsTab.RECENT,
                 ResultsTab.TRENDS).forEach { tab ->
                 val short = when (tab) {
                     ResultsTab.OVERVIEW -> "Summary"
@@ -1696,7 +1696,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(modifier = Modifier.weight(1f),
-                        onClick = { microFilter = "Positive"; selectedTab = ResultsTab.MICROBIOLOGY }) {
+                        onClick = {
+                            allResultsSourceFilter = "Microbiology"
+                            selectedTab = ResultsTab.ALL
+                        }) {
                         Text("Positive cultures (" + positives.size + ")", fontSize = 11.sp)
                     }
                     OutlinedButton(modifier = Modifier.weight(1f),
@@ -1755,8 +1758,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 val result = rows.firstOrNull { it.parameter.equals("Result", true) }
                                     ?: rows.first()
                                 TextButton(onClick = {
-                                    microFilter = "Positive"
-                                    selectedTab = ResultsTab.MICROBIOLOGY
+                                    allResultsSourceFilter = "Microbiology"
+                                    selectedTab = ResultsTab.ALL
                                 }) {
                                     Text(key.first + " · " + key.second + ": " +
                                         result.valueText.take(75),
@@ -3143,8 +3146,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             chronology.forEach { day ->
                 item(key="date|"+day.date.toString()) {
                     Text(if(day.date==LocalDate.MIN) "Date unavailable"
-                        else LabPanelMatrix.displayDate(day.date.toString()) +
-                            " · NIMS source date",
+                        else LabPanelMatrix.displayDate(day.date.toString()),
                         fontSize=12.sp,fontWeight=FontWeight.Bold,
                         color=Color(0xFF102A43),
                         modifier=Modifier.padding(top=5.dp,bottom=2.dp))
@@ -3167,6 +3169,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val inlineRows=remember(study.rows,study.visible) {
                         ClinicalResultsLayout.ordered(study.title,
                             ClinicalChronology.inlineRows(study))
+                    }
+                    val cultureIndex = remember(rows,candidates) {
+                        if(ClinicalPresentation.isCulture(study.title))
+                            ClinicalResultsLayout.cultureProvenance(rows,candidates)
+                        else emptyList()
                     }
                     val urineCodes=remember(study.rows) {
                         study.rows.filter(ClinicalResultsLayout::urineChemistryCode)
@@ -3193,7 +3200,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(!ClinicalResultsLayout.omitRedundantHeading(
                                         study.title,inlineRows)) {
                                     Text(study.title,fontSize=13.sp,
-                                        fontWeight=FontWeight.SemiBold,
+                                        fontWeight=FontWeight.Bold,
                                         color=Color(0xFF102A43),
                                         modifier=Modifier.weight(1f))
                                 } else {
@@ -3229,6 +3236,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     ?.let{"Sample "+it}
                             )
                             if(provenance.isNotEmpty()) Text(provenance.joinToString(" · "),
+                                fontSize=10.sp,color=Color(0xFF486581))
+                            if(cultureIndex.isNotEmpty() &&
+                                inlineRows.none {
+                                    ClinicalChronology.isNarrativeRow(study,it)
+                                }) Text(cultureIndex.joinToString(" · "),
                                 fontSize=10.sp,color=Color(0xFF486581))
                             if(inlineRows.isEmpty()) {
                                 Text("No readable result value was supplied in the " +
@@ -3267,9 +3279,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     culture.stage.takeIf { it != "Stage not supplied" },
                                                     culture.accession.takeIf(String::isNotBlank)
                                                         ?.let { "Lab " + it })
-                                                val provenance = ClinicalResultsLayout
-                                                    .cultureProvenance(rows,candidates)
-                                                val fullInfo = (cultureInfo + provenance).distinct()
+                                                val fullInfo = (cultureInfo + cultureIndex).distinct()
                                                 if(fullInfo.isNotEmpty()) Text(
                                                     fullInfo.joinToString(" · "),
                                                     fontSize=10.sp,fontWeight=FontWeight.Medium,
