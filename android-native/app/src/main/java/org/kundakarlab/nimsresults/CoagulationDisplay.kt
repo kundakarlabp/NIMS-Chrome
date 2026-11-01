@@ -15,7 +15,7 @@ object CoagulationDisplay {
         val t=normalized(test)
         if (t == "aptt" || t.startsWith("activatedpartialthromboplastin"))
             return false
-        return t.contains("prothrombin") || t == "ptinr" ||
+        return t.contains("prothrombin") || t == "ptinr" || t == "inr" ||
             t=="pt" || t=="pttest" || t.contains("prothrombintime")
     }
 
