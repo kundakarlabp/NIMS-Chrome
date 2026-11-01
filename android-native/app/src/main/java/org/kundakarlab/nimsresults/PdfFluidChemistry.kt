@@ -30,7 +30,16 @@ object PdfFluidChemistry {
         return labels.singleOrNull().orEmpty()
     }
     private fun evidenceName(text: String): String {
-        val label=namedCell(text, """nature\s+of\s+specimen""", specimenName)
+        val direct=namedCell(text, """nature\s+of\s+specimen""", specimenName)
+        // NIMS prints Nature Of / Specimen in two stacked lines with
+        // Ascitic Fluid in the result column between their baselines.
+        // This fallback requires those exact two label fragments nearby.
+        val wrapped=if(direct.isBlank()) {
+            Regex("""(?is)\bnature\s+of\b([^\r\n]{0,90}|[\s\S]{0,100}?)\bspecimen\b""")
+                .find(text)?.groupValues?.getOrNull(1)
+                ?.let { specimenName.find(it)?.value }.orEmpty()
+        } else ""
+        val label=direct.ifBlank { wrapped }
         return when(label.lowercase().replace(Regex("""\s+""")," ")) {
             "ascitic", "ascitic fluid", "peritoneal fluid" -> "Ascitic fluid"
             "pleural", "pleural fluid" -> "Pleural fluid"
@@ -93,6 +102,12 @@ object PdfFluidChemistry {
         val specimen=evidenceName(source)
         if(specimen.isBlank()) return null
         val appearance=namedCell(source, """physical\s+appearance""", appearanceName)
+            .ifBlank {
+                // Analogous line wrap: Physical / Yellow / Appearance.
+                Regex("""(?is)\bphysical\b([\s\S]{0,95}?)\bappearance\b""")
+                    .find(source)?.groupValues?.getOrNull(1)
+                    ?.let { appearanceName.find(it)?.value }.orEmpty()
+            }
         val values=pdfValues(source)
         // An ambiguous or conflicting value is not a positive match.
         if (values.any { (name, value) ->
