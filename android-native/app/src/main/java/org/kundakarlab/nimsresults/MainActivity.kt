@@ -3403,8 +3403,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             study.title,inlineRows).isNotEmpty())) {
                                     // PDF remains an optional source-review action;
                                     // it is not required to read any structured result.
-                                    TextButton(onClick={pickPdf=true}) {
-                                        Text(if(candidates.size==1) "Source PDF" else
+                                    TextButton(onClick={
+                                        val only = candidates.singleOrNull()
+                                        if(only!=null) openReport(only.url) else pickPdf=true
+                                    }) {
+                                        Text(if(candidates.size==1) "PDF" else
                                             "PDFs (${candidates.size})",fontSize=10.sp)
                                     }
                                 } else if(candidates.isEmpty() &&
@@ -3670,13 +3673,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     if(pickPdf) {
                         AlertDialog(onDismissRequest={pickPdf=false},
-                            title={Text("Choose original PDF")},
+                            title={Text("Select PDF")},
                             text={
                                 Column {
-                                    Text("Matched by labelled lab accession when supplied; " +
-                                        "otherwise same investigation and source date. " +
-                                        "Confirm patient and specimen in the report.",
-                                        fontSize=11.sp,color=Color(0xFF486581))
                                     LazyColumn(Modifier.heightIn(max=390.dp)) {
                                         items(candidates,key={it.url}) { report ->
                                             TextButton(onClick={
