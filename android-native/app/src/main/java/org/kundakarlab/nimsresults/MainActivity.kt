@@ -3347,11 +3347,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         } else inlineRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
-                    val microIndex=remember(rows,candidates,verifiedHeader,study.date) {
-                        if(isMicro) ClinicalResultsLayout.compactMicrobiologyHeader(
-                            rows,candidates,verifiedHeader,study.date,
-                            bloodCulture=isCulture && study.title.contains("blood",true))
-                        else emptyList()
+                    val microSpecimen=remember(rows,candidates,verifiedHeader,
+                        candidatePart,study.date) {
+                        if(isMicro) MicrobiologyReportDisplay.specimen(
+                            rows,candidates.singleOrNull(),verifiedHeader,
+                            candidatePart,study.date)
+                        else ""
+                    }
+                    val microLine=remember(rows,candidates,verifiedHeader) {
+                        if(isMicro) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
+                            rows,candidates,verifiedHeader)
+                        else ""
                     }
                     val urineCodes=remember(study.rows) {
                         study.rows.filter(ClinicalResultsLayout::urineChemistryCode)
@@ -3393,6 +3399,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         isFluidStudy && Regex("""(?i)csf/pleural|ascitic/syno""")
                                             .containsMatchIn(study.title) ->
                                             "Fluid chemistry"
+                                        microSpecimen.isNotBlank() ->
+                                            study.title+" · "+microSpecimen
                                         else -> study.title
                                     },fontSize=13.sp,
                                         fontWeight=FontWeight.Bold,
@@ -3448,14 +3456,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             else if(isFluidStudy && verifiedFluid.isNotBlank())
                                 Text("Specimen: "+verifiedFluid,fontSize=10.sp,
                                     color=Color(0xFF486581))
-                            // One identity line + one collection/sent/report line.
-                            // Never repeat the day-heading's reported date or
-                            // attach a separate report-status metadata footer.
-                            if(isMicro) microIndex.forEach { headerLine ->
-                                Text(headerLine,fontSize=9.sp,
-                                    color=Color(0xFF486581),maxLines=2,
+                            // One compact metadata line; keep raw sample IDs and
+                            // PDF-source verification details in diagnostics.
+                            if(isMicro && microLine.isNotBlank())
+                                Text(microLine,fontSize=9.sp,
+                                    color=Color(0xFF486581),maxLines=1,
+                                    softWrap=false,
+                                    overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
-                            }
                             if(verifiedCoombs!=null &&
                                 inlineRows.none { it.valueText.equals(verifiedCoombs,true) }) {
                                 Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
