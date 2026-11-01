@@ -38,6 +38,7 @@ object ClinicalResultsLayout {
     fun omitRoutineHeading(title: String, rows: List<LabResult>): Boolean {
         if(rows.isEmpty()) return false
         val t=key(title)
+        if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
         if(t.contains("culture") || t.contains("staining") ||
             t.contains("radiology") || t.contains("pet") ||
             t.contains("cardiacstudy") || t.contains("doppler") ||
