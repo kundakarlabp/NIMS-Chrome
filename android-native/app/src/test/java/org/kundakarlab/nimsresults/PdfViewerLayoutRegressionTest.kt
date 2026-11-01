@@ -25,9 +25,9 @@ class PdfViewerLayoutRegressionTest {
         assertFalse(code.contains("image.layoutParams = ViewGroup.LayoutParams("))
     }
 
-    @Test fun singleUnverifiedPdfCandidateNeedsExplicitReview() {
+    @Test fun singlePdfOpensDirectlyWithoutTreatingCandidateAsVerifiedResult() {
         val code = source("MainActivity.kt")
-        assertTrue(code.contains("TextButton(onClick={pickPdf=true})"))
-        assertFalse(code.contains("if(candidates.size==1) openReport(candidates[0].url)"))
+        assertTrue(code.contains("if(only!=null) openReport(only.url) else pickPdf=true"))
+        assertTrue(code.contains("header?.crNo==current.patient.crNo"))
     }
 }
