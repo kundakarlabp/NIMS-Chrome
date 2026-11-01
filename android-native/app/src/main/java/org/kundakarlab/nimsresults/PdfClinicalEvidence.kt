@@ -43,7 +43,7 @@ object PdfClinicalEvidence {
         val heading = Regex(
             """(?im)^\s*(?:\d+[.)]\s*)?(direct|indirect)\s+""" +
                 """(?:coombs|antiglobulin)(?:\s+test)?""" +
-                """(?:\s*\(\s*(?:GEL|DAT|IAT)\s*\))?\b"""
+                """(?:\s*\(\s*(?:GEL|DAT|IAT)\s*\))?(?=\s|[:=\-]|$)"""
         )
         val parts = heading.findAll(source).toList()
         if (parts.isEmpty()) return null
