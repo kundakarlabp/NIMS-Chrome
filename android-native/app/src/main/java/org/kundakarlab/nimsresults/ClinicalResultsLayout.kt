@@ -39,6 +39,9 @@ object ClinicalResultsLayout {
         if(rows.isEmpty()) return false
         val t=key(title)
         if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
+        if(ClinicalReportRenderer.isUrineRoutine(test) ||
+            Regex("""(?i)\b(?:hiv|hcv|hbsag|hbs\s*ag|hepatitis\s*[bc])\b""")
+                .containsMatchIn(test)) return true
         if(t.contains("culture") || t.contains("staining") ||
             t.contains("radiology") || t.contains("pet") ||
             t.contains("cardiacstudy") || t.contains("doppler") ||
@@ -230,42 +233,51 @@ object ClinicalResultsLayout {
     /** Provenance from the same observation, with only a labelled, unique
      * candidate from the report index when specimen identity is absent.
      * Never present candidate accession as a confirmed specimen match. */
+    /** Distinguish source-index metadata from actual specimen identification.
+     * "Report index" is a source citation, not proof that bulk rows belong to
+     * that accession. Only explicit bulk labels or a CR-verified PDF can prove it. */
     fun microbiologyProvenance(rows:List<LabResult>,
         candidates:List<ReportRef>,
         verified:PdfDocumentHeader?=null,
         bloodCulture:Boolean=false):List<String> {
-        val fromNarrative=rows.mapNotNull(MicrobiologyNarrativeMetadata::extract)
-        val directLab=rows.map { it.labNumber.trim() }.firstOrNull(String::isNotBlank)
-            ?:fromNarrative.map { it.labNumber }.firstOrNull(String::isNotBlank).orEmpty()
-        val directSample=rows.map { it.sampleNumber.trim() }.firstOrNull(String::isNotBlank)
-            ?:fromNarrative.map { it.sampleNumber }.firstOrNull(String::isNotBlank).orEmpty()
-        val lab=directLab.ifBlank { verified?.labNumber.orEmpty() }
-        val sample=directSample.ifBlank { verified?.sampleNumber.orEmpty() }
-        val collection=rows.map { it.collectionDateTime.trim() }.firstOrNull(String::isNotBlank)
-            ?:fromNarrative.map { it.collectionDate }.firstOrNull(String::isNotBlank)
+        val narrative=rows.mapNotNull(MicrobiologyNarrativeMetadata::extract)
+        val lab=rows.firstNotNullOfOrNull { it.labNumber.trim().takeIf(String::isNotBlank) }
+            ?:narrative.firstNotNullOfOrNull { it.labNumber.takeIf(String::isNotBlank) }
+            ?:verified?.labNumber.orEmpty()
+        val sample=rows.firstNotNullOfOrNull { it.sampleNumber.trim().takeIf(String::isNotBlank) }
+            ?:narrative.firstNotNullOfOrNull { it.sampleNumber.takeIf(String::isNotBlank) }
+            ?:verified?.sampleNumber.orEmpty()
+        val collection=rows.firstNotNullOfOrNull {
+            it.collectionDateTime.trim().takeIf(String::isNotBlank)
+        } ?:narrative.firstNotNullOfOrNull { it.collectionDate.takeIf(String::isNotBlank) }
             ?:verified?.collectionDate.orEmpty()
-        val reported=rows.map { it.reportedDate.trim() }.firstOrNull(String::isNotBlank)
-            ?:fromNarrative.map { it.reportedDate }.firstOrNull(String::isNotBlank)
+        val sent=rows.firstNotNullOfOrNull { it.sentDate.trim().takeIf(String::isNotBlank) }
+            ?:narrative.firstNotNullOfOrNull { it.sentDate.takeIf(String::isNotBlank) }
+            ?:verified?.sentDate.orEmpty()
+        val reported=rows.firstNotNullOfOrNull {
+            it.reportedDate.trim().takeIf(String::isNotBlank)
+        } ?:narrative.firstNotNullOfOrNull { it.reportedDate.takeIf(String::isNotBlank) }
             ?:verified?.reportedDate.orEmpty()
-        val one=candidates.singleOrNull()
-        val chosen=one?.takeIf { candidate ->
-            lab.isBlank() || candidate.labNumber.equals(lab,true)
+        val candidate=candidates.singleOrNull()?.takeIf {
+            lab.isBlank() || it.labNumber.equals(lab,true)
         }
-        val attachedLab=lab.ifBlank { chosen?.labNumber.orEmpty() }
-        val verifiedSource=lab.isNotBlank()
-        val line=mutableListOf<String>()
-        if(attachedLab.isNotBlank()) line+=
-            (if(verifiedSource) "Lab " else "Possible lab ")+attachedLab
-        val coll=collection.ifBlank { chosen?.collectionDateTime.orEmpty() }
-        if(coll.isNotBlank())line+=(if(collection.isBlank()) "Possible collected " else "Collected ")+
-            LabPanelMatrix.displayDateTime(coll)
-        if(reported.isNotBlank())line+="Reported "+LabPanelMatrix.displayDateTime(reported)
+        val fromIndex=lab.isBlank() && candidate!=null
+        val lines=mutableListOf<String>()
+        val shownLab=lab.ifBlank { candidate?.labNumber.orEmpty() }
+        if(shownLab.isNotBlank()) lines+=
+            (if(fromIndex) "Report index · Lab " else "Lab ")+shownLab
+        val collected=collection.ifBlank { candidate?.collectionDateTime.orEmpty() }
+        if(collected.isNotBlank()) lines+="Collected "+LabPanelMatrix.displayDateTime(collected)
+        val sentDate=sent.ifBlank { candidate?.sentDate.orEmpty() }
+        if(sentDate.isNotBlank() &&
+            RecentReportDates.parse(sentDate)!=RecentReportDates.parse(collected))
+            lines+="Sent "+LabPanelMatrix.displayDateTime(sentDate)
+        if(reported.isNotBlank()) lines+="Reported "+LabPanelMatrix.displayDateTime(reported)
         if(!bloodCulture) {
-            val samp=sample.ifBlank { chosen?.sampleNumber.orEmpty() }
-            if(samp.isNotBlank())line+=
-                (if(sample.isNotBlank()) "Sample " else "Possible sample ")+samp
+            val sid=sample.ifBlank { candidate?.sampleNumber.orEmpty() }
+            if(sid.isNotBlank())lines+="Sample "+sid
         }
-        return line
+        return lines
     }
 
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
