@@ -390,18 +390,24 @@ class ReportActivity : Activity() {
             if (file.length() <= 16L * 1024 * 1024) {
                 // Read every PDF page; the first two pages are NOT a reliable
                 // inventory for combined reports with multiple lab accessions.
-                val pages = runCatching {
+                val (pages, aligned) = runCatching {
                     PDFBoxResourceLoader.init(applicationContext)
                     PDDocument.load(file, MemoryUsageSetting.setupMixed(4L * 1024 * 1024)).use { doc ->
-                        (1..doc.numberOfPages).map { page ->
+                        val parsed = (1..doc.numberOfPages).map { page ->
                             PDFTextStripper().apply {
                                 startPage = page
                                 endPage = page
                                 sortByPosition = true
                             }.getText(doc).take(40000)
                         }
+                        val table = if (parsed.any {
+                            it.contains("Nature Of",true) ||
+                            it.contains("Coombs",true) ||
+                            it.contains("URINE EXAMINATION",true)
+                        }) PdfGeometryTable.read(doc) else ""
+                        parsed to table
                     }
-                }.getOrNull().orEmpty()
+                }.getOrNull() ?: (emptyList<String>() to "")
                 if (pages.all { it.isBlank() }) DiagnosticEvents.record("PDF_TEXT_MISSING")
                 val crs = PdfSourceEvidence.patientCrs(pages)
                 if (expectedCr.isNotBlank() && crs.any { it != expectedCr }) {
@@ -421,7 +427,7 @@ class ReportActivity : Activity() {
                     // One bounded PDF source cache is enough for navigation.
                     // Avoid retaining a second 160k-char copy in this Activity.
                     ReportTitleCache.learnPages(sourceUrl, pages, expectedCr,
-                        digestFile(file))
+                        digestFile(file), aligned)
                 }
             }
             PdfPerformanceTrace.record("identity_and_extract_ms",

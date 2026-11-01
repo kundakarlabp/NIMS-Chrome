@@ -68,20 +68,30 @@ class PdfSourceEnricher(private val context: Context) {
                     byteArrayOf(37, 80, 68, 70) /* %PDF */)
             }) return false
             PDFBoxResourceLoader.init(context.applicationContext)
-            val pages = PDDocument.load(tmp, MemoryUsageSetting.setupMixed(4L * 1024 * 1024)).use { pdf ->
-                (1..pdf.numberOfPages).map { p ->
-                    if (!stillSelected() || Thread.currentThread().isInterrupted)
-                        return false
-                    PDFTextStripper().apply {
-                        startPage = p
-                        endPage = p
-                        sortByPosition = true
-                    }.getText(pdf).take(40000)
+            val (pages, positioned) =
+                PDDocument.load(tmp, MemoryUsageSetting.setupMixed(4L * 1024 * 1024)).use { pdf ->
+                    val extracted = (1..pdf.numberOfPages).map { p ->
+                        if (!stillSelected() || Thread.currentThread().isInterrupted)
+                            return false
+                        PDFTextStripper().apply {
+                            startPage = p
+                            endPage = p
+                            sortByPosition = true
+                        }.getText(pdf).take(40000)
+                    }
+                    // Only selected small NIMS PDFs are inspected. Coordinate
+                    // alignment is essential for fluid chemistry and DAT/IAT
+                    // without guessing what adjacent text refers to.
+                    val table = if (extracted.any {
+                        it.contains("Nature Of",true) ||
+                        it.contains("Coombs",true) ||
+                        it.contains("URINE EXAMINATION",true)
+                    }) PdfGeometryTable.read(pdf) else ""
+                    extracted to table
                 }
-            }
             if (!stillSelected() || pages.all { it.isBlank() }) return false
             return ReportTitleCache.learnPages(url, pages, expectedCr,
-                digest.digest().joinToString("") { "%02x".format(it) })
+                digest.digest().joinToString("") { "%02x".format(it) },positioned)
         } catch (_: Exception) {
             // An inaccessible/bitmap-only PDF stays a source card that the
             // clinician can open; never synthesize missing source metadata.

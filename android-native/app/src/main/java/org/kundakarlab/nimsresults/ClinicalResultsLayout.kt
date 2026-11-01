@@ -298,13 +298,7 @@ object ClinicalResultsLayout {
         bloodCulture: Boolean = false
     ): List<String> {
         val metadata = microbiologyProvenance(rows, candidates, verified, bloodCulture)
-        // A PDF's patient CR alone never proves its specimen belongs to this
-        // source row. Even a CR-verified PDF remains a candidate without an
-        // accession independently present in the structured/narrative result.
-        val fromUnprovenPdf =
-            rows.none { it.labNumber.isNotBlank() } &&
-            rows.none { MicrobiologyNarrativeMetadata.extract(it)?.labNumber?.isNotBlank() == true } &&
-            candidates.size == 1
+        // Preserve candidate identity only in audit metadata.
         val identifiers = metadata.filter {
             it.startsWith("Lab ") || it.startsWith("Report index · Lab ") ||
                 it.startsWith("Sample ")
@@ -314,8 +308,7 @@ object ClinicalResultsLayout {
             // patient-specimen provenance.
             it.removePrefix("Report index · ")
         }.toMutableList()
-        if (fromUnprovenPdf && identifiers.isNotEmpty())
-            identifiers.add(0, "PDF candidate")
+        // Candidate status belongs in diagnostics, not the clinical card.
         // A blood-culture sample number is as important as other samples;
         // older display logic excluded it, so recover only the explicit ID.
         if (bloodCulture && identifiers.none { it.startsWith("Sample ") }) {
@@ -346,12 +339,6 @@ object ClinicalResultsLayout {
         val dates = metadata.filter {
             it.startsWith("Collected ") || it.startsWith("Sent ") ||
                 it.startsWith("Reported ")
-        }.map { label ->
-            // A source-index date is a PDF candidate's date, not proof that
-            // this exact specimen was collected then.
-            if (fromUnprovenPdf && label.startsWith("Collected "))
-                "PDF collected " + label.removePrefix("Collected ")
-            else label
         }.filter { label ->
             // Only remove a duplicate reporting *date*, not collection time.
             !label.startsWith("Reported ") ||

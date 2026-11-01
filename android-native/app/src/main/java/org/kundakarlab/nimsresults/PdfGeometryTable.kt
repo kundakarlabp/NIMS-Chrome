@@ -42,8 +42,12 @@ object PdfGeometryTable {
         }.filter(String::isNotBlank)
     }
 
-    fun read(file: File): String {
-        PDDocument.load(file).use { document ->
+    fun read(file: File): String =
+        PDDocument.load(file).use { document -> read(document) }
+
+    /** Use the document that is already open in the source-index worker;
+     * avoid a second PDF load and keep only bounded text rows in memory. */
+    fun read(document: PDDocument): String {
             val output = mutableListOf<String>()
             val count = minOf(document.numberOfPages, 8)
             for (page in 1..count) {
@@ -70,6 +74,5 @@ object PdfGeometryTable {
                 }
             }
             return output.joinToString("\n").take(22000)
-        }
     }
 }

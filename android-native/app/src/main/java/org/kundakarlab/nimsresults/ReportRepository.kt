@@ -632,6 +632,7 @@ object PdfDocumentHeaders {
 object ReportTitleCache {
     private val recognized = ConcurrentHashMap<String, String>()
     private val extractedByUrl = ConcurrentHashMap<String, String>()
+    private val positionedByUrl = ConcurrentHashMap<String, String>()
     private val headers = ConcurrentHashMap<String, PdfDocumentHeader>()
     private val sectionsByUrl = ConcurrentHashMap<String, List<PdfSourcePart>>()
     private val sha256ByUrl = ConcurrentHashMap<String, String>()
@@ -644,11 +645,12 @@ object ReportTitleCache {
     fun revision(): Int = revision.get()
     @Synchronized fun diagnosticFootprint(): String {
         val rawChars = extractedByUrl.values.sumOf { it.length }
+        val geometryChars = positionedByUrl.values.sumOf { it.length }
         val sectionChars = sectionsByUrl.values.sumOf { parts ->
             parts.sumOf { it.text.length }
         }
         return "memory.pdfEvidenceDocs=" + loadedUrls.size +
-            "\nmemory.pdfEvidenceCharacters=" + (rawChars + sectionChars)
+            "\nmemory.pdfEvidenceCharacters=" + (rawChars + geometryChars + sectionChars)
     }
 
     fun learn(url: String, extracted: String, expectedCr: String = ""): Boolean =
@@ -656,7 +658,8 @@ object ReportTitleCache {
 
     /** Index all pages, not just page 1-2. Explicit CR proof is required to
      * associate PDF contents with the selected patient's investigations. */
-    fun learnPages(url: String, pages: List<String>, expectedCr: String = "", sha256: String = ""): Boolean {
+    fun learnPages(url: String, pages: List<String>, expectedCr: String = "",
+        sha256: String = "", geometry: String = ""): Boolean {
         val startingSession = sessionGeneration.get()
         val crs = PdfSourceEvidence.patientCrs(pages)
         if (expectedCr.isNotBlank() && crs != setOf(expectedCr)) return false
@@ -682,12 +685,15 @@ object ReportTitleCache {
                 loadedUrls.remove(oldest)
                 recognized.remove(oldest)
                 extractedByUrl.remove(oldest)
+                positionedByUrl.remove(oldest)
                 headers.remove(oldest)
                 sectionsByUrl.remove(oldest)
                 sha256ByUrl.remove(oldest)
             }
             if (title != null) recognized[url] = title
             extractedByUrl[url] = full.take(64000)
+            if (trusted && geometry.isNotBlank())
+                positionedByUrl[url] = geometry.take(22000)
             if (trusted) {
                 if (sha256.isNotBlank()) sha256ByUrl[url] = sha256
                 sectionsByUrl[url] = parsedParts
@@ -699,6 +705,7 @@ object ReportTitleCache {
     }
     fun get(url: String): String? = recognized[url]
     fun extracted(url: String): String? = extractedByUrl[url]
+    fun geometry(url: String): String? = positionedByUrl[url]
     fun header(url: String): PdfDocumentHeader? = headers[url]
     fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
     fun digest(url: String): String = sha256ByUrl[url].orEmpty()
@@ -710,6 +717,7 @@ object ReportTitleCache {
         loadedUrls.clear()
         recognized.clear()
         extractedByUrl.clear()
+        positionedByUrl.clear()
         headers.clear()
         sectionsByUrl.clear()
         sha256ByUrl.clear()

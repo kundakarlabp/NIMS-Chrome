@@ -109,8 +109,12 @@ object ClinicalChronology {
         val original=row.parameter.ifBlank { row.test }
         // The `(Result)` suffix is a technical HIS column name, not a
         // clinical analyte; retain the raw field in LabResult for auditing.
-        val name=if(ClinicalReportRenderer.isUrineRoutine(row.test))
-            original.replace(Regex("""(?i)\s*\(result\)\s*$"""), "").trim()
+        val fluidCell=Regex("""(?i)fluid\s+cell\s+count""")
+            .containsMatchIn(row.test)
+        val name=if(ClinicalReportRenderer.isUrineRoutine(row.test) || fluidCell)
+            original.replace(Regex("""(?i)\s*\(result\)\s*$"""), "")
+                .replace(Regex("""(?i)^\s*[-–]+\s*"""),"")
+                .trim()
         else original
         val key=name.lowercase().replace(Regex("[^a-z0-9]"), "")
         return when {

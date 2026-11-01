@@ -55,7 +55,7 @@ object PdfClinicalEvidence {
         )
         val parts = heading.findAll(source).toList()
         if (parts.isEmpty()) return null
-        val word = Regex("""(?i)\b(weak\s+positive|non[\s-]*reactive|negative|positive|reactive)\b""")
+        val word = Regex("""(?i)\b(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\b""")
         val answers = mutableListOf<String>()
         parts.forEachIndexed { index, match ->
             val foundMode = when {
@@ -72,13 +72,18 @@ object PdfClinicalEvidence {
                 .take(650).lines().take(9)
             val observations = mutableListOf<String>()
             section.forEachIndexed { n, line ->
-                val clean = line.trim()
+                // Controls may appear alongside DAT in a multi-column
+                // blood-bank PDF ("Traces   Control: Neg"). Never treat
+                // the negative control as the patient's DAT result.
+                val controlAt=Regex("""(?i)\bcontrol\s*[:=]?""")
+                    .find(line)?.range?.first ?: line.length
+                val clean=line.substring(0,controlAt).trim()
                 if (clean.isEmpty()) return@forEachIndexed
                 if (Regex("""(?i)^(?:reference|normal|method|remarks?|comments?|interpretation\s+guide)\b""")
                         .containsMatchIn(clean)) return@forEachIndexed
                 val labelled = Regex(
                     """(?i)^(?:[:=\-]\s*)?(?:(?:final\s+)?(?:result|observation|interpretation|finding)\s*[:=\-]?\s*)?""" +
-                        """(weak\s+positive|non[\s-]*reactive|negative|positive|reactive)\s*[.]?$"""
+                        """(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\s*[.]?$"""
                 ).find(clean)
                 if (labelled != null) observations += labelled.groupValues[1]
                 else if (n < 5) {
@@ -92,7 +97,8 @@ object PdfClinicalEvidence {
                 }
             }
             val unique = observations.map {
-                it.trim().replace(Regex("""\s+"""), " ").lowercase()
+                val label=it.trim().replace(Regex("""\s+"""), " ").lowercase()
+                if(label=="neg") "negative" else label
             }.distinct()
             if (unique.size == 1) answers += unique.single()
         }

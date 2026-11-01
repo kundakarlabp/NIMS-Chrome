@@ -3291,9 +3291,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfClinicalSummaries.bloodGrouping(candidatePart)
                         else null
                     }
-                    val verifiedUrine=remember(study.title,candidatePart) {
+                    val candidateGeometry=remember(candidates,reportTitleEpoch,current.patient.crNo) {
+                        candidates.singleOrNull()?.takeIf { report ->
+                            val header=ReportTitleCache.header(report.url)
+                            header?.crNo==current.patient.crNo &&
+                                (report.labNumber.isBlank() ||
+                                    header.labNumber.equals(report.labNumber,true))
+                        }?.let { ReportTitleCache.geometry(it.url).orEmpty() }.orEmpty()
+                    }
+                    val verifiedUrine=remember(study.title,candidatePart,candidateGeometry) {
                         if(ClinicalReportRenderer.isUrineRoutine(study.title))
-                            PdfUrineSummaries.extract(candidatePart)
+                            PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
                         else emptyList()
                     }
                     val verifiedCoombs=remember(study.title,candidatePart,rows) {
@@ -3304,8 +3312,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         Regex("""(?i)csf|pleural|ascitic|synovial|pericardial|fluid\s+cell""")
                             .containsMatchIn(study.title)
                     }
-                    val verifiedFluid=remember(isFluidStudy,candidatePart,rows) {
-                        if(isFluidStudy) PdfClinicalEvidence.specimen(candidatePart)
+                    val fluidChemistry=remember(isFluidStudy,candidatePart,candidateGeometry,rows) {
+                        if(isFluidStudy)
+                            PdfFluidChemistry.reconcile(rows,candidatePart,candidateGeometry)
+                        else null
+                    }
+                    val verifiedFluid=remember(isFluidStudy,candidatePart,rows,fluidChemistry) {
+                        if(isFluidStudy) fluidChemistry?.specimen.orEmpty()
+                            .ifBlank { PdfClinicalEvidence.specimen(candidatePart) }
                             .ifBlank {
                                 rows.map { row ->
                                     PdfClinicalEvidence.specimen("Specimen: "+
@@ -3328,7 +3342,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     val compactRows=if(isFluidStudy && verifiedFluid.isNotBlank())
                         inlineRows.filterNot {
-                            it.parameter.equals("Nature Of Specimen",true)
+                            it.parameter.replace(Regex("""(?i)\s*\(result\)\s*$"""),"")
+                                .trim().equals("Nature Of Specimen",true)
                         } else inlineRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
@@ -3370,7 +3385,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         study.title,inlineRows) &&
                                     !ClinicalResultsLayout.omitRedundantHeading(
                                         study.title,inlineRows)) {
-                                    Text(study.title,fontSize=13.sp,
+                                    Text(when {
+                                        fluidChemistry!=null ->
+                                            fluidChemistry.specimen+" — Chemistry"
+                                        isFluidStudy && study.title.contains("cell count",true) ->
+                                            "Fluid cell count"
+                                        isFluidStudy && Regex("""(?i)csf/pleural|ascitic/syno""")
+                                            .containsMatchIn(study.title) ->
+                                            "Fluid chemistry"
+                                        else -> study.title
+                                    },fontSize=13.sp,
                                         fontWeight=FontWeight.Bold,
                                         color=Color(0xFF102A43),
                                         modifier=Modifier.weight(1f))
@@ -3386,8 +3410,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             study.title,inlineRows).isNotEmpty())) {
                                     // PDF remains an optional source-review action;
                                     // it is not required to read any structured result.
-                                    TextButton(onClick={pickPdf=true}) {
-                                        Text(if(candidates.size==1) "Source PDF" else
+                                    TextButton(onClick={
+                                        val only = candidates.singleOrNull()
+                                        if(only!=null) openReport(only.url) else pickPdf=true
+                                    }) {
+                                        Text(if(candidates.size==1) "PDF" else
                                             "PDFs (${candidates.size})",fontSize=10.sp)
                                     }
                                 } else if(candidates.isEmpty() &&
@@ -3398,8 +3425,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(study.reportedIsExplicit && !isMicro) Text("Source-reported date",
-                                fontSize=10.sp,color=Color(0xFF486581))
                             val provenance=listOfNotNull(
                                 rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
                                     .distinct().singleOrNull()?.let {
@@ -3417,14 +3442,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     .filter(String::isNotBlank).distinct().singleOrNull()
                                     ?.let{"Sample "+it}
                             )
-                            if(provenance.isNotEmpty() && !isMicro)
-                                Text(provenance.joinToString(" · "),
-                                    fontSize=10.sp,color=Color(0xFF486581))
-                            if(isFluidStudy) Text(
-                                if(verifiedFluid.isNotBlank()) "Specimen: "+verifiedFluid
-                                else "Specimen unidentified · HIS choice code",
-                                fontSize=10.sp,color=if(verifiedFluid.isNotBlank())
-                                    Color(0xFF486581) else Color(0xFF875B22))
+                            if(isFluidStudy && fluidChemistry?.appearance?.isNotBlank()==true)
+                                Text("Appearance: "+fluidChemistry.appearance,fontSize=10.sp,
+                                    color=Color(0xFF486581))
+                            else if(isFluidStudy && verifiedFluid.isNotBlank())
+                                Text("Specimen: "+verifiedFluid,fontSize=10.sp,
+                                    color=Color(0xFF486581))
                             // One identity line + one collection/sent/report line.
                             // Never repeat the day-heading's reported date or
                             // attach a separate report-status metadata footer.
@@ -3438,10 +3461,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
                                     fontWeight=FontWeight.Medium,
                                     color=Color(0xFF102A43))
-                                Text(if(ClinicalSourceQualitative.coombs(rows)!=null)
-                                    "Explicit HIS result" else
-                                    "PDF result · confirm accession/specimen",
-                                    fontSize=9.sp,color=Color(0xFF875B22))
+
                             }
                             if(verifiedBlood!=null) {
                                 Text("ABO/Rh: "+verifiedBlood.group,
@@ -3450,21 +3470,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(verifiedBlood.antibodyScreen.isNotBlank())
                                     Text("Antibody screen: "+verifiedBlood.antibodyScreen,
                                         fontSize=11.sp,color=Color(0xFF486581))
-                                Text("CR-verified original PDF · verify before transfusion",
-                                    fontSize=9.sp,color=Color(0xFF875B22))
                             }
                             if(verifiedUrine.isNotEmpty()) {
-                                Text(if(rows.any { it.labNumber.isNotBlank() &&
-                                        it.labNumber.equals(verifiedHeader?.labNumber,true) })
-                                    "PDF result · accession matched"
-                                    else "PDF candidate · specimen not linked",
-                                    fontSize=9.sp,color=Color(0xFF875B22))
                                 verifiedUrine.forEach { v ->
                                     Row(Modifier.fillMaxWidth(),
-                                        horizontalArrangement=Arrangement.SpaceBetween) {
-                                        Text(v.label,fontSize=11.sp)
-                                        Text(v.result,fontSize=11.sp,
-                                            fontWeight=FontWeight.Medium)
+                                        verticalAlignment=Alignment.CenterVertically) {
+                                        Text(v.label,fontSize=11.sp,
+                                            modifier=Modifier.weight(1f).padding(end=8.dp))
+                                        Row(modifier=Modifier.weight(1.3f)) {
+                                            Text(v.result,fontSize=12.sp,
+                                                fontWeight=FontWeight.Medium,
+                                                modifier=Modifier.weight(0.8f))
+                                            Spacer(Modifier.weight(1f))
+                                        }
                                     }
                                 }
                             }
@@ -3472,8 +3490,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(verifiedBlood==null && verifiedCoombs==null &&
                                     verifiedFluid.isBlank())
                                     Text(if(study.title.contains("coombs",true))
-                                        "DAT/IAT result is HIS-coded · confirm in source PDF"
-                                        else "No readable structured result · check source PDF",
+                                        "Result unavailable"
+                                        else "No reported result",
                                         fontSize=11.sp,color=Color(0xFF66788A))
                             } else {
                                 // Render every result in the ordinary scroll, with
@@ -3483,7 +3501,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)
                                         else ClinicalChronology.parameterLabel(row)
-                                    val rawValue=ClinicalReadableSummaries.compactValue(row)
+                                    val rawValue=ClinicalReadableSummaries.compactValue(row)+
+                                        if(fluidChemistry!=null && row.unit.isBlank()) {
+                                            PdfFluidChemistry.unitFor(row.parameter,fluidChemistry)
+                                                .takeIf(String::isNotBlank)?.let { " "+it }.orEmpty()
+                                        } else ""
                                     val unmapped=ClinicalChronology.isUnmapped(row)
                                     val longText=ClinicalChronology.isNarrativeRow(study,row)
                                     val caption=if(unmapped)
@@ -3630,11 +3652,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     it.label==ClinicalResultsLayout.urineChemistryLabel(code)
                                 }
                             }
-                            if(pendingUrineCodes.isNotEmpty()) {
-                                Text(pendingUrineCodes.size.toString() +
-                                    " urine chemistry fields unresolved · check source PDF",
-                                    fontSize=9.sp,color=Color(0xFF875B22))
-                            }
+                            // Unresolved urine codes are retained in source diagnostics.
                             if(CoagulationDisplay.isAPTTPanel(study.title)) {
                                 val apttMissing=CoagulationDisplay.missingAPTTComponents(
                                     study.title,inlineRows)
@@ -3653,33 +3671,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     "Multiple differing INR source values shown separately.",
                                     fontSize=10.sp,color=Color(0xFF875B22))
                             }
-                            if(unresolvedRows.isNotEmpty()) {
-                                TextButton(onClick={showSourceCodes=!showSourceCodes}) {
-                                    Text((if(showSourceCodes) "Hide" else "Review") +
-                                        " ${unresolvedRows.size} unverified source fields",
-                                        fontSize=10.sp,color=Color(0xFF875B22))
-                                }
-                                if(showSourceCodes) {
-                                    Text("Unmapped HIS codes are not clinical values. " +
-                                        "Use the original report to interpret these fields.",
-                                        fontSize=10.sp,color=Color(0xFF875B22))
-                                    unresolvedRows.forEach { original ->
-                                        Text(original.parameter + ": " + original.valueText,
-                                            fontSize=10.sp,color=Color(0xFF875B22))
-                                    }
-                                }
-                            }
+                            // Opaque LIS controls remain in raw source/diagnostics.
+                            // Do not render technical audit disclosures as clinical results.
                         }
                     }
                     if(pickPdf) {
                         AlertDialog(onDismissRequest={pickPdf=false},
-                            title={Text("Choose original PDF")},
+                            title={Text("Select PDF")},
                             text={
                                 Column {
-                                    Text("Matched by labelled lab accession when supplied; " +
-                                        "otherwise same investigation and source date. " +
-                                        "Confirm patient and specimen in the report.",
-                                        fontSize=11.sp,color=Color(0xFF486581))
                                     LazyColumn(Modifier.heightIn(max=390.dp)) {
                                         items(candidates,key={it.url}) { report ->
                                             TextButton(onClick={
