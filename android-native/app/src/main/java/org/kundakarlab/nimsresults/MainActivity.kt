@@ -3283,7 +3283,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else emptyList()
                     }
                     val verifiedCoombs=remember(study.title,candidatePart) {
-                        PdfClinicalSummaries.coombs(study.title,candidatePart)
+                        PdfClinicalEvidence.coombs(study.title,candidatePart)
+                    }
+                    val isFluidStudy=remember(study.title) {
+                        Regex("""(?i)csf|pleural|ascitic|synovial|pericardial|fluid\s+cell""")
+                            .containsMatchIn(study.title)
+                    }
+                    val verifiedFluid=remember(isFluidStudy,candidatePart,rows) {
+                        if(isFluidStudy) PdfClinicalEvidence.specimen(candidatePart)
+                            .ifBlank {
+                                rows.mapNotNull { row ->
+                                    PdfClinicalEvidence.specimen(
+                                        "Specimen: "+row.specimenType)
+                                        .takeIf(String::isNotBlank)
+                                }.distinct().singleOrNull().orEmpty()
+                            }
+                        else ""
                     }
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
@@ -3366,6 +3381,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if(provenance.isNotEmpty() && !isMicro)
                                 Text(provenance.joinToString(" · "),
                                     fontSize=10.sp,color=Color(0xFF486581))
+                            if(isFluidStudy) Text(
+                                if(verifiedFluid.isNotBlank()) "Specimen: "+verifiedFluid
+                                else "Specimen type not identified in available source data",
+                                fontSize=10.sp,color=if(verifiedFluid.isNotBlank())
+                                    Color(0xFF486581) else Color(0xFF875B22))
                             if(isMicro && !isCulture && microIndex.isNotEmpty())
                                 Text(microIndex.joinToString(" · "),fontSize=10.sp,
                                     color=Color(0xFF486581))
@@ -4599,6 +4619,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         worker.shutdownNow()
         inventoryWorker.shutdownNow()
         diagnosticsWorker.shutdownNow()
+        pdfEvidenceWorker.shutdownNow()
         pdfIndexSelection = ""
         engine.destroy()
         super.onDestroy()
