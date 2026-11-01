@@ -3425,8 +3425,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(study.reportedIsExplicit && !isMicro) Text("Source-reported date",
-                                fontSize=10.sp,color=Color(0xFF486581))
                             val provenance=listOfNotNull(
                                 rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
                                     .distinct().singleOrNull()?.let {
@@ -3444,9 +3442,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     .filter(String::isNotBlank).distinct().singleOrNull()
                                     ?.let{"Sample "+it}
                             )
-                            if(provenance.isNotEmpty() && !isMicro)
-                                Text(provenance.joinToString(" · "),
-                                    fontSize=10.sp,color=Color(0xFF486581))
                             if(isFluidStudy && fluidChemistry?.appearance?.isNotBlank()==true)
                                 Text("Appearance: "+fluidChemistry.appearance,fontSize=10.sp,
                                     color=Color(0xFF486581))
@@ -3475,8 +3470,6 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(verifiedBlood.antibodyScreen.isNotBlank())
                                     Text("Antibody screen: "+verifiedBlood.antibodyScreen,
                                         fontSize=11.sp,color=Color(0xFF486581))
-                                Text("CR-verified original PDF · verify before transfusion",
-                                    fontSize=9.sp,color=Color(0xFF875B22))
                             }
                             if(verifiedUrine.isNotEmpty()) {
                                 verifiedUrine.forEach { v ->
@@ -3497,8 +3490,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 if(verifiedBlood==null && verifiedCoombs==null &&
                                     verifiedFluid.isBlank())
                                     Text(if(study.title.contains("coombs",true))
-                                        "DAT/IAT result is HIS-coded · confirm in source PDF"
-                                        else "No readable structured result · check source PDF",
+                                        "Result unavailable"
+                                        else "No reported result",
                                         fontSize=11.sp,color=Color(0xFF66788A))
                             } else {
                                 // Render every result in the ordinary scroll, with
