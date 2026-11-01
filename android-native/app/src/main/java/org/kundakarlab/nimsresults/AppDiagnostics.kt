@@ -263,6 +263,22 @@ object AppDiagnostics {
                         .any { it.startsWith("Sent ") }
                 })
             appendLine("diagnostics.results.reference_layout=inline_compact")
+            appendLine("diagnostics.results.coagulation_studies=" +
+                studies.count { CoagulationDisplay.isPTPanel(it.title) })
+            appendLine("diagnostics.results.pt_without_patient_or_control=" +
+                studies.count {
+                    CoagulationDisplay.missingPTComponents(
+                        it.title,ClinicalChronology.inlineRows(it)).isNotEmpty()
+                })
+            appendLine("diagnostics.results.coagulation_conflicting_inr=" +
+                studies.count {
+                    CoagulationDisplay.divergentINR(ClinicalChronology.inlineRows(it))
+                })
+            appendLine("diagnostics.results.csv_selectable_clinical_fields=" +
+                SelectedResultsCsv.options(studies.flatMap {
+                    ClinicalChronology.inlineRows(it)
+                }).size)
+            appendLine("diagnostics.results.csv_sends_to_external_server=false")
             appendLine("diagnostics.results.culture_index_single_candidate=" +
                 studies.count { study ->
                     study.title.contains("culture",ignoreCase=true) &&
