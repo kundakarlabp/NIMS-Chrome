@@ -3369,7 +3369,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(study.reportedIsExplicit) Text("Source-reported date",
+                            if(study.reportedIsExplicit && !isMicro) Text("Source-reported date",
                                 fontSize=10.sp,color=Color(0xFF486581))
                             val provenance=listOfNotNull(
                                 rows.map{it.reportedDate.trim()}.filter(String::isNotBlank)
