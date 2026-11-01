@@ -3307,14 +3307,29 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val verifiedFluid=remember(isFluidStudy,candidatePart,rows) {
                         if(isFluidStudy) PdfClinicalEvidence.specimen(candidatePart)
                             .ifBlank {
-                                rows.mapNotNull { row ->
+                                rows.map { row ->
+                                    PdfClinicalEvidence.specimen("Specimen: "+
+                                        row.specimenType)
+                                }.filter(String::isNotBlank)
+                                    .distinct().singleOrNull().orEmpty()
+                            }.ifBlank {
+                                // Named HIS choice labels carry meaning; bare
+                                // integers/symbols remain undetermined.
+                                rows.filter { row ->
+                                    row.parameter.equals("Nature Of Specimen",true) &&
+                                        !ClinicalReportRenderer.isUninterpretedCode(row)
+                                }.map { row ->
                                     PdfClinicalEvidence.specimen(
-                                        "Specimen: "+row.specimenType)
-                                        .takeIf(String::isNotBlank)
-                                }.distinct().singleOrNull().orEmpty()
+                                        "Specimen: "+row.valueText)
+                                }.filter(String::isNotBlank)
+                                    .distinct().singleOrNull().orEmpty()
                             }
                         else ""
                     }
+                    val compactRows=if(isFluidStudy && verifiedFluid.isNotBlank())
+                        inlineRows.filterNot {
+                            it.parameter.equals("Nature Of Specimen",true)
+                        } else inlineRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
                     val microIndex=remember(rows,candidates,verifiedHeader,study.date) {
@@ -3453,8 +3468,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(inlineRows.isEmpty()) {
-                                if(verifiedBlood==null && verifiedCoombs==null)
+                            if(compactRows.isEmpty()) {
+                                if(verifiedBlood==null && verifiedCoombs==null &&
+                                    verifiedFluid.isBlank())
                                     Text(if(study.title.contains("coombs",true))
                                         "DAT/IAT result is HIS-coded · confirm in source PDF"
                                         else "No readable structured result · check source PDF",
@@ -3462,7 +3478,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             } else {
                                 // Render every result in the ordinary scroll, with
                                 // no preview truncation, collapsed details or PDF dependency.
-                                inlineRows.forEachIndexed { index, row ->
+                                compactRows.forEachIndexed { index, row ->
                                     val label=if(CoagulationDisplay.isPTPanel(study.title) ||
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)
@@ -3605,7 +3621,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             }
                                         }
                                     }
-                                    if(index<inlineRows.lastIndex) HorizontalDivider(
+                                    if(index<compactRows.lastIndex) HorizontalDivider(
                                         thickness=0.5.dp,color=Color(0xFFEDF1F5))
                                 }
                             }
