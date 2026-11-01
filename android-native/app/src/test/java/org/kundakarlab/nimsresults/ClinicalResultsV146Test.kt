@@ -96,9 +96,9 @@ class ClinicalResultsV146Test {
             collectionDateTime="2026-03-17",sampleNumber="SPEC123")
         val labels=ClinicalResultsLayout.microbiologyProvenance(listOf(row),
             listOf(pdf),null,false)
-        assertTrue(labels.any{it=="Possible lab B15331"})
-        assertTrue(labels.any{it=="Possible sample SPEC123"})
-        assertTrue(labels.any{it.startsWith("Possible collected")})
+        assertTrue(labels.any{it=="Report index · Lab B15331"})
+        assertTrue(labels.any{it=="Sample SPEC123"})
+        assertTrue(labels.any{it.startsWith("Collected ")})
         assertFalse(labels.any{it.startsWith("Reported")})
         val verified=PdfDocumentHeader(crNo="331012600350500",labNumber="B15331",
             sampleNumber="SPEC123",reportedDate="2026-03-18")
