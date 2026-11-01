@@ -109,10 +109,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private val worker = Executors.newSingleThreadExecutor()
     private val inventoryWorker = Executors.newSingleThreadExecutor()
     private val diagnosticsWorker = Executors.newSingleThreadExecutor()
+    private val pdfEvidenceWorker = Executors.newSingleThreadExecutor()
      @Volatile private var pdfIndexSelection = ""
     private var pdfInspectedCount by mutableStateOf(0)
     private var pdfConfirmedCount by mutableStateOf(0)
     private var pdfTotalCount by mutableStateOf(0)
+    private var pdfEvidenceTargets by mutableStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -497,6 +499,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = 0
+        pdfEvidenceTargets = 0
         apiStage = "structured_checking"
         loadStage = LoadStage.CHECKING_SESSION
         statusText = "Checking NIMS session for complete Custom Sheet retrieval…"
@@ -784,6 +787,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     current.results.size.toString() + " structured fields · " +
                         htmlCount + " report-index rows · " +
                         restCount + " REST metadata records (identities separate)"
+                if (sources.any { it.url.isNotBlank() }) {
+                    startPdfIndex(requestId,cr,sources)
+                }
                 if (sources.none { it.url.isNotBlank() }) {
                     ReportInventoryTrace.event("webview_attempt")
                     engine.fetchReportIndexHtml(cr, requestId)
@@ -915,6 +921,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine(RestReportDiagnostics.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
+            appendLine("pdf.targetedSourceChecks.planned=$pdfEvidenceTargets")
+            appendLine("pdf.targetedSourceChecks.attempted=$pdfInspectedCount")
+            appendLine("pdf.targetedSourceChecks.crVerified=$pdfConfirmedCount")
+            appendLine("pdf.targetedSourceChecks.availablePdfIndex=$pdfTotalCount")
+            appendLine("pdf.targetedSourceChecks.requiresExplicitCr=true")
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
                 // Engine details are restricted to boolean lifecycle evidence.
@@ -963,14 +974,56 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     }
 
     private fun startPdfIndex(requestId: String, cr: String, reports: List<ReportRef>) {
-        // A report list can contain hundreds of multi-page PDFs. Fetching
-        // and parsing them automatically competes with clinical navigation
-        // and can trigger Android low-memory process termination. Keep the
-        // verified inventory; inspect PDF text only when its source is opened.
         pdfIndexSelection = requestId
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = reports.map { it.url }.filter(String::isNotBlank).distinct().size
+        if (sessionState != SessionState.CONNECTED) return
+        val studies = ClinicalChronology.days(bundle?.results.orEmpty())
+            .flatMap { it.studies }
+        // Bounded, serial source check of only the clinically unresolved
+        // report types. Never bulk-download a patient's hundreds of PDFs.
+        val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
+            when {
+                ClinicalReportRenderer.isUrineRoutine(it.title) -> 0
+                it.title.contains("coombs",true) -> 1
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                    .containsMatchIn(it.title) -> 2
+                ClinicalPresentation.isCulture(it.title) -> 3
+                else -> 10
+            }
+        }.thenByDescending { it.date }).filter { study ->
+            ClinicalReportRenderer.isUrineRoutine(study.title) ||
+                study.title.contains("coombs",true) ||
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                    .containsMatchIn(study.title) ||
+                ClinicalPresentation.isCulture(study.title)
+        }.mapNotNull { study ->
+            SourceMetadataReview.pdfCandidates(study.rows,reports)
+                .filter { it.url.isNotBlank() }.distinctBy { it.url }
+                .singleOrNull()
+        }.distinctBy { it.url }.take(4)
+        pdfEvidenceTargets=targets.size
+        if(targets.isEmpty()) return
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            targets.forEach { report ->
+                val selected={ requestId==activeRequestId &&
+                    requestId==pdfIndexSelection && cr==activeCr &&
+                    !Thread.currentThread().isInterrupted }
+                if(!selected()) return@execute
+                val ok=enricher.inspect(report,cr,selected)
+                runOnUiThread {
+                    if(requestId!=activeRequestId || cr!=bundle?.patient?.crNo)
+                        return@runOnUiThread
+                    pdfInspectedCount++
+                    if(ok) {
+                        pdfConfirmedCount++
+                        reportTitleEpoch++
+                    } else DiagnosticEvents.record("TARGET_PDF_EVIDENCE_UNAVAILABLE")
+                }
+            }
+        }
     }
 
     private fun openReport(url: String) {
@@ -3240,7 +3293,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else emptyList()
                     }
                     val verifiedCoombs=remember(study.title,candidatePart) {
-                        PdfClinicalSummaries.coombs(study.title,candidatePart)
+                        PdfClinicalEvidence.coombs(study.title,candidatePart)
+                    }
+                    val isFluidStudy=remember(study.title) {
+                        Regex("""(?i)csf|pleural|ascitic|synovial|pericardial|fluid\s+cell""")
+                            .containsMatchIn(study.title)
+                    }
+                    val verifiedFluid=remember(isFluidStudy,candidatePart,rows) {
+                        if(isFluidStudy) PdfClinicalEvidence.specimen(candidatePart)
+                            .ifBlank {
+                                rows.mapNotNull { row ->
+                                    PdfClinicalEvidence.specimen(
+                                        "Specimen: "+row.specimenType)
+                                        .takeIf(String::isNotBlank)
+                                }.distinct().singleOrNull().orEmpty()
+                            }
+                        else ""
                     }
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
@@ -3323,6 +3391,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if(provenance.isNotEmpty() && !isMicro)
                                 Text(provenance.joinToString(" · "),
                                     fontSize=10.sp,color=Color(0xFF486581))
+                            if(isFluidStudy) Text(
+                                if(verifiedFluid.isNotBlank()) "Specimen: "+verifiedFluid
+                                else "Specimen type not identified in available source data",
+                                fontSize=10.sp,color=if(verifiedFluid.isNotBlank())
+                                    Color(0xFF486581) else Color(0xFF875B22))
                             if(isMicro && !isCulture && microIndex.isNotEmpty())
                                 Text(microIndex.joinToString(" · "),fontSize=10.sp,
                                     color=Color(0xFF486581))
@@ -4556,6 +4629,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         worker.shutdownNow()
         inventoryWorker.shutdownNow()
         diagnosticsWorker.shutdownNow()
+        pdfEvidenceWorker.shutdownNow()
         pdfIndexSelection = ""
         engine.destroy()
         super.onDestroy()
