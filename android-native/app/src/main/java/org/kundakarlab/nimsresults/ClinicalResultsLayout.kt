@@ -319,6 +319,15 @@ object ClinicalResultsLayout {
                     .filter(String::isNotBlank).distinct().singleOrNull().orEmpty()
             }
         if (specimen.isNotBlank()) identifiers += "Specimen " + specimen
+        val name=rows.firstOrNull()?.test.orEmpty()
+        // Preserve culture set/bottle identity that formerly occupied a
+        // separate metadata line below the narrative.
+        val set=Regex("""(?i)\b(\d+)\s*(?:st|nd|rd|th)?\s*set\b""")
+            .find(name)?.groupValues?.getOrNull(1).orEmpty()
+        val bottle=Regex("""(?i)\b(\d+)\s*(?:st|nd|rd|th)?\s*bottle\b""")
+            .find(name)?.groupValues?.getOrNull(1).orEmpty()
+        if (set.isNotBlank()) identifiers += "Set " + set
+        if (bottle.isNotBlank()) identifiers += "Bottle " + bottle
 
         val dates = metadata.filter {
             it.startsWith("Collected ") || it.startsWith("Sent ") ||
