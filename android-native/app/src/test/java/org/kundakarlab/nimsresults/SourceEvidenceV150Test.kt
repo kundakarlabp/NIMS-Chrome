@@ -61,6 +61,23 @@ class SourceEvidenceV150Test {
             listOf(row(test,"Result","+"))))
     }
 
+    @Test fun directAndIndirectAliasesMatchSeparateDocumentTitles() {
+        val direct=SourceMetadataReview.pdfCandidates(
+            listOf(row("Direct Coombs Test (GEL)","Result","1")),
+            listOf(ReportRef(id="d",title="DAT Gel",url="https://www.nimsts.edu.in/HIS/test",
+                collectionDateTime="2026-10-30")))
+        assertEquals(1,direct.size)
+        val indirect=SourceMetadataReview.pdfCandidates(
+            listOf(row("Indirect Coombs Test (GEL)","Result","2")),
+            listOf(ReportRef(id="i",title="IAT Gel",url="https://www.nimsts.edu.in/HIS/test",
+                collectionDateTime="2026-10-30")))
+        assertEquals(1,indirect.size)
+        assertEquals("Negative",PdfClinicalEvidence.coombs("Direct Coombs Test (GEL)",
+            "DAT (Gel)\nResult: Negative"))
+        assertEquals("Positive",PdfClinicalEvidence.coombs("Indirect Coombs Test (GEL)",
+            "IAT (Gel)\nResult: Positive"))
+    }
+
     @Test fun unprovenReportIndexIsLabeledCandidateWithoutVerboseIndexText() {
         val r=row("GRAMS STAINING","Result","No organisms")
         val pdf=ReportRef(id="p",title="GRAMS STAINING",labNumber="E18848",
