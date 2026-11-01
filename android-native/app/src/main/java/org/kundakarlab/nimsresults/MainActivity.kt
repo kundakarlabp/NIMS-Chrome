@@ -3306,11 +3306,39 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
                         else emptyList()
                     }
-                    val verifiedCoombs=remember(study.title,candidatePart,
-                        candidateGeometry,rows) {
+                    // Pick the first independently CR/lab-verified source
+                    // with a named DAT/IAT result. The control and comment
+                    // must come from that exact same source, never an opaque
+                    // LIS dropdown or a different patient's PDF.
+                    val verifiedCoombsPdf=remember(study.title,candidatePart,
+                        candidateGeometry) {
+                        sequenceOf(candidateGeometry,candidatePart)
+                            .firstNotNullOfOrNull { source ->
+                                PdfClinicalEvidence.coombs(study.title,source)
+                                    ?.let { it to source }
+                            }
+                    }
+                    val verifiedCoombs=remember(rows,verifiedCoombsPdf) {
                         ClinicalSourceQualitative.coombs(rows)
-                            ?: PdfClinicalEvidence.coombs(study.title,candidateGeometry)
-                            ?: PdfClinicalEvidence.coombs(study.title,candidatePart)
+                            ?: verifiedCoombsPdf?.first
+                    }
+                    val verifiedCoombsControl=remember(study.title,verifiedCoombs,
+                        verifiedCoombsPdf) {
+                        if(verifiedCoombs!=null &&
+                            verifiedCoombsPdf?.first==verifiedCoombs)
+                            PdfClinicalEvidence.coombsControl(study.title,
+                                verifiedCoombsPdf.second)
+                        else null
+                    }
+                    val verifiedCoombsComment=remember(study.title,verifiedCoombs,
+                        verifiedCoombsPdf) {
+                        if(verifiedCoombs!=null &&
+                            verifiedCoombsPdf?.first==verifiedCoombs &&
+                            Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
+                                .containsMatchIn(study.title) &&
+                            !study.title.contains("indirect",true))
+                            PdfClinicalEvidence.coombsComment(verifiedCoombsPdf.second)
+                        else null
                     }
                     val isFluidStudy=remember(study.title) {
                         Regex("""(?i)csf|pleural|ascitic|synovial|pericardial|fluid\s+cell""")
@@ -3474,8 +3502,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
                                     fontWeight=FontWeight.Medium,
                                     color=Color(0xFF102A43))
-
                             }
+                            if(verifiedCoombsControl!=null)
+                                Text("DAT control: "+verifiedCoombsControl,
+                                    fontSize=11.sp,color=Color(0xFF486581))
+                            if(verifiedCoombsComment!=null)
+                                Text("Comment: "+verifiedCoombsComment,
+                                    fontSize=11.sp,color=Color(0xFF486581))
                             if(verifiedBlood!=null) {
                                 Text("ABO/Rh: "+verifiedBlood.group,
                                     fontSize=13.sp,fontWeight=FontWeight.Bold,
