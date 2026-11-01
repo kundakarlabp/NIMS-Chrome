@@ -38,9 +38,9 @@ object PdfClinicalEvidence {
      */
     fun coombs(test: String, document: String): String? {
         val expected = when {
-            Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT)\b""")
+            Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT|ICT)\b""")
                 .containsMatchIn(test) -> "indirect"
-            Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT)\b""")
+            Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
                 .containsMatchIn(test) -> "direct"
             else -> return null
         }
@@ -49,8 +49,8 @@ object PdfClinicalEvidence {
         // Heading must identify the specific modality: a "Result: Negative"
         // elsewhere on the page is not sufficient for DAT or IAT.
         val heading = Regex(
-            """(?im)^\s*(?:\d+[.)]\s*)?(direct|indirect)\s+""" +
-                """(?:coombs|antiglobulin)(?:\s+test)?""" +
+            """(?im)^\s*(?:\d+[.)]\s*)?""" +
+                """((?:direct|indirect)\s+(?:coombs|antiglobulin)(?:\s+test)?|DAT|DCT|IAT|ICT)""" +
                 """(?:\s*\(\s*(?:GEL|DAT|IAT)\s*\))?(?=\s|[:=\-]|$)"""
         )
         val parts = heading.findAll(source).toList()
@@ -58,7 +58,13 @@ object PdfClinicalEvidence {
         val word = Regex("""(?i)\b(weak\s+positive|non[\s-]*reactive|negative|positive|reactive)\b""")
         val answers = mutableListOf<String>()
         parts.forEachIndexed { index, match ->
-            if (!match.groupValues[1].equals(expected, true)) return@forEachIndexed
+            val foundMode = when {
+                match.groupValues[1].startsWith("indirect",true) ||
+                    match.groupValues[1].equals("IAT",true) ||
+                    match.groupValues[1].equals("ICT",true) -> "indirect"
+                else -> "direct"
+            }
+            if (foundMode != expected) return@forEachIndexed
             val end = parts.getOrNull(index + 1)?.range?.first ?: source.length
             // A section is limited to its own result header and adjacent
             // output; not distant reference ranges, comments or later tests.
