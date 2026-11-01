@@ -10,6 +10,32 @@ object MicrobiologyReportDisplay {
         value.lowercase(Locale.ROOT).replace(Regex("""[^a-z0-9]+"""), " ").trim()
             .replace(whitespace, " ")
 
+    data class ResolvedReport(
+        val report: ReportRef,
+        val header: PdfDocumentHeader,
+        val specimen: String
+    )
+
+    /**
+     * For an aerobic culture with two PDF candidates, all candidates must
+     * be inspected before one can be selected by exact clinical evidence.
+     * An unopened alternative might contain the same no-growth narrative.
+     */
+    fun uniqueReport(rows: List<LabResult>, reports: List<ReportRef>,
+                     patientCr: String, date: LocalDate): ResolvedReport? {
+        if (patientCr.isBlank() || reports.isEmpty() || reports.size > 4) return null
+        val inspected=reports.map { report ->
+            val header=ReportTitleCache.header(report.url)
+                ?.takeIf { it.crNo==patientCr } ?: return null
+            val text=ReportTitleCache.extracted(report.url)
+                ?.takeIf(String::isNotBlank) ?: return null
+            val specimen=specimen(rows,report,header,text,date)
+            if (specimen.isBlank()) null
+            else ResolvedReport(report,header,specimen)
+        }
+        return inspected.filterNotNull().singleOrNull()
+    }
+
     /**
      * Transfer "Sample Processed" only when a SINGLE patient-verified PDF
      * also matches the indexed accession, investigation date, and an actual

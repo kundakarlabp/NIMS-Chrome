@@ -986,15 +986,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
             when {
                 it.title.contains("coombs",true) -> 0
-                ClinicalReportRenderer.isUrineRoutine(it.title) -> 1
-                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                ClinicalPresentation.isCulture(it.title) -> 1
+                Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
                     .containsMatchIn(it.title) -> 2
-                ClinicalPresentation.isCulture(it.title) -> 3
+                ClinicalReportRenderer.isUrineRoutine(it.title) -> 3
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                    .containsMatchIn(it.title) -> 4
                 else -> 10
             }
         }.thenByDescending { it.date }).filter { study ->
             ClinicalReportRenderer.isUrineRoutine(study.title) ||
                 study.title.contains("coombs",true) ||
+                Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
+                    .containsMatchIn(study.title) ||
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
                 ClinicalPresentation.isCulture(study.title)
@@ -1006,7 +1010,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // NOT automatic attribution of a candidate to a result.
             if(study.title.contains("coombs",true)) options.take(2)
             else options.singleOrNull()?.let { listOf(it) } ?: emptyList()
-        }.distinctBy { it.url }.take(4)
+        }.distinctBy { it.url }.take(6)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
         pdfEvidenceWorker.execute {
@@ -3304,8 +3308,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfUrineSummaries.extract(candidateGeometry+"\n"+candidatePart)
                         else emptyList()
                     }
-                    val verifiedCoombs=remember(study.title,candidatePart,rows) {
+                    val verifiedCoombs=remember(study.title,candidatePart,
+                        candidateGeometry,rows) {
                         ClinicalSourceQualitative.coombs(rows)
+                            ?: PdfClinicalEvidence.coombs(study.title,candidateGeometry)
                             ?: PdfClinicalEvidence.coombs(study.title,candidatePart)
                     }
                     val isFluidStudy=remember(study.title) {
@@ -3347,16 +3353,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         } else inlineRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
-                    val microSpecimen=remember(rows,candidates,verifiedHeader,
-                        candidatePart,study.date) {
-                        if(isMicro) MicrobiologyReportDisplay.specimen(
-                            rows,candidates.singleOrNull(),verifiedHeader,
-                            candidatePart,study.date)
-                        else ""
+                    val resolvedMicro=remember(rows,candidates,reportTitleEpoch,
+                        current.patient.crNo,study.date) {
+                        if(isMicro) MicrobiologyReportDisplay.uniqueReport(
+                            rows,candidates,current.patient.crNo,study.date)
+                        else null
                     }
-                    val microLine=remember(rows,candidates,verifiedHeader) {
+                    val microSpecimen=resolvedMicro?.specimen.orEmpty()
+                    val microLine=remember(rows,candidates,verifiedHeader,resolvedMicro) {
                         if(isMicro) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
-                            rows,candidates,verifiedHeader)
+                            rows,resolvedMicro?.let { listOf(it.report) } ?: candidates,
+                            resolvedMicro?.header ?: verifiedHeader)
                         else ""
                     }
                     val urineCodes=remember(study.rows) {
@@ -3594,8 +3601,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                             Text(summary.comment,fontSize=11.sp,
                                                                 color=Color(0xFF486581))
                                                     }
-                                                } else Text(rawValue,fontSize=12.sp,
-                                                    color=abnormalColor(row.abnormal))
+                                                } else {
+                                                    val fungal=FungalReportSummary.extract(
+                                                        study.title,row.valueText)
+                                                    if(fungal.isNotEmpty())
+                                                        fungal.forEach { finding ->
+                                                            Text(finding.label+": "+finding.result,
+                                                                fontSize=12.sp,
+                                                                color=abnormalColor(row.abnormal))
+                                                        }
+                                                    else Text(rawValue,fontSize=12.sp,
+                                                        color=abnormalColor(row.abnormal))
+                                                }
                                             }
                                             // Culture provenance is displayed with the
                                             // set/bottle above; do not repeat the same
