@@ -3371,7 +3371,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)
                                         else ClinicalChronology.parameterLabel(row)
-                                    val rawValue=ClinicalChronology.fullValue(row)
+                                    val rawValue=ClinicalReadableSummaries.compactValue(row)
                                     val unmapped=ClinicalChronology.isUnmapped(row)
                                     val longText=ClinicalChronology.isNarrativeRow(study,row)
                                     val caption=if(unmapped)
@@ -3379,8 +3379,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else label
                                     if(longText) {
                                         Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
-                                            if(!(caption.equals("Result",true) &&
-                                                    ClinicalPresentation.isCulture(study.title)))
+                                            if(!ClinicalReadableSummaries.redundantNarrativeLabel(
+                                                    caption,study.title))
                                                 Text(caption,fontSize=11.sp,
                                                     color=if(unmapped) Color(0xFF875B22)
                                                         else Color(0xFF486581),
@@ -3406,18 +3406,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     }
                                                 val collectedFromPdf=verifiedHeader?.collectionDate
                                                     ?.takeIf { it.isNotBlank() &&
-                                                        cultureIndex.none { x -> x.startsWith("Collected ") } }
+                                                        microIndex.none { x -> x.contains("Collected ") } }
                                                     ?.let {
                                                         "Collected "+LabPanelMatrix.displayDateTime(it)
                                                     }
-                                                val fullInfo=(cultureInfo + cultureIndex +
+                                                val fullInfo=(cultureInfo + microIndex +
                                                     listOfNotNull(collectedFromPdf,reportedFromPdf))
                                                     .distinct()
                                                 if(fullInfo.isNotEmpty()) Text(
                                                     fullInfo.joinToString(" · "),
                                                     fontSize=10.sp,fontWeight=FontWeight.Medium,
                                                     color=Color(0xFF24496A))
-                                                Text(culture.result.ifBlank { rawValue },
+                                                val cultureSections=if(study.title.contains(
+                                                        "urine",true))
+                                                    ClinicalReadableSummaries.urineCulture(
+                                                        culture.result.ifBlank { rawValue })
+                                                    else emptyList()
+                                                if(cultureSections.isNotEmpty())
+                                                    cultureSections.forEach { part ->
+                                                        Text(part.heading,fontSize=10.sp,
+                                                            fontWeight=FontWeight.SemiBold,
+                                                            color=Color(0xFF24496A))
+                                                        Text(part.content,fontSize=12.sp,
+                                                            color=abnormalColor(row.abnormal))
+                                                    }
+                                                else Text(culture.result.ifBlank { rawValue },
                                                     fontSize=12.sp,color=abnormalColor(row.abnormal))
                                                 if(culture.guidance.isNotBlank()) {
                                                     TextButton(onClick={
@@ -3490,8 +3503,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 Text(rawValue,fontSize=12.sp,
                                                     color=abnormalColor(row.abnormal),
                                                     modifier=Modifier.weight(0.8f))
-                                                if(row.refRange.isNotBlank()) Text(
-                                                    row.refRange,
+                                                if(ClinicalReadableSummaries.usefulReference(
+                                                        row.refRange).isNotBlank()) Text(
+                                                    ClinicalReadableSummaries.usefulReference(
+                                                        row.refRange),
                                                     fontSize=9.sp,
                                                     color=Color(0xFF7B8794),
                                                     maxLines=1,
