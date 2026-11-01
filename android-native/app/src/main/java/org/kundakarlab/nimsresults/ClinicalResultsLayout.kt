@@ -282,6 +282,59 @@ object ClinicalResultsLayout {
         return lines
     }
 
+
+    /**
+     * Compact source-provenance header for every stain and culture card.
+     * The date section above the card already identifies the report day:
+     * a second "Reported" date on that same day would just repeat it.
+     * Keep raw rows unchanged; never convert an unverified index candidate
+     * or a numeric HIS specimen choice into a clinical specimen.
+     */
+    fun compactMicrobiologyHeader(
+        rows: List<LabResult>,
+        candidates: List<ReportRef>,
+        verified: PdfDocumentHeader? = null,
+        displayedDate: java.time.LocalDate,
+        bloodCulture: Boolean = false
+    ): List<String> {
+        val metadata = microbiologyProvenance(rows, candidates, verified, bloodCulture)
+        val identifiers = metadata.filter {
+            it.startsWith("Lab ") || it.startsWith("Report index · Lab ") ||
+                it.startsWith("Sample ")
+        }.toMutableList()
+        // A blood-culture sample number is as important as other samples;
+        // older display logic excluded it, so recover only the explicit ID.
+        if (bloodCulture && identifiers.none { it.startsWith("Sample ") }) {
+            val sample = rows.map { it.sampleNumber.trim() }
+                .filter(String::isNotBlank).distinct().singleOrNull()
+                ?: verified?.sampleNumber.orEmpty()
+            if (sample.isNotBlank()) identifiers += "Sample " + sample
+        }
+        val specimen = rows.map { it.specimenType.trim() }
+            .filter { it.isNotBlank() && !it.matches(Regex("""\d+""")) }
+            .distinct().singleOrNull().orEmpty()
+        if (specimen.isNotBlank()) identifiers += "Specimen " + specimen
+
+        val dates = metadata.filter {
+            it.startsWith("Collected ") || it.startsWith("Sent ") ||
+                it.startsWith("Reported ")
+        }.filter { label ->
+            // Only remove a duplicate reporting *date*, not collection time.
+            !label.startsWith("Reported ") ||
+                RecentReportDates.parse(label.removePrefix("Reported ").trim()) != displayedDate
+        }.filterIndexed { index, label ->
+            // Avoid repeated collection and sent dates if they are identical.
+            if (!label.startsWith("Sent ")) true
+            else {
+                val collected = metadata.firstOrNull { it.startsWith("Collected ") }
+                    ?.removePrefix("Collected ")?.trim()
+                collected == null || collected != label.removePrefix("Sent ").trim()
+            }
+        }
+        return listOf(identifiers.distinct().joinToString(" · "),
+            dates.distinct().joinToString(" · ")).filter(String::isNotBlank)
+    }
+
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
     /** Split the explicit headings of flattened NIMS imaging narratives. */
     fun radiology(text: String): Narrative {
