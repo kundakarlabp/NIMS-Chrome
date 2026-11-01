@@ -290,7 +290,7 @@ object AppDiagnostics {
             appendLine("diagnostics.results.urine_source_pdf_required_for_codes=true")
             appendLine("diagnostics.results.coombs_studies_requiring_verified_source=" +
                 studies.count { study ->
-                    Regex("""(?i)\\b(?:direct|indirect)\\s+coombs""")
+                    Regex("""(?i)\b(?:direct|indirect)\s+coombs""")
                         .containsMatchIn(study.title) &&
                         ClinicalChronology.inlineRows(study).isEmpty()
                 })
