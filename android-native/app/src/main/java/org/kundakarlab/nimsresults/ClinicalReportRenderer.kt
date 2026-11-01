@@ -70,12 +70,19 @@ object ClinicalReportRenderer {
                     """(?i)^(?:negative|nitrite|ketones|blood|protein|bilirubin|glucose|urobilinogen)\s*\(result\)$"""
                 ))) return true
         }
-        // Fluid sample type and gross appearance use local HIS choice codes.
-        // 1 or 2 does not establish which specimen or appearance was selected.
-        if (code.matches(Regex("[0-9]+")) &&
-            name.matches(Regex(
+        // Choice controls may return numeric IDs, punctuation, or meaningful
+        // named values. Only explicitly recognised names are clinical facts.
+        // Never guess the meaning of an LIS select value ("3", "8", "+").
+        if (name.matches(Regex(
                 """(?i)^(?:nature\s+of\s+specimen|physical\s+appearance|fluid\s+appearance|fluid\s+colou?r)$"""
-            ))) return true
+            ))) {
+            val clean=code.trim()
+            if (name.equals("Nature Of Specimen", true)) {
+                return PdfClinicalEvidence.specimen("Specimen: " + clean).isBlank()
+            }
+            return !Regex("""(?i)^(?:clear|hazy|turbid|cloudy|straw\s*colou?red|yellow|colourless|colorless|bloody|hemorrhagic|haemorrhagic|purulent|milky|serous|amber|red|pink|brown|transparent|opaque)$""")
+                .matches(clean)
+        }
         // Generic /HPF or /LPF fields lack the named urinary sediment
         // analyte; an apparently numeric value must not be labeled as RBC/WBC.
         if (Regex("""(?i)^/\s*[hl]pf\s*\(result\)$""").matches(name)) return true
