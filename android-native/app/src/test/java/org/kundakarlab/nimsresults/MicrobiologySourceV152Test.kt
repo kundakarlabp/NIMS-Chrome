@@ -55,6 +55,17 @@ class MicrobiologySourceV152Test {
         } finally { ReportTitleCache.clear() }
     }
 
+    @Test fun twoAerobicCulturePdfsAreBothSelectedForBoundedInspection() {
+        val a=report("AEROBIC CULTURE","E10011","a")
+        val b=report("AEROBIC CULTURE","E10012","b")
+        val selected=SourceMetadataReview.inspectionCandidates(
+            "AEROBIC CULTURE",listOf(a,b))
+        assertEquals(2,selected.size)
+        assertEquals(setOf("a","b"),selected.map { it.id }.toSet())
+        assertEquals(1,SourceMetadataReview.inspectionCandidates(
+            "FUNGAL KOH PREPARATION",listOf(a)).size)
+    }
+
     @Test fun calcofluorAndKohAliasesStaySeparate() {
         val calco=result("FUNGAL FLUORESCENCE STAINING (CALCOFLUOR)",
             "CALCOFLOUR WHITE MOUNT SHOWS NO FUNGAL ELEMENTS.")
