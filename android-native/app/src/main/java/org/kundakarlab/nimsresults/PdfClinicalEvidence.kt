@@ -37,7 +37,7 @@ object PdfClinicalEvidence {
      * Reject conflicting or unlabelled conclusions.
      */
     fun coombs(test: String, document: String): String? {
-        val expected = when {
+        val target = when {
             Regex("""(?i)\b(?:indirect\s+(?:coombs|antiglobulin)|IAT|ICT)\b""")
                 .containsMatchIn(test) -> "indirect"
             Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
@@ -45,66 +45,63 @@ object PdfClinicalEvidence {
             else -> return null
         }
         if (document.isBlank()) return null
-        val source = document.replace("\r\n", "\n")
-        // Heading must identify the specific modality: a "Result: Negative"
-        // elsewhere on the page is not sufficient for DAT or IAT.
-        val heading = Regex(
+        val source=document.replace("\r\n","\n")
+        val headings=Regex(
             """(?im)^\s*(?:\d+[.)]\s*)?""" +
                 """((?:direct|indirect)\s+(?:coombs|antiglobulin)(?:\s+test)?|DAT|DCT|IAT|ICT)""" +
-                """(?:\s*\(\s*(?:GEL|DAT|IAT)\s*\))?(?=\s|[:=\-]|$)"""
+                """(?:\s*\(\s*(?:GEL|DAT|IAT|DCT|ICT)\s*\))?(?=\s|[:=\-]|$)"""
+        ).findAll(source).toList()
+        if (headings.isEmpty()) return null
+        val value=Regex(
+            """(?i)^(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\s*[.]?$"""
         )
-        val parts = heading.findAll(source).toList()
-        if (parts.isEmpty()) return null
-        val word = Regex("""(?i)\b(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\b""")
-        val answers = mutableListOf<String>()
-        parts.forEachIndexed { index, match ->
-            val foundMode = when {
-                match.groupValues[1].startsWith("indirect",true) ||
-                    match.groupValues[1].equals("IAT",true) ||
-                    match.groupValues[1].equals("ICT",true) -> "indirect"
+        val labelled=Regex(
+            """(?i)^(?:final\s+)?(?:result|observation|interpretation|finding)\s*[:=\-]?\s*(.*)$"""
+        )
+        val results=mutableListOf<String>()
+        for ((i,heading) in headings.withIndex()) {
+            val mode=when {
+                heading.groupValues[1].startsWith("indirect",true) ||
+                    heading.groupValues[1].equals("IAT",true) ||
+                    heading.groupValues[1].equals("ICT",true) -> "indirect"
                 else -> "direct"
             }
-            if (foundMode != expected) return@forEachIndexed
-            val end = parts.getOrNull(index + 1)?.range?.first ?: source.length
-            // A section is limited to its own result header and adjacent
-            // output; not distant reference ranges, comments or later tests.
-            val section = source.substring(match.range.last + 1, end)
-                .take(650).lines().take(9)
-            val observations = mutableListOf<String>()
-            section.forEachIndexed { n, line ->
-                // Controls may appear alongside DAT in a multi-column
-                // blood-bank PDF ("Traces   Control: Neg"). Never treat
-                // the negative control as the patient's DAT result.
-                val controlAt=Regex("""(?i)\bcontrol\s*[:=]?""")
-                    .find(line)?.range?.first ?: line.length
-                val clean=line.substring(0,controlAt).trim()
-                if (clean.isEmpty()) return@forEachIndexed
-                if (Regex("""(?i)^(?:reference|normal|method|remarks?|comments?|interpretation\s+guide)\b""")
-                        .containsMatchIn(clean)) return@forEachIndexed
-                val labelled = Regex(
-                    """(?i)^(?:[:=\-]\s*)?(?:(?:final\s+)?(?:result|observation|interpretation|finding)\s*[:=\-]?\s*)?""" +
-                        """(weak\s+positive|traces?|non[\s-]*reactive|negative|positive|reactive|neg)\s*[.]?$"""
-                ).find(clean)
-                if (labelled != null) observations += labelled.groupValues[1]
-                else if (n < 5) {
-                    // Report tables sometimes put "Result" on one line
-                    // and the value immediately below it.
-                    val prior = section.getOrNull(n - 1)?.trim().orEmpty()
-                    if (Regex("""(?i)^(?:result|observation|interpretation)\s*[:=\-]?$""")
-                            .matches(prior)) {
-                        word.find(clean)?.groupValues?.get(1)?.let(observations::add)
+            if(mode!=target) continue
+            val end=headings.getOrNull(i+1)?.range?.first ?: source.length
+            val section=source.substring(heading.range.last+1,end)
+                .take(500).lines().take(8)
+            val found=mutableListOf<String>()
+            for((lineIndex,rawLine) in section.withIndex()) {
+                // A DAT control is a separate assay control, not the
+                // patient's DAT result (e.g. "Traces   Control: Neg").
+                val line=rawLine.substringBefore(
+                    Regex("""(?i)\bcontrol\s*[:=\-]?""")).trim()
+                    .trimStart(':','=','-').trim()
+                if(line.isBlank() || Regex(
+                    """(?i)^(?:reference|normal\s+range|method|comments?|remarks?|test\s+done\s+by)\b"""
+                    ).containsMatchIn(line)) continue
+                val candidate=labelled.find(line)?.groupValues?.getOrNull(1)?.trim() ?: line
+                val direct=value.matchEntire(candidate)?.groupValues?.get(1)
+                if(direct!=null) found+=direct
+                else if (lineIndex>0) {
+                    val previous=section[lineIndex-1].trim()
+                    if(Regex("""(?i)^(?:result|observation|finding)\s*[:=\-]?$""")
+                            .matches(previous)) {
+                        value.find(candidate)?.groupValues?.get(1)?.let(found::add)
                     }
                 }
             }
-            val unique = observations.map {
-                val label=it.trim().replace(Regex("""\s+"""), " ").lowercase()
-                if(label=="neg") "negative" else label
+            val values=found.map { v ->
+                when(v.lowercase().trim()) {
+                    "neg" -> "Negative"
+                    "trace", "traces" -> "Traces"
+                    else -> v.lowercase().replaceFirstChar(Char::uppercase)
+                }
             }.distinct()
-            if (unique.size == 1) answers += unique.single()
+            if(values.size>1) return null
+            if(values.size==1) results+=values.single()
         }
-        val uniqueResults = answers.distinct()
-        if (uniqueResults.size != 1) return null
-        return uniqueResults.single().replaceFirstChar { it.uppercase() }
+        return results.distinct().singleOrNull()
     }
 
 }
