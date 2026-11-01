@@ -41,16 +41,7 @@ object ClinicalResultsLayout {
                     p.contains("globulin") -> 7
                     else -> 30
                 }
-                isCoag -> when {
-                    p.contains("ptpatient") || (p.contains("prothrombintime") &&
-                        p.contains("patient")) -> 0
-                    p.contains("ptcontrol") || (p.contains("prothrombintime") &&
-                        p.contains("control")) -> 1
-                    p == "inr" || p == "ptinr" -> 2
-                    p.contains("apttpatient") -> 3
-                    p.contains("apttcontrol") -> 4
-                    else -> 20
-                }
+                isCoag -> CoagulationDisplay.sortPriority(test,it.value)
                 else -> when {
                     p == "hb" || p.contains("hemoglobin") || p.contains("haemoglobin") -> 0
                     p == "tlc" || p == "tlccount" || p == "wbc" ||
