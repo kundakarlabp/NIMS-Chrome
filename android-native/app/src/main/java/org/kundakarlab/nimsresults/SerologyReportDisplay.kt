@@ -25,14 +25,21 @@ object SerologyReportDisplay {
     private val dengueNs1=Regex("""(?i)\b(?:dengue(?:\s+virus)?\s+)?NS1\s*(?:Ag|antigen)?\b""")
     private val leptospira=Regex("""(?i)\bleptospira\s+IgM\b""")
     private fun assay(test:String,section:String):String {
-        val full=section+" "+test
-        return when {
-            Regex("""(?i)\bdot\s*blot\s*ELISA\b""").containsMatchIn(full) ->
-                "Dot blot ELISA"
-            Regex("""(?i)\bELFA\b""").containsMatchIn(full) -> "ELFA"
-            Regex("""(?i)\bELISA\b""").containsMatchIn(full) -> "ELISA"
-            else -> ""
+        fun sourceMethod(text:String):String {
+            val dot=Regex("""(?i)\bdot\s*blot\s*ELISA\b""")
+                .containsMatchIn(text)
+            val elfa=Regex("""(?i)\bELFA\b""").containsMatchIn(text)
+            val elisa=Regex("""(?i)\bELISA\b""").containsMatchIn(text)
+            return when {
+                dot && !elfa -> "Dot blot ELISA"
+                elfa && !elisa -> "ELFA"
+                elisa && !elfa -> "ELISA"
+                else -> ""
+            }
         }
+        // The source narrative's specific method beats a broad LIS panel
+        // title such as "HCV ELFA / ELISA".
+        return sourceMethod(section).ifBlank { sourceMethod(test) }
     }
     private fun titled(label:String,test:String,section:String):String =
         label+assay(test,section).takeIf(String::isNotBlank)
