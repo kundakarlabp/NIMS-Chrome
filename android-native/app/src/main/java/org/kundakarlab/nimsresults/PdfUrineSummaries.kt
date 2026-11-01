@@ -13,7 +13,7 @@ object PdfUrineSummaries {
         "Ketones" to Regex("""(?i)^\s*(?:urine\s*)?ketones?(?:\s*\(urine\))?\s*[:=\-]?\s*(negative|positive|nil|absent|trace|small|moderate|large|\+{1,4}|\+/-|\-)(?=\s|$)"""),
         "Protein" to Regex("""(?i)^\s*(?:urine\s*)?protein\s*[:=]?\s*(negative|positive|nil|trace|\+{1,4}|\d+(?:\.\d+)?\s*(?:mg/dl|g/l))(?=\s|$)"""),
         "Nitrite" to Regex("""(?i)^\s*(?:urine\s*)?nitrites?\s*[:=]?\s*(negative|positive|nil)\b"""),
-        "Glucose" to Regex("""(?i)^\s*(?:urine\s*)?(?:\(?glucose\)?|sugar(?:\s*\(glucose\))?)(?:\s*\(urine\))?\s*[:=\-]?\s*(negative|positive|nil|absent|trace|\+{1,4}|\+/-|\-)(?=\s|$)"""),
+        "Glucose" to Regex("""(?i)^\s*(?:urine\s*)?(?:sugar\s*[:=]?\s*\(?glucose\)?|\(?glucose\)?|sugar)(?:\s*\(urine\))?\s*[:=\-]?\s*(negative|positive|nil|absent|trace|\+{1,4}|\+/-|\-)(?=\s|$)"""),
         "Epithelial cells" to Regex("""(?i)^\s*(?:epithelial\s+cells?\s*[:=]?\s*)?(?:\(\s*squamous\s*\)|squamous)(?:\s+cells?)?\s*[:=]?\s*(\d+\s*(?:-|to)\s*\d+|nil|\d+)(?:\s*/?\s*HPF)?(?=\s|$)""")
     )
     /** Preserve reported words/symbols; never translate arbitrary HIS codes.
