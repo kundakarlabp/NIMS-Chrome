@@ -176,7 +176,7 @@ class EnquiryReviewActivity : Activity() {
                         (text.includes('status')||text.includes('sample'));
                 });
                 return (table?100:0)+
-                    (/cr\\s*(no|number)?\\s*[:#]?\\s*\\d{15}/i.test(body)?30:0);
+                    (/cr\s*(no|number)?\s*[:#]?\s*\d{15}/i.test(body)?30:0);
             };
             docs.sort((a,b)=>score(b)-score(a));
             const selected=docs[0]||document;
