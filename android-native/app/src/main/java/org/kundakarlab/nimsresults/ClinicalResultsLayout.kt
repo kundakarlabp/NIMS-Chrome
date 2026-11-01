@@ -50,8 +50,9 @@ object ClinicalResultsLayout {
                 }
                 else -> when {
                     p == "hb" || p.contains("hemoglobin") || p.contains("haemoglobin") -> 0
-                    p == "tlc" || p == "wbc" || p.contains("totalleukocyte") ||
-                        p.contains("totalwhiteblood") -> 1
+                    p == "tlc" || p == "tlccount" || p == "wbc" ||
+                        p.contains("totalleuco") || p.contains("totalleuko") ||
+                        p.contains("totalwhite") || p.contains("whitebloodcell") -> 1
                     p.contains("neutrophil") -> 2
                     p.contains("lymphocyte") -> 3
                     p.contains("monocyte") -> 4
@@ -75,6 +76,77 @@ object ClinicalResultsLayout {
                 }
             }
         }.thenBy { it.index }).map { it.value }
+    }
+
+    /**
+     * A routine value-only study is already readable without its PDF.
+     * PDF inventory remains accessible in the dedicated Source PDFs screen.
+     */
+    fun omitRoutinePdf(test: String, rows: List<LabResult>): Boolean {
+        if (rows.isEmpty() || ClinicalReportRenderer.isMicrobiologyInvestigation(test)) return false
+        val t = key(test)
+        if (Regex("""(?i)^(?:cbc|cbp|hemogram|haemogram|completehemogram|completehaemogram|completeblood|lft|creatinine|serumcreatinine|serumurea|urea|electrolyte|liverfunction|renalfunction|kidneyfunction|lipidprofile|iron|ferritin|ldh|lactatedehydrogenase|thyroidfunction|prothrombintime|ptinr|ptaptt|inr|esr|serumcalcium|calcium|serummagnesium)""").containsMatchIn(t))
+            return true
+        // Other uncomplicated biochemistry panels, including single numeric
+        // analytes; do not suppress PDFs for interpretive narrative reports.
+        return rows.all { row ->
+            row.valueText.trim().toDoubleOrNull() != null &&
+                row.valueText.length <= 18
+        }
+    }
+
+    /** Raw NIMS dropdown integers are visible in a separate urine chemistry
+     * section without mistaking code 1 for pH 1 or code 7 for SG 7. */
+    fun urineChemistryCode(row: LabResult): Boolean {
+        if (!ClinicalReportRenderer.isUrineRoutine(row.test)) return false
+        val p = key(row.parameter)
+        return p in setOf("phresult","specificgravityresult","ketonesresult",
+            "ketoneresult","nitriteresult","proteinresult","glucoseresult",
+            "bloodresult","bilirubinresult","urobilinogenresult") &&
+            row.valueText.trim().isNotEmpty() && row.valueText.trim() != "-1" &&
+            ClinicalReportRenderer.isUninterpretedCode(row)
+    }
+
+    fun urineChemistryLabel(row: LabResult): String = when(key(row.parameter)) {
+        "phresult" -> "pH"
+        "specificgravityresult" -> "Specific gravity"
+        "ketoneresult", "ketonesresult" -> "Ketones"
+        "nitriteresult" -> "Nitrite"
+        "proteinresult" -> "Protein"
+        "glucoseresult" -> "Glucose"
+        "bloodresult" -> "Blood"
+        "bilirubinresult" -> "Bilirubin"
+        "urobilinogenresult" -> "Urobilinogen"
+        else -> row.parameter
+    }
+
+    fun urineCodeDisplay(row: LabResult): String =
+        row.valueText.trim() + " (HIS code)"
+
+    /** Only fields actually recorded in this result or explicitly labelled
+     * in the same culture narrative. A source-index collection date is never
+     * mislabeled as date sent. */
+    fun cultureProvenance(rows: List<LabResult>, sourceIndex: List<ReportRef> = emptyList()): List<String> {
+        val narrative = rows.mapNotNull { MicrobiologyNarrativeMetadata.extract(it) }
+        val lab = rows.map { it.labNumber.trim() }.firstOrNull(String::isNotBlank)
+            ?: narrative.map { it.labNumber }.firstOrNull(String::isNotBlank).orEmpty()
+        val sample = rows.map { it.sampleNumber.trim() }.firstOrNull(String::isNotBlank)
+            ?: narrative.map { it.sampleNumber }.firstOrNull(String::isNotBlank).orEmpty()
+        val sent = rows.map { it.sentDate.trim() }.firstOrNull(String::isNotBlank)
+            ?: narrative.map { it.sentDate }.firstOrNull(String::isNotBlank).orEmpty()
+        val reported = rows.map { it.reportedDate.trim() }.firstOrNull(String::isNotBlank)
+            ?: narrative.map { it.reportedDate }.firstOrNull(String::isNotBlank).orEmpty()
+        val match = sourceIndex.singleOrNull { it.labNumber.equals(lab, true) && lab.isNotBlank() }
+        val trueSent = sent.ifBlank { match?.sentDate.orEmpty() }
+        return listOfNotNull(
+            lab.takeIf(String::isNotBlank)?.let { "Lab " + it },
+            sample.takeIf(String::isNotBlank)?.let { "Sample " + it },
+            trueSent.takeIf(String::isNotBlank)?.let { "Sent " + it },
+            reported.takeIf(String::isNotBlank)?.let { "Reported " + it },
+            match?.collectionDateTime?.takeIf {
+                it.isNotBlank() && sent.isBlank() && match.sentDate.isBlank()
+            }?.let { "Source-index collected " + it }
+        )
     }
 
     data class Narrative(val sections: List<SourceSection>, val reporter: String)

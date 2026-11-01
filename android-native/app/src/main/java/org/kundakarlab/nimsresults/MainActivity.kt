@@ -3105,8 +3105,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             ClinicalChronology.days(current.results,query,category,within)
         }
         LazyColumn(state=scroll,modifier=Modifier.fillMaxSize(),
-            contentPadding=PaddingValues(start=12.dp,end=19.dp,top=8.dp,bottom=26.dp),
-            verticalArrangement=Arrangement.spacedBy(4.dp)) {
+            contentPadding=PaddingValues(start=10.dp,end=17.dp,top=5.dp,bottom=18.dp),
+            verticalArrangement=Arrangement.spacedBy(2.dp)) {
             item {
                 Row(Modifier.fillMaxWidth(),
                     horizontalArrangement=Arrangement.spacedBy(5.dp)) {
@@ -3145,9 +3145,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     Text(if(day.date==LocalDate.MIN) "Date unavailable"
                         else LabPanelMatrix.displayDate(day.date.toString()) +
                             " · NIMS source date",
-                        fontSize=13.sp,fontWeight=FontWeight.Bold,
+                        fontSize=12.sp,fontWeight=FontWeight.Bold,
                         color=Color(0xFF102A43),
-                        modifier=Modifier.padding(top=10.dp,bottom=4.dp))
+                        modifier=Modifier.padding(top=5.dp,bottom=2.dp))
                 }
                 items(day.studies,key={ "study|"+it.key }) { study ->
                     val rows=study.rows
@@ -3168,8 +3168,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ClinicalResultsLayout.ordered(study.title,
                             ClinicalChronology.inlineRows(study))
                     }
+                    val urineCodes=remember(study.rows) {
+                        study.rows.filter(ClinicalResultsLayout::urineChemistryCode)
+                    }
                     val unresolvedRows=remember(study.rows,study.visible) {
                         ClinicalChronology.unresolvedRows(study)
+                            .filterNot(ClinicalResultsLayout::urineChemistryCode)
                     }
                     var showSourceCodes by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
@@ -3180,9 +3184,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     var pickPdf by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
-                    Surface(color=Color.White,shape=RoundedCornerShape(10.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(horizontal=11.dp,vertical=8.dp),
-                            verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                    Surface(color=Color.White,shape=RoundedCornerShape(8.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal=9.dp,vertical=5.dp),
+                            verticalArrangement=Arrangement.spacedBy(2.dp)) {
                             Row(Modifier.fillMaxWidth(),
                                 horizontalArrangement=Arrangement.SpaceBetween,
                                 verticalAlignment=Alignment.CenterVertically) {
@@ -3195,7 +3199,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 } else {
                                     Spacer(Modifier.weight(1f))
                                 }
-                                if(candidates.isNotEmpty()) {
+                                if(candidates.isNotEmpty() &&
+                                    !ClinicalResultsLayout.omitRoutinePdf(study.title,inlineRows)) {
                                     // PDF remains an optional source-review action;
                                     // it is not required to read any structured result.
                                     TextButton(onClick={pickPdf=true}) {
@@ -3262,9 +3267,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     culture.stage.takeIf { it != "Stage not supplied" },
                                                     culture.accession.takeIf(String::isNotBlank)
                                                         ?.let { "Lab " + it })
-                                                if(cultureInfo.isNotEmpty()) Text(
-                                                    cultureInfo.joinToString(" · "),
-                                                    fontSize=11.sp,fontWeight=FontWeight.SemiBold,
+                                                val provenance = ClinicalResultsLayout
+                                                    .cultureProvenance(rows,candidates)
+                                                val fullInfo = (cultureInfo + provenance).distinct()
+                                                if(fullInfo.isNotEmpty()) Text(
+                                                    fullInfo.joinToString(" · "),
+                                                    fontSize=10.sp,fontWeight=FontWeight.Medium,
                                                     color=Color(0xFF24496A))
                                                 Text(culture.result.ifBlank { rawValue },
                                                     fontSize=12.sp,color=abnormalColor(row.abnormal))
@@ -3296,14 +3304,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 Text(rawValue,fontSize=12.sp,
                                                     color=abnormalColor(row.abnormal))
                                             }
-                                            val narrativeMeta =
-                                                MicrobiologyNarrativeMetadata.extract(row)
-                                            if(narrativeMeta != null) Text(
-                                                "Labelled source narrative · " +
-                                                    narrativeMeta.display() +
-                                                    " · PDF link not verified",
-                                                fontSize=10.sp,
-                                                color=Color(0xFF486581))
+                                            // Culture provenance is displayed with the
+                                            // set/bottle above; do not repeat the same
+                                            // lab ID and date under its narrative.
                                             // Named table entries are extracted only from
                                             // explicit source labels. Never decode combo/cb
                                             // controls to fabricated organisms or ABO groups.
@@ -3336,21 +3339,40 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     else Color(0xFF486581),
                                                 modifier=Modifier.weight(1f)
                                                     .padding(end=8.dp))
-                                            Column(modifier=Modifier.weight(1.1f),
-                                                verticalArrangement=Arrangement.spacedBy(1.dp)) {
+                                            // One-line value and small reference range,
+                                            // aligned without a second vertical row.
+                                            Row(modifier=Modifier.weight(1.3f),
+                                                verticalAlignment=Alignment.CenterVertically,
+                                                horizontalArrangement=Arrangement.spacedBy(5.dp)) {
                                                 Text(rawValue,fontSize=12.sp,
-                                                    color=abnormalColor(row.abnormal))
+                                                    color=abnormalColor(row.abnormal),
+                                                    modifier=Modifier.weight(0.8f))
                                                 if(row.refRange.isNotBlank()) Text(
-                                                    "Ref: " + row.refRange +
-                                                        if(row.unit.isBlank()) ""
-                                                        else " " + row.unit,
-                                                    fontSize=10.sp,
-                                                    color=Color(0xFF66788A))
+                                                    row.refRange,
+                                                    fontSize=9.sp,
+                                                    color=Color(0xFF7B8794),
+                                                    maxLines=1,
+                                                    modifier=Modifier.weight(1f))
                                             }
                                         }
                                     }
                                     if(index<inlineRows.lastIndex) HorizontalDivider(
-                                        color=Color(0xFFEDF1F5))
+                                        thickness=0.5.dp,color=Color(0xFFEDF1F5))
+                                }
+                            }
+                            if(urineCodes.isNotEmpty()) {
+                                Text("Urine chemistry · source-coded fields",
+                                    fontSize=10.sp,fontWeight=FontWeight.SemiBold,
+                                    color=Color(0xFF486581))
+                                urineCodes.forEach { field ->
+                                    Row(Modifier.fillMaxWidth(),
+                                        horizontalArrangement=Arrangement.SpaceBetween) {
+                                        Text(ClinicalResultsLayout.urineChemistryLabel(field),
+                                            fontSize=11.sp,color=Color(0xFF486581),
+                                            modifier=Modifier.weight(1f))
+                                        Text(ClinicalResultsLayout.urineCodeDisplay(field),
+                                            fontSize=11.sp,color=Color(0xFF875B22))
+                                    }
                                 }
                             }
                             if(unresolvedRows.isNotEmpty()) {
