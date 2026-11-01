@@ -3601,8 +3601,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                             Text(summary.comment,fontSize=11.sp,
                                                                 color=Color(0xFF486581))
                                                     }
-                                                } else Text(rawValue,fontSize=12.sp,
-                                                    color=abnormalColor(row.abnormal))
+                                                } else {
+                                                    val fungal=FungalReportSummary.extract(
+                                                        study.title,row.valueText)
+                                                    if(fungal.isNotEmpty())
+                                                        fungal.forEach { finding ->
+                                                            Text(finding.label+": "+finding.result,
+                                                                fontSize=12.sp,
+                                                                color=abnormalColor(row.abnormal))
+                                                        }
+                                                    else Text(rawValue,fontSize=12.sp,
+                                                        color=abnormalColor(row.abnormal))
+                                                }
                                             }
                                             // Culture provenance is displayed with the
                                             // set/bottle above; do not repeat the same
