@@ -96,6 +96,20 @@ object SourceMetadataReview {
         }.thenBy { it.labNumber }.thenBy { it.reportNumber })
     }
 
+    /**
+     * Select bounded PDF inspection targets. Culture stages often index as
+     * two physical PDFs; inspect both before deciding which (if either)
+     * can be linked by exact narrative and specimen evidence.
+     */
+    fun inspectionCandidates(test: String, candidates: List<ReportRef>): List<ReportRef> {
+        val options=candidates.filter { it.url.isNotBlank() }.distinctBy { it.url }
+        return when {
+            test.contains("coombs",true) -> options.take(2)
+            ClinicalPresentation.isCulture(test) -> options.take(3)
+            else -> options.singleOrNull()?.let(::listOf) ?: emptyList()
+        }
+    }
+
     private fun sameInvestigation(test: String, source: String): Boolean {
         val target = titleKey(test)
         val candidate = titleKey(source)

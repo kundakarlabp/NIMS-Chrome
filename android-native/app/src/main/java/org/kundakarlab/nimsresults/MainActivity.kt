@@ -1005,11 +1005,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }.flatMap { study ->
             val options=SourceMetadataReview.pdfCandidates(study.rows,reports)
                 .filter { it.url.isNotBlank() }.distinctBy { it.url }
-            // DAT/IAT may have two separate signed report candidates.
-            // Inspect at most two; inspection is evidence acquisition,
-            // NOT automatic attribution of a candidate to a result.
-            if(study.title.contains("coombs",true)) options.take(2)
-            else options.singleOrNull()?.let { listOf(it) } ?: emptyList()
+            // Two same-date aerobic cultures must BOTH be inspected to
+            // resolve a unique specimen. Inspection != source attribution.
+            SourceMetadataReview.inspectionCandidates(study.title,options)
         }.distinctBy { it.url }.take(6)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
