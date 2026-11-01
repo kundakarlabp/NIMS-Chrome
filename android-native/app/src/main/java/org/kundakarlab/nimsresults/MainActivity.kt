@@ -3324,21 +3324,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     val verifiedCoombsControl=remember(study.title,verifiedCoombs,
                         verifiedCoombsPdf) {
-                        if(verifiedCoombs!=null &&
-                            verifiedCoombsPdf?.first==verifiedCoombs)
-                            PdfClinicalEvidence.coombsControl(study.title,
-                                verifiedCoombsPdf.second)
-                        else null
+                        verifiedCoombsPdf?.let { (pdfResult, source) ->
+                            if(pdfResult==verifiedCoombs)
+                                PdfClinicalEvidence.coombsControl(study.title,source)
+                            else null
+                        }
                     }
                     val verifiedCoombsComment=remember(study.title,verifiedCoombs,
                         verifiedCoombsPdf) {
-                        if(verifiedCoombs!=null &&
-                            verifiedCoombsPdf?.first==verifiedCoombs &&
-                            Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
-                                .containsMatchIn(study.title) &&
-                            !study.title.contains("indirect",true))
-                            PdfClinicalEvidence.coombsComment(verifiedCoombsPdf.second)
-                        else null
+                        verifiedCoombsPdf?.let { (pdfResult, source) ->
+                            if(pdfResult==verifiedCoombs &&
+                                Regex("""(?i)\b(?:direct\s+(?:coombs|antiglobulin)|DAT|DCT)\b""")
+                                    .containsMatchIn(study.title) &&
+                                !study.title.contains("indirect",true))
+                                PdfClinicalEvidence.coombsComment(source)
+                            else null
+                        }
                     }
                     val isFluidStudy=remember(study.title) {
                         Regex("""(?i)csf|pleural|ascitic|synovial|pericardial|fluid\s+cell""")
