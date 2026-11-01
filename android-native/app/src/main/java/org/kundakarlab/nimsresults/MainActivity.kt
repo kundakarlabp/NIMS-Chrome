@@ -980,20 +980,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             when {
                 ClinicalReportRenderer.isUrineRoutine(it.title) -> 0
                 it.title.contains("coombs",true) -> 1
-                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\\s+cell""")
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(it.title) -> 2
+                ClinicalPresentation.isCulture(it.title) -> 3
                 else -> 10
             }
         }.thenByDescending { it.date }).filter { study ->
             ClinicalReportRenderer.isUrineRoutine(study.title) ||
                 study.title.contains("coombs",true) ||
-                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\\s+cell""")
-                    .containsMatchIn(study.title)
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                    .containsMatchIn(study.title) ||
+                ClinicalPresentation.isCulture(study.title)
         }.mapNotNull { study ->
             SourceMetadataReview.pdfCandidates(study.rows,reports)
                 .filter { it.url.isNotBlank() }.distinctBy { it.url }
                 .singleOrNull()
-        }.distinctBy { it.url }.take(3)
+        }.distinctBy { it.url }.take(4)
         if(targets.isEmpty()) return
         pdfEvidenceWorker.execute {
             val enricher=PdfSourceEnricher(applicationContext)
