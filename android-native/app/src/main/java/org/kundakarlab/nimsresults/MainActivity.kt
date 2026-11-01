@@ -3210,6 +3210,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         ClinicalResultsLayout.ordered(study.title,
                             ClinicalChronology.inlineRows(study))
                     }
+                    val candidatePart = remember(candidates,reportTitleEpoch,current.patient.crNo) {
+                        candidates.singleOrNull()?.takeIf { report ->
+                            val header=ReportTitleCache.header(report.url)
+                            header?.crNo==current.patient.crNo &&
+                                (report.labNumber.isBlank() ||
+                                    header.labNumber.equals(report.labNumber,true))
+                        }?.let { ReportTitleCache.extracted(it.url).orEmpty() }
+                            .orEmpty()
+                    }
+                    val verifiedBlood=remember(study.title,candidatePart) {
+                        if(Regex("(?i)blood\\s*group|antibody\\s*screen|\\bbgt\\b")
+                                .containsMatchIn(study.title))
+                            PdfClinicalSummaries.bloodGrouping(candidatePart)
+                        else null
+                    }
+                    val verifiedUrine=remember(study.title,candidatePart) {
+                        if(ClinicalReportRenderer.isUrineRoutine(study.title))
+                            PdfUrineSummaries.extract(candidatePart)
+                        else emptyList()
+                    }
                     val cultureIndex = remember(rows,candidates) {
                         if(ClinicalPresentation.isCulture(study.title))
                             ClinicalResultsLayout.cultureProvenance(rows,candidates)
@@ -3219,7 +3239,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         study.rows.filter(ClinicalResultsLayout::urineChemistryCode)
                     }
                     val unresolvedRows=remember(study.rows,study.visible) {
-                        ClinicalChronology.unresolvedRows(study)
+                        if(ClinicalReportRenderer.isUrineRoutine(study.title))
+                            emptyList<LabResult>()  // code-only raw rows remain in Source PDFs
+                        else ClinicalChronology.unresolvedRows(study)
                             .filterNot(ClinicalResultsLayout::urineChemistryCode)
                     }
                     var showSourceCodes by remember(current.patient.crNo,study.key) {
@@ -3237,7 +3259,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Row(Modifier.fillMaxWidth(),
                                 horizontalArrangement=Arrangement.SpaceBetween,
                                 verticalAlignment=Alignment.CenterVertically) {
-                                if(!ClinicalResultsLayout.omitRedundantHeading(
+                                if(!ClinicalResultsLayout.omitRoutineHeading(
+                                        study.title,inlineRows) &&
+                                    !ClinicalResultsLayout.omitRedundantHeading(
                                         study.title,inlineRows)) {
                                     Text(study.title,fontSize=13.sp,
                                         fontWeight=FontWeight.Bold,
@@ -3277,22 +3301,51 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     .filter(String::isNotBlank).distinct().singleOrNull()
                                     ?.let{"Sample "+it}
                             )
-                            if(provenance.isNotEmpty()) Text(provenance.joinToString(" · "),
-                                fontSize=10.sp,color=Color(0xFF486581))
+                            if(provenance.isNotEmpty() &&
+                                !ClinicalPresentation.isCulture(study.title))
+                                Text(provenance.joinToString(" · "),
+                                    fontSize=10.sp,color=Color(0xFF486581))
                             if(cultureIndex.isNotEmpty() &&
                                 inlineRows.none {
                                     ClinicalChronology.isNarrativeRow(study,it)
                                 }) Text(cultureIndex.joinToString(" · "),
                                 fontSize=10.sp,color=Color(0xFF486581))
+                            if(verifiedBlood!=null) {
+                                Text("ABO/Rh: "+verifiedBlood.group,
+                                    fontSize=13.sp,fontWeight=FontWeight.Bold,
+                                    color=Color(0xFF102A43))
+                                if(verifiedBlood.antibodyScreen.isNotBlank())
+                                    Text("Antibody screen: "+verifiedBlood.antibodyScreen,
+                                        fontSize=11.sp,color=Color(0xFF486581))
+                                Text("CR-verified original PDF · verify before transfusion",
+                                    fontSize=9.sp,color=Color(0xFF875B22))
+                            }
+                            if(verifiedUrine.isNotEmpty()) {
+                                Text("Verified original PDF",fontSize=10.sp,
+                                    fontWeight=FontWeight.SemiBold,
+                                    color=Color(0xFF486581))
+                                verifiedUrine.forEach { v ->
+                                    Row(Modifier.fillMaxWidth(),
+                                        horizontalArrangement=Arrangement.SpaceBetween) {
+                                        Text(v.label,fontSize=11.sp)
+                                        Text(v.result,fontSize=11.sp,
+                                            fontWeight=FontWeight.Medium)
+                                    }
+                                }
+                            }
                             if(inlineRows.isEmpty()) {
-                                Text("No readable result value was supplied in the " +
-                                    "structured NIMS feed for this investigation.",
-                                    fontSize=11.sp,color=Color(0xFF66788A))
+                                if(verifiedBlood==null)
+                                    Text("No readable result value was supplied in the " +
+                                        "structured NIMS feed for this investigation.",
+                                        fontSize=11.sp,color=Color(0xFF66788A))
                             } else {
                                 // Render every result in the ordinary scroll, with
                                 // no preview truncation, collapsed details or PDF dependency.
                                 inlineRows.forEachIndexed { index, row ->
-                                    val label=ClinicalChronology.parameterLabel(row)
+                                    val label=if(CoagulationDisplay.isPTPanel(study.title) ||
+                                        CoagulationDisplay.isAPTTPanel(study.title))
+                                        CoagulationDisplay.displayLabel(row,inlineRows)
+                                        else ClinicalChronology.parameterLabel(row)
                                     val rawValue=ClinicalChronology.fullValue(row)
                                     val unmapped=ClinicalChronology.isUnmapped(row)
                                     val longText=ClinicalChronology.isNarrativeRow(study,row)
@@ -3301,16 +3354,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else label
                                     if(longText) {
                                         Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
-                                            Text(caption,fontSize=11.sp,
-                                                color=if(unmapped) Color(0xFF875B22)
-                                                    else Color(0xFF486581),
-                                                fontWeight=FontWeight.Medium)
+                                            if(!(caption.equals("Result",true) &&
+                                                    ClinicalPresentation.isCulture(study.title)))
+                                                Text(caption,fontSize=11.sp,
+                                                    color=if(unmapped) Color(0xFF875B22)
+                                                        else Color(0xFF486581),
+                                                    fontWeight=FontWeight.Medium)
                                             val culture = if(study.title.contains("culture",
                                                     ignoreCase=true))
                                                 ClinicalResultsLayout.culture(study.title,row.valueText)
                                                 else null
                                             val imaging = Regex(
-                                                """(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology|echocardiography|x.?ray)\b"""
+                                                """(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology|echocardiography|x.?ray|pet|fdg|nuclear|cardiac\s+study)\b"""
                                                 ).containsMatchIn(study.title)
                                             if(culture != null) {
                                                 val cultureInfo = listOfNotNull(
@@ -3319,8 +3374,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     culture.bottle.takeIf(String::isNotBlank)
                                                         ?.let { "Bottle " + it },
                                                     culture.stage.takeIf { it != "Stage not supplied" },
-                                                    culture.accession.takeIf(String::isNotBlank)
-                                                        ?.let { "Lab " + it })
+                                                    )
                                                 val fullInfo = (cultureInfo + cultureIndex).distinct()
                                                 if(fullInfo.isNotEmpty()) Text(
                                                     fullInfo.joinToString(" · "),
@@ -3412,8 +3466,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         thickness=0.5.dp,color=Color(0xFFEDF1F5))
                                 }
                             }
-                            if(urineCodes.isNotEmpty()) {
-                                Text("Urine chemistry · source-coded fields",
+                            if(urineCodes.isNotEmpty() && verifiedUrine.isEmpty()) {
+                                Text("Urine chemistry · coded HIS values (not measurements)",
                                     fontSize=10.sp,fontWeight=FontWeight.SemiBold,
                                     color=Color(0xFF486581))
                                 urineCodes.forEach { field ->
@@ -3430,6 +3484,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             if(CoagulationDisplay.isPTPanel(study.title)) {
                                 val missing=CoagulationDisplay.missingPTComponents(
                                     study.title,inlineRows)
+                                val apttMissing=CoagulationDisplay.missingAPTTComponents(
+                                    study.title,inlineRows)
+                                if(apttMissing.isNotEmpty()) Text(
+                                    "Not reported: "+apttMissing.joinToString(", "),
+                                    fontSize=10.sp,color=Color(0xFF875B22))
                                 if(missing.isNotEmpty()) Text(
                                     "Not in structured data: "+missing.joinToString(", ")+
                                         ". Confirm in the original report.",
