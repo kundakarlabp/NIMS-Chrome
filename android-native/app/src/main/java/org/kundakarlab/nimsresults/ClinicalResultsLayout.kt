@@ -21,8 +21,9 @@ object ClinicalResultsLayout {
         val isLft = "liverfunction" in t || t == "lft"
         val isCbc = t.startsWith("cbc") || "hemogram" in t || "haemogram" in t ||
             "completeblood" in t
-        val isCoag = "prothrombin" in t || t.contains("ptinr") ||
-            t == "ptaptt" || t == "inr"
+        val isCoag = CoagulationDisplay.isPTPanel(test) ||
+            CoagulationDisplay.isAPTTPanel(test) || t=="inr" ||
+            t=="ptaptt"
         if (!isLft && !isCbc && !isCoag) return rows
         return rows.withIndex().sortedWith(compareBy<IndexedValue<LabResult>> {
             // Order by the normalized clinical display label so NIMS
