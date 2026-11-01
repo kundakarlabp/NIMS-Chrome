@@ -7,7 +7,8 @@ package org.kundakarlab.nimsresults
  * Keeps the original HIS rows unchanged and never translates LIS combo IDs.
  */
 object PdfFluidChemistry {
-    data class Evidence(val specimen: String, val appearance: String, val matchedValues: Int)
+    data class Evidence(val specimen: String, val appearance: String,
+        val matchedValues: Int, val verifiedUnits: Map<String,String> = emptyMap())
     private val specimenName=Regex(
         """(?i)\b(?:ascitic(?:\s+fluid)?|pleural(?:\s+fluid)?|cerebrospinal\s+fluid|CSF|synovial(?:\s+fluid)?|pericardial(?:\s+fluid)?|peritoneal\s+fluid)\b"""
     )
@@ -59,6 +60,24 @@ object PdfFluidChemistry {
         return parsed.groupValues[1]+
             parsed.groupValues[2].toBigDecimalOrNull()?.stripTrailingZeros()?.toPlainString()
     }
+    private val labelledUnit=Regex(
+        """(?i)^\s*(glucose|protein|albumin)\s*\.?\s*(?:[:=]|\||\s){0,12}\s*""" +
+            """[<>]?\s*\d+(?:\.\d+)?\s*(?:\||\s){0,12}\s*(mg\s*/\s*dl|g\s*/\s*dl)\b"""
+    )
+    private fun units(text:String):Map<String,String> {
+        val sources=linkedMapOf<String,MutableSet<String>>()
+        for(line in text.replace("\r\n","\n").lines()) {
+            val match=labelledUnit.find(line) ?: continue
+            val key=match.groupValues[1].lowercase()
+            val unit=match.groupValues[2].replace(Regex("""\s+"""),"")
+                .replace("dl","dL",true)
+            sources.getOrPut(key){ linkedSetOf() }.add(unit)
+        }
+        return sources.mapNotNull { (k,v) -> v.singleOrNull()?.let { k to it } }.toMap()
+    }
+    fun unitFor(parameter:String,evidence:Evidence?):String =
+        analyte(parameter)?.let { evidence?.verifiedUnits?.get(it) }.orEmpty()
+
     private fun analyte(name: String): String? {
         val clean=name.lowercase().replace(Regex("""[^a-z]"""),"")
         return when {
@@ -115,6 +134,7 @@ object PdfFluidChemistry {
             }) return null
         val matching=values.count { (name,value) -> clinical[name]==value }
         if(matching<2) return null
-        return Evidence(specimen,appearance,matching)
+        return Evidence(specimen,appearance,matching,units(source)
+            .filterKeys { key -> clinical[key]==values[key] })
     }
 }
