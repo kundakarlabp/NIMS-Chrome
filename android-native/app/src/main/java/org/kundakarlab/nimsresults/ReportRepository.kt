@@ -640,7 +640,7 @@ object ReportTitleCache {
     private val sessionGeneration = java.util.concurrent.atomic.AtomicInteger()
     // Keep only recently opened PDFs in RAM; complete originals remain
     // available in the app-private on-disk cache or authenticated source.
-    private const val MAX_MEMORY_PDFS = 4
+    private const val MAX_MEMORY_PDFS = 6
     private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
     @Synchronized fun diagnosticFootprint(): String {
