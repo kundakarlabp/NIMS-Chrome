@@ -3433,6 +3433,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         isFluidStudy && Regex("""(?i)csf/pleural|ascitic/syno""")
                                             .containsMatchIn(study.title) ->
                                             "Fluid chemistry"
+                                        BloodCultureCard.isBloodCulture(study.title) ->
+                                            BloodCultureCard.title(study.title,
+                                                rows.map { it.reportStage.trim() }
+                                                    .filter(String::isNotBlank).distinct()
+                                                    .singleOrNull().orEmpty())
                                         microSpecimen.isNotBlank() ->
                                             study.title+" · "+microSpecimen
                                         else -> study.title
@@ -3558,7 +3563,30 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     val caption=if(unmapped)
                                         "Unmapped source field: "+row.parameter
                                         else label
-                                    if(longText) {
+                                    val serology=SerologyReportDisplay.extract(
+                                        study.title,row.valueText)
+                                    if(serology.isNotEmpty()) {
+                                        Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                                            serology.forEach { finding ->
+                                                Row(Modifier.fillMaxWidth(),
+                                                    horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                                    Text(finding.label,fontSize=11.sp,
+                                                        color=Color(0xFF486581),
+                                                        modifier=Modifier.weight(1f))
+                                                    Text(finding.result+
+                                                        finding.testValue.takeIf(String::isNotBlank)
+                                                            ?.let { " · "+it }.orEmpty(),
+                                                        fontSize=12.sp,
+                                                        fontWeight=FontWeight.Medium,
+                                                        modifier=Modifier.weight(1.1f))
+                                                }
+                                                if(finding.reference.isNotBlank())
+                                                    Text("Reference: "+finding.reference,
+                                                        fontSize=10.sp,
+                                                        color=Color(0xFF66788A))
+                                            }
+                                        }
+                                    } else if(longText) {
                                         Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
                                             if(!ClinicalReadableSummaries.redundantNarrativeLabel(
                                                     caption,study.title))
@@ -3587,7 +3615,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                         Text(part.content,fontSize=12.sp,
                                                             color=abnormalColor(row.abnormal))
                                                     }
-                                                else Text(culture.result.ifBlank { rawValue },
+                                                else Text(BloodCultureCard.finding(
+                                                        study.title,
+                                                        culture.result.ifBlank { rawValue }),
                                                     fontSize=12.sp,color=abnormalColor(row.abnormal))
                                                 if(culture.guidance.isNotBlank()) {
                                                     TextButton(onClick={
