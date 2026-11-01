@@ -139,7 +139,7 @@ jobs:
           echo "NIMS_EXPECTED_INSTALLED_CERT_SHA256=$ORIGINAL_CERT_SHA256" >> "$GITHUB_ENV"
           echo "::notice::Persistent signer enabled. APK certificate verification is mandatory."
       - name: Build, unit test, lint, assemble
-        run: gradle -p android-native clean test lintDebug assembleDebug --stacktrace --console=plain
+        run: gradle -p android-native clean test lintDebug lintRelease assembleDebug assembleRelease --stacktrace --console=plain
       - name: Verify APK
         shell: bash
         run: |
