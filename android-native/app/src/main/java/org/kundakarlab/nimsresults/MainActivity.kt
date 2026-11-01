@@ -986,15 +986,19 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
             when {
                 it.title.contains("coombs",true) -> 0
-                ClinicalReportRenderer.isUrineRoutine(it.title) -> 1
-                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                ClinicalPresentation.isCulture(it.title) -> 1
+                Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
                     .containsMatchIn(it.title) -> 2
-                ClinicalPresentation.isCulture(it.title) -> 3
+                ClinicalReportRenderer.isUrineRoutine(it.title) -> 3
+                Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
+                    .containsMatchIn(it.title) -> 4
                 else -> 10
             }
         }.thenByDescending { it.date }).filter { study ->
             ClinicalReportRenderer.isUrineRoutine(study.title) ||
                 study.title.contains("coombs",true) ||
+                Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
+                    .containsMatchIn(study.title) ||
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
                 ClinicalPresentation.isCulture(study.title)
@@ -1006,7 +1010,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // NOT automatic attribution of a candidate to a result.
             if(study.title.contains("coombs",true)) options.take(2)
             else options.singleOrNull()?.let { listOf(it) } ?: emptyList()
-        }.distinctBy { it.url }.take(4)
+        }.distinctBy { it.url }.take(6)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
         pdfEvidenceWorker.execute {
