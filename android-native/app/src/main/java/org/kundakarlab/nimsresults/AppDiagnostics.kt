@@ -249,6 +249,20 @@ object AppDiagnostics {
                 rows.count { it.valueText.trim() == "-1" })
             appendLine("diagnostics.results.unique_pdf_candidates_same_day_or_lab=" +
                 candidateCounts.count { it == 1 })
+            appendLine("diagnostics.results.routine_pdf_actions_suppressed=" +
+                studies.count {
+                    ClinicalResultsLayout.omitRoutinePdf(it.title,
+                        ClinicalChronology.inlineRows(it))
+                })
+            appendLine("diagnostics.results.urine_coded_fields_visible=" +
+                rows.count(ClinicalResultsLayout::urineChemistryCode))
+            appendLine("diagnostics.results.culture_reports_with_sent_date=" +
+                studies.count { study ->
+                    study.title.contains("culture",ignoreCase=true) &&
+                    ClinicalResultsLayout.cultureProvenance(study.rows)
+                        .any { it.startsWith("Sent ") }
+                })
+            appendLine("diagnostics.results.reference_layout=inline_compact")
 
             appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
             appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
