@@ -312,7 +312,12 @@ object ClinicalResultsLayout {
         }
         val specimen = rows.map { it.specimenType.trim() }
             .filter { it.isNotBlank() && !it.matches(Regex("""\d+""")) }
-            .distinct().singleOrNull().orEmpty()
+            .distinct().singleOrNull().orEmpty().ifBlank {
+                // A narrative's own labelled sample is stronger than any
+                // guessed code-to-label mapping or title/date association.
+                rows.map { PdfSourceEvidence.specimen(it.valueText) }
+                    .filter(String::isNotBlank).distinct().singleOrNull().orEmpty()
+            }
         if (specimen.isNotBlank()) identifiers += "Specimen " + specimen
 
         val dates = metadata.filter {
