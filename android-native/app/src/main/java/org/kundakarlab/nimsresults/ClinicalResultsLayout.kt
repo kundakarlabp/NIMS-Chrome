@@ -7,6 +7,58 @@ object ClinicalResultsLayout {
     private fun key(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("[^a-z0-9]"), "")
 
+    /** Clinical order within a single date; keep independent specimen/report
+     * identities, only change presentation order. */
+    fun studyPriority(test: String): Int {
+        val t=key(test)
+        return when {
+            t.startsWith("cbc") || t.startsWith("hemogram") ||
+                t.startsWith("haemogram") || t.contains("completeblood") -> 0
+            t=="creatinine" || t=="serumcreatinine" -> 10
+            t=="urea" || t=="serumurea" -> 11
+            t.startsWith("electrolyte") || t=="serumelectrolytes" -> 12
+            t=="calcium" || t=="serumcalcium" -> 13
+            t=="magnesium" || t=="serummagnesium" -> 14
+            t.contains("liverfunction") || t=="lft" -> 20
+            t.contains("renalfunction") || t.contains("kidneyfunction") -> 22
+            else -> 50
+        }
+    }
+
+    fun suppressCbcRow(row: LabResult): Boolean {
+        val t=key(row.test)
+        if (!(t.startsWith("cbc") || t.contains("hemogram") ||
+                t.contains("haemogram") || t.contains("completeblood"))) return false
+        val p=key(row.parameter)
+        return (p=="others" || p=="others1" || p=="other" ||
+            p=="othersresult") && row.valueText.trim()
+                .equals("others",ignoreCase=true)
+    }
+
+    fun omitRoutineHeading(title: String, rows: List<LabResult>): Boolean {
+        if(rows.isEmpty()) return false
+        val t=key(title)
+        if(t.contains("culture") || t.contains("staining") ||
+            t.contains("radiology") || t.contains("pet") ||
+            t.contains("cardiacstudy") || t.contains("doppler") ||
+            t.contains("grouping") || t.contains("antibodyscreen") ||
+            t.contains("prothrombin") || t.contains("aptt") ||
+            t=="pt" || t=="inr" || t=="ptinr") return false
+        if(t.startsWith("cbc") || t.contains("hemogram") ||
+            t.contains("haemogram") || t.contains("completeblood") ||
+            t=="creatinine" || t=="serumcreatinine" ||
+            t=="urea" || t=="serumurea" ||
+            t.startsWith("electrolyte") || t.contains("liverfunction") ||
+            t=="lft" || t.contains("lipidprofile") ||
+            t.contains("glycosylated") || t.contains("glycated") ||
+            t=="calcium" || t=="magnesium" ||
+            t=="serumcalcium" || t=="serummagnesium") return true
+        return rows.all {
+            it.valueText.trim().toDoubleOrNull()!=null &&
+                it.valueText.length<20
+        }
+    }
+
     fun omitRedundantHeading(title: String, rows: List<LabResult>): Boolean {
         if (rows.size != 1 || ClinicalReportRenderer.isMicrobiologyInvestigation(title)) return false
         val label = key(ClinicalChronology.parameterLabel(rows.single()))
@@ -24,7 +76,8 @@ object ClinicalResultsLayout {
         val isCoag = CoagulationDisplay.isPTPanel(test) ||
             CoagulationDisplay.isAPTTPanel(test) || t=="inr" ||
             t=="ptaptt"
-        if (!isLft && !isCbc && !isCoag) return rows
+        val isElectrolyte = t.startsWith("electrolyte") || t=="serumelectrolytes"
+        if (!isLft && !isCbc && !isCoag && !isElectrolyte) return rows
         return rows.withIndex().sortedWith(compareBy<IndexedValue<LabResult>> {
             // Order by the normalized clinical display label so NIMS
             // variants such as "Sr. Alk. Phosphatase" still sort as ALP.
@@ -42,6 +95,14 @@ object ClinicalResultsLayout {
                     else -> 30
                 }
                 isCoag -> CoagulationDisplay.sortPriority(test,it.value)
+                isElectrolyte -> when(p) {
+                    "na", "sodium", "serumsodium" -> 0
+                    "k", "potassium", "serumpotassium" -> 1
+                    "cl", "chloride", "serumchloride" -> 2
+                    "ca", "calcium", "serumcalcium" -> 3
+                    "mg", "magnesium", "serummagnesium" -> 4
+                    else -> 20
+                }
                 else -> when {
                     p == "hb" || p.contains("hemoglobin") || p.contains("haemoglobin") -> 0
                     p == "tlc" || p == "tlccount" || p == "wbc" ||
