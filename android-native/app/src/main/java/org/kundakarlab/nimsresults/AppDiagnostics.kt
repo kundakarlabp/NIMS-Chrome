@@ -240,7 +240,7 @@ object AppDiagnostics {
                 })
             appendLine("diagnostics.results.imaging_reports=" +
                 studies.count { study ->
-                    Regex("""(?i)\\b(?:doppler|ct|mri|ultrasound|usg|radiology)\\b""")
+                    Regex("""(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology)\b""")
                         .containsMatchIn(study.title)
                 })
             appendLine("diagnostics.results.source_reference_ranges=" +
