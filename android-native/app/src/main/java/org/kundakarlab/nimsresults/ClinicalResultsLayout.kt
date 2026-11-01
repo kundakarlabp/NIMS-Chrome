@@ -85,7 +85,7 @@ object ClinicalResultsLayout {
     fun omitRoutinePdf(test: String, rows: List<LabResult>): Boolean {
         if (rows.isEmpty() || ClinicalReportRenderer.isMicrobiologyInvestigation(test)) return false
         val t = key(test)
-        if (Regex("""(?i)^(?:cbc|cbp|hemogram|haemogram|completeblood|creatinine|serumcreatinine|serumurea|urea|electrolyte|liverfunction|renalfunction|kidneyfunction|lipidprofile|iron|ferritin|ldh|lactatedehydrogenase|thyroidfunction|prothrombintime|ptinr|ptaptt|inr|esr|serumcalcium|calcium|serummagnesium)""").containsMatchIn(t))
+        if (Regex("""(?i)^(?:cbc|cbp|hemogram|haemogram|completehemogram|completehaemogram|completeblood|lft|creatinine|serumcreatinine|serumurea|urea|electrolyte|liverfunction|renalfunction|kidneyfunction|lipidprofile|iron|ferritin|ldh|lactatedehydrogenase|thyroidfunction|prothrombintime|ptinr|ptaptt|inr|esr|serumcalcium|calcium|serummagnesium)""").containsMatchIn(t))
             return true
         // Other uncomplicated biochemistry panels, including single numeric
         // analytes; do not suppress PDFs for interpretive narrative reports.
