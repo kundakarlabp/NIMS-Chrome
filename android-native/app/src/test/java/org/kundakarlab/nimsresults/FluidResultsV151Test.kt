@@ -32,6 +32,8 @@ class FluidResultsV151Test {
         assertEquals("Ascitic fluid",e!!.specimen)
         assertEquals("Straw Coloured",e.appearance)
         assertEquals(3,e.matchedValues)
+        assertEquals("mg/dL",PdfFluidChemistry.unitFor("Glucose.",e))
+        assertEquals("g/dL",PdfFluidChemistry.unitFor("Albumin",e))
     }
 
     @Test fun asciticFluidWithYellowAppearanceAndLessThanQualifiers() {
