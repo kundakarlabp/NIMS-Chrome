@@ -74,8 +74,9 @@ object PdfClinicalEvidence {
             for((lineIndex,rawLine) in section.withIndex()) {
                 // A DAT control is a separate assay control, not the
                 // patient's DAT result (e.g. "Traces   Control: Neg").
-                val line=rawLine.substringBefore(
-                    Regex("""(?i)\bcontrol\s*[:=\-]?""")).trim()
+                val control=Regex("""(?i)\bcontrol\s*[:=\-]?""")
+                    .find(rawLine)?.range?.first ?: rawLine.length
+                val line=rawLine.substring(0,control).trim()
                     .trimStart(':','=','-').trim()
                 if(line.isBlank() || Regex(
                     """(?i)^(?:reference|normal\s+range|method|comments?|remarks?|test\s+done\s+by)\b"""
@@ -95,7 +96,7 @@ object PdfClinicalEvidence {
                 when(v.lowercase().trim()) {
                     "neg" -> "Negative"
                     "trace", "traces" -> "Traces"
-                    else -> v.lowercase().replaceFirstChar(Char::uppercase)
+                    else -> v.lowercase().replaceFirstChar { it.uppercase() }
                 }
             }.distinct()
             if(values.size>1) return null
