@@ -987,6 +987,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             when {
                 it.title.contains("coombs",true) -> 0
                 ClinicalPresentation.isCulture(it.title) -> 1
+                Regex("""(?i)malaria|microfilaria|filaria|smear\\s+for\\s+mp|strip\\s+test\\s+for\\s+mp""")
+                    .containsMatchIn(it.title) -> 2
                 Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
                     .containsMatchIn(it.title) -> 2
                 ClinicalReportRenderer.isUrineRoutine(it.title) -> 3
@@ -1001,7 +1003,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     .containsMatchIn(study.title) ||
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
-                ClinicalPresentation.isCulture(study.title)
+                ClinicalPresentation.isCulture(study.title) ||
+                Regex("""(?i)malaria|microfilaria|filaria|smear\\s+for\\s+mp|strip\\s+test\\s+for\\s+mp""")
+                    .containsMatchIn(study.title)
         }.flatMap { study ->
             val options=SourceMetadataReview.pdfCandidates(study.rows,reports)
                 .filter { it.url.isNotBlank() }.distinctBy { it.url }
