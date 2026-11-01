@@ -222,6 +222,19 @@ object AppDiagnostics {
             appendLine("diagnostics.results.unverified_urine_source_fields=" +
                 rows.count { ClinicalReportRenderer.isUrineRoutine(it.test) &&
                     ClinicalReportRenderer.isUninterpretedCode(it) })
+            appendLine("diagnostics.results.fluid_source_codes_hidden=" +
+                rows.count { row ->
+                    Regex("""(?i)(?:fluid\s+cell\s+count|csf/pleural|ascitic/syno)""")
+                        .containsMatchIn(row.test) &&
+                        ClinicalReportRenderer.isUninterpretedCode(row)
+                })
+            appendLine("diagnostics.results.fluid_technical_investigation_rows_hidden=" +
+                rows.count { row ->
+                    row.test.contains("fluid cell count",true) &&
+                        row.parameter.endsWith("(Investigation)",true)
+                })
+            appendLine("diagnostics.results.source_audit_disclosures_visible=false")
+            appendLine("diagnostics.results.fluid_pdf_reconciliation_rule=two_matching_values")
             appendLine("diagnostics.results.source_minus_one_codes=" +
                 rows.count { it.valueText.trim() == "-1" })
             appendLine("diagnostics.results.studies_with_explicit_report_dates=" +
