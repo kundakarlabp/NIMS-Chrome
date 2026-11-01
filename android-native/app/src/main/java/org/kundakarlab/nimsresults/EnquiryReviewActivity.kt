@@ -99,14 +99,37 @@ class EnquiryReviewActivity : Activity() {
                 val u=request.url
                 return u.scheme != "https" || u.host?.lowercase() !in NimsUrls.HOSTS
             }
+            override fun onPageFinished(view: WebView, url: String) {
+                super.onPageFinished(view,url)
+                EnquiryCaptureDiagnostics.record(this@EnquiryReviewActivity,"PAGE_LOADED")
+                if(rendererGone) return
+                // This is status-only, no patient values or HTML leave WebView.
+                view.evaluateJavascript("""(function(){
+                    const s=(document.body?.innerText||'').toLowerCase();
+                    return s.includes('dashboard under maintenance') ||
+                        s.includes('under maintenance') && s.includes('try after');
+                })()""") { answer ->
+                    if(answer=="true") {
+                        EnquiryCaptureDiagnostics.record(this@EnquiryReviewActivity,
+                            "MAINTENANCE")
+                        notice.text="NIMS dashboard is under maintenance. " +
+                            "The Enquiry table cannot be imported from this page. " +
+                            "Hospital report-index records remain accessible in the app; " +
+                            "return after NIMS restores Enquiry."
+                    }
+                }
+            }
             override fun onReceivedError(view: WebView, request: WebResourceRequest,
                                          error: WebResourceError) {
-                if (request.isForMainFrame)
+                if (request.isForMainFrame) {
+                    EnquiryCaptureDiagnostics.record(this@EnquiryReviewActivity,"BROWSER_ERROR")
                     notice.text=NimsLoginRecovery.errorDescription(error.errorCode)
+                }
             }
             override fun onRenderProcessGone(view: WebView,
                                              detail: RenderProcessGoneDetail): Boolean {
                 rendererGone=true
+                EnquiryCaptureDiagnostics.record(this@EnquiryReviewActivity,"RENDERER_GONE")
                 (view.parent as? ViewGroup)?.removeView(view)
                 runCatching { view.destroy() }
                 notice.text="NIMS browser renderer stopped. Close and reopen Enquiry."
@@ -121,11 +144,12 @@ class EnquiryReviewActivity : Activity() {
 
     private fun capture(import: Boolean) {
         if (pendingRead || rendererGone) return
+        EnquiryCaptureDiagnostics.record(this,"CAPTURE_REQUESTED")
         val location=runCatching { URI(web.url.orEmpty()) }.getOrNull()
         if (location?.scheme != "https" ||
-            location.host?.lowercase() !in NimsUrls.HOSTS ||
-            !location.path.orEmpty().startsWith("/HISUtilities/")) {
-            notice.text="Open the authenticated NIMS Enquiry screen before importing."
+            location.host?.lowercase() !in NimsUrls.HOSTS) {
+            EnquiryCaptureDiagnostics.record(this,"NOT_HIS_HOST")
+            notice.text="Open an authenticated NIMS Enquiry page before importing."
             return
         }
         pendingRead=true
@@ -133,21 +157,57 @@ class EnquiryReviewActivity : Activity() {
         // Read same-origin rendered documents only. Never POST a guessed action,
         // load a PDF, copy credentials, or send raw page HTML to an external service.
         val js="""(function(){
-            const docs=[document];
-            try { for(const f of document.querySelectorAll('iframe,frame')) {
-                try {if(f.contentDocument) docs.push(f.contentDocument)} catch(_){}
-            }} catch(_){}
-            const selected=docs.find(d=>{
-                const text=(d.body && d.body.innerText || '').toLowerCase();
-                return text.includes('sample') && text.includes('status') &&
-                    (text.includes('investigation')||text.includes('test name'));
-            }) || document;
-            return selected.documentElement.outerHTML;
+            const docs=[];
+            const scan=(d,depth)=>{
+                if(!d||depth>5||docs.includes(d))return;
+                docs.push(d);
+                for(const f of d.querySelectorAll('iframe,frame')){
+                    try { if(f.contentDocument) scan(f.contentDocument,depth+1); } catch(_){}
+                }
+            };
+            scan(document,0);
+            const score=d=>{
+                const body=(d.body?.innerText||'').toLowerCase();
+                if(body.includes('under maintenance') &&
+                    !body.includes('investigation enquiry'))return -100;
+                const table=[...d.querySelectorAll('table')].some(t=>{
+                    const text=(t.innerText||'').toLowerCase();
+                    return (text.includes('investigation')||text.includes('test name')) &&
+                        (text.includes('status')||text.includes('sample'));
+                });
+                return (table?100:0)+
+                    (/cr\\s*(no|number)?\\s*[:#]?\\s*\\d{15}/i.test(body)?30:0);
+            };
+            docs.sort((a,b)=>score(b)-score(a));
+            const selected=docs[0]||document;
+            const status=(selected.body?.innerText||'').toLowerCase();
+            if(status.includes('under maintenance') || status.includes('try after some time')) {
+                return JSON.stringify({state:'maintenance'});
+            }
+            if(score(selected)<100)return JSON.stringify({state:'no_table'});
+            return JSON.stringify({state:'html',html:selected.documentElement.outerHTML});
         })()"""
         web.evaluateJavascript(js) { encoded ->
             pendingRead=false
-            val html=runCatching { JSONTokener(encoded).nextValue() as String }.getOrNull()
-            if (html.isNullOrBlank() || html.length > 900_000) {
+            val outer=runCatching { JSONTokener(encoded).nextValue() as String }.getOrNull()
+            val payload=runCatching { org.json.JSONObject(outer.orEmpty()) }.getOrNull()
+            val status=payload?.optString("state").orEmpty()
+            if(status=="maintenance") {
+                EnquiryCaptureDiagnostics.record(this,"MAINTENANCE")
+                notice.text="NIMS Enquiry dashboard is under maintenance. No orders imported; " +
+                    "use the already available Source reports for lab/study identifiers."
+                return@evaluateJavascript
+            }
+            if(status=="no_table") {
+                EnquiryCaptureDiagnostics.record(this,"CAPTURE_NO_TABLE")
+                notice.text="No CR-wise investigation table is visible. Navigate to " +
+                    "Investigation Enquiry → CR wise and search the patient CR, " +
+                    "then import. The NIMS dashboard may still be under maintenance."
+                return@evaluateJavascript
+            }
+            val html=payload?.optString("html").orEmpty()
+            if (html.isBlank() || html.length > 900_000) {
+                EnquiryCaptureDiagnostics.record(this,"CAPTURE_HTML_ERROR")
                 notice.text="The Enquiry table is unavailable or too large for safe import."
                 return@evaluateJavascript
             }
@@ -160,12 +220,15 @@ class EnquiryReviewActivity : Activity() {
             }
             runCatching {
                 val capture=InvestigationEnquiryParser.parseHtml(html,expectedCr)
-                val payload=InvestigationEnquiryParser.toJson(capture)
-                require(payload.length < 650_000) { "Enquiry capture exceeds safe transfer size" }
-                setResult(RESULT_OK, Intent().putExtra(EXTRA_CAPTURE_JSON,payload)
+                val json=InvestigationEnquiryParser.toJson(capture)
+                require(json.length < 650_000) { "Enquiry capture exceeds safe transfer size" }
+                EnquiryCaptureDiagnostics.record(this,"CAPTURE_SUCCESS")
+                setResult(RESULT_OK, Intent().putExtra(EXTRA_CAPTURE_JSON,json)
                     .putExtra(EXTRA_CAPTURE_CR,expectedCr))
                 finish()
             }.onFailure {
+                EnquiryCaptureDiagnostics.record(this,
+                    if(it is IdentityMismatchException) "CAPTURE_INVALID_CR" else "CAPTURE_HTML_ERROR")
                 notice.text=it.message.orEmpty().take(260) +
                     " If the NIMS table format differs, copy its redacted schema."
             }
