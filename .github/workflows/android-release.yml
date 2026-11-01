@@ -2,6 +2,11 @@ name: Android signed in-place update (original key only)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android-native/**'
+      - '.github/workflows/android-release.yml'
 
 permissions:
   contents: read
@@ -60,6 +65,11 @@ jobs:
             tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
           expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" |
             tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          installed='C9DD9E0BB10352228998B6CC978B6886FA8A4749724B0298F1ABE3C39B98CA96'
+          if [[ "$expected" != "$installed" ]]; then
+            echo "::error::Configured expected signer does not match the installed v1.0.52 certificate. Release blocked."
+            exit 1
+          fi
           if [[ -z "$actual" || "$actual" != "$expected" ]]; then
             echo "::error::Supplied signer certificate does not match the currently installed app."
             exit 1
@@ -71,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check android-native/app/src/main/assets/nims_engine.js
-          node --test android-native/tests/nims_engine_batches.test.cjs
+          node --test android-native/tests/*.test.cjs
           gradle -p android-native clean test lintRelease assembleRelease --stacktrace --console=plain
 
       - name: Verify APK certificate, package and version, generate release manifest
@@ -109,6 +119,10 @@ jobs:
           version_code="$(printf '%s\n' "$info" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
           test -n "$version"
           [[ "$version_code" =~ ^[0-9]+$ ]]
+          if (( version_code <= 10052 )); then
+            echo "::error::APK versionCode must exceed installed 1.0.52 (10052)."
+            exit 1
+          fi
           mkdir -p dist
           cp "$apk" "dist/NIMS-Results-${version}-SIGNED.apk"
           {
