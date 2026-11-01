@@ -48,4 +48,35 @@ object ClinicalReadableSummaries {
             commentAt?.let { source.drop(it.range.last+1).trim() }.orEmpty())
     }
 
+    fun urineCulture(text:String):List<SourceSection> {
+        val source=text.trim()
+        val smear=Regex("""(?i)\bGRAM(?:S|['’]S)?\s+(?:SMEAR|STAIN(?:ING)?)\s+SHOWS\b""")
+            .find(source)
+        val culture=Regex("""(?i)\bCULTURE\s+SHOWS\b""").find(source)
+            ?:return listOf(SourceSection("Finding",source))
+        val advice=Regex("""(?i)\b(?:PLEASE\s+REPEAT|RECOMMENDATIONS?\s*:|COMMENTS?\s*:)""")
+            .find(source.substring(culture.range.first))?.let{
+                culture.range.first+it.range.first
+            }
+        val sections=mutableListOf<SourceSection>()
+        if(smear!=null && smear.range.first<culture.range.first)
+            sections+=SourceSection("Gram smear",
+                source.substring(smear.range.first,culture.range.first).trim())
+        sections+=SourceSection("Culture",
+            source.substring(culture.range.first,advice?:source.length).trim())
+        if(advice!=null)sections+=SourceSection("Laboratory note",
+            source.substring(advice).trim())
+        return sections
+    }
+    fun isStain(test:String):Boolean =
+        Regex("""(?i)(?:gram(?:s)?\s*stain|gram\s*smear|fungal|calcofluor|koh|afb\s*stain|acid[\s-]*fast|fluorescen(?:ce|t)\s*stain)""")
+            .containsMatchIn(test)
+
+    fun redundantNarrativeLabel(label:String,test:String):Boolean {
+        val normal={ value:String -> value.lowercase().replace(Regex("[^a-z0-9]"),"") }
+        val p=normal(label);val t=normal(test)
+        return p=="result" || (p.isNotEmpty() && (p==t ||
+            (t.contains(p) && p.length>=7)))
+    }
+
 }
