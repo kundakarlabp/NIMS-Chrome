@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var pdfInspectedCount by mutableStateOf(0)
     private var pdfConfirmedCount by mutableStateOf(0)
     private var pdfTotalCount by mutableStateOf(0)
+    private var pdfEvidenceTargets by mutableStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -498,6 +499,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         pdfInspectedCount = 0
         pdfConfirmedCount = 0
         pdfTotalCount = 0
+        pdfEvidenceTargets = 0
         apiStage = "structured_checking"
         loadStage = LoadStage.CHECKING_SESSION
         statusText = "Checking NIMS session for complete Custom Sheet retrieval…"
@@ -919,6 +921,11 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("report_index.events=" + ReportInventoryTrace.snapshot())
             appendLine(RestReportDiagnostics.snapshot())
             appendLine("pdf.performance=" + PdfPerformanceTrace.describe())
+            appendLine("pdf.targetedSourceChecks.planned=$pdfEvidenceTargets")
+            appendLine("pdf.targetedSourceChecks.attempted=$pdfInspectedCount")
+            appendLine("pdf.targetedSourceChecks.crVerified=$pdfConfirmedCount")
+            appendLine("pdf.targetedSourceChecks.availablePdfIndex=$pdfTotalCount")
+            appendLine("pdf.targetedSourceChecks.requiresExplicitCr=true")
             appendLine("engine.sessionProbeAvailable=" + (::engine.isInitialized))
             if (::engine.isInitialized) {
                 // Engine details are restricted to boolean lifecycle evidence.
@@ -996,6 +1003,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 .filter { it.url.isNotBlank() }.distinctBy { it.url }
                 .singleOrNull()
         }.distinctBy { it.url }.take(4)
+        pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
         pdfEvidenceWorker.execute {
             val enricher=PdfSourceEnricher(applicationContext)
