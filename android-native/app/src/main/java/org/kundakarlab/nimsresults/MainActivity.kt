@@ -3165,12 +3165,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }.thenBy { it.title })
                     }
                     val inlineRows=remember(study.rows,study.visible) {
-                        ClinicalChronology.inlineRows(study)
+                        ClinicalResultsLayout.ordered(study.title,
+                            ClinicalChronology.inlineRows(study))
                     }
                     val unresolvedRows=remember(study.rows,study.visible) {
                         ClinicalChronology.unresolvedRows(study)
                     }
                     var showSourceCodes by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
+                    }
+                    var showCultureGuidance by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
                     var pickPdf by remember(current.patient.crNo,study.key) {
@@ -3182,15 +3186,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             Row(Modifier.fillMaxWidth(),
                                 horizontalArrangement=Arrangement.SpaceBetween,
                                 verticalAlignment=Alignment.CenterVertically) {
-                                Text(study.title,fontSize=13.sp,
-                                    fontWeight=FontWeight.SemiBold,
-                                    color=Color(0xFF102A43),
-                                    modifier=Modifier.weight(1f))
+                                if(!ClinicalResultsLayout.omitRedundantHeading(
+                                        study.title,inlineRows)) {
+                                    Text(study.title,fontSize=13.sp,
+                                        fontWeight=FontWeight.SemiBold,
+                                        color=Color(0xFF102A43),
+                                        modifier=Modifier.weight(1f))
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
                                 if(candidates.isNotEmpty()) {
                                     // PDF remains an optional source-review action;
                                     // it is not required to read any structured result.
                                     TextButton(onClick={pickPdf=true}) {
-                                        Text(if(candidates.size==1) "Possible PDF" else
+                                        Text(if(candidates.size==1) "Source PDF" else
                                             "PDFs (${candidates.size})",fontSize=10.sp)
                                     }
                                 }
@@ -3237,9 +3246,56 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 color=if(unmapped) Color(0xFF875B22)
                                                     else Color(0xFF486581),
                                                 fontWeight=FontWeight.Medium)
-                                            Text(rawValue,fontSize=12.sp,
-                                                color=if(unmapped) Color(0xFF875B22)
-                                                    else abnormalColor(row.abnormal))
+                                            val culture = if(study.title.contains("culture",
+                                                    ignoreCase=true))
+                                                ClinicalResultsLayout.culture(study.title,row.valueText)
+                                                else null
+                                            val imaging = Regex(
+                                                """(?i)\b(?:doppler|ct|mri|ultrasound|usg|radiology|echocardiography|x.?ray)\b"""
+                                                ).containsMatchIn(study.title)
+                                            if(culture != null) {
+                                                val cultureInfo = listOfNotNull(
+                                                    culture.set.takeIf(String::isNotBlank)
+                                                        ?.let { "Set " + it },
+                                                    culture.bottle.takeIf(String::isNotBlank)
+                                                        ?.let { "Bottle " + it },
+                                                    culture.stage.takeIf { it != "Stage not supplied" },
+                                                    culture.accession.takeIf(String::isNotBlank)
+                                                        ?.let { "Lab " + it })
+                                                if(cultureInfo.isNotEmpty()) Text(
+                                                    cultureInfo.joinToString(" · "),
+                                                    fontSize=11.sp,fontWeight=FontWeight.SemiBold,
+                                                    color=Color(0xFF24496A))
+                                                Text(culture.result.ifBlank { rawValue },
+                                                    fontSize=12.sp,color=abnormalColor(row.abnormal))
+                                                if(culture.guidance.isNotBlank()) {
+                                                    TextButton(onClick={
+                                                        showCultureGuidance=!showCultureGuidance
+                                                    }) { Text(if(showCultureGuidance)
+                                                        "Hide laboratory guidance"
+                                                        else "Read laboratory guidance",
+                                                        fontSize=10.sp) }
+                                                    if(showCultureGuidance) Text(
+                                                        culture.guidance,fontSize=11.sp,
+                                                        color=Color(0xFF486581))
+                                                }
+                                            } else if(imaging) {
+                                                val structured=ClinicalResultsLayout.radiology(
+                                                    row.valueText)
+                                                structured.sections.forEach { part ->
+                                                    Text(part.heading,fontSize=11.sp,
+                                                        fontWeight=FontWeight.Bold,
+                                                        color=Color(0xFF24496A))
+                                                    Text(part.content,fontSize=12.sp,
+                                                        color=abnormalColor(row.abnormal))
+                                                }
+                                                if(structured.reporter.isNotBlank()) Text(
+                                                    "Reported by: " + structured.reporter,
+                                                    fontSize=10.sp,color=Color(0xFF486581))
+                                            } else {
+                                                Text(rawValue,fontSize=12.sp,
+                                                    color=abnormalColor(row.abnormal))
+                                            }
                                             val narrativeMeta =
                                                 MicrobiologyNarrativeMetadata.extract(row)
                                             if(narrativeMeta != null) Text(
@@ -3280,10 +3336,17 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     else Color(0xFF486581),
                                                 modifier=Modifier.weight(1f)
                                                     .padding(end=8.dp))
-                                            Text(rawValue,fontSize=12.sp,
-                                                color=if(unmapped) Color(0xFF875B22)
-                                                    else abnormalColor(row.abnormal),
-                                                modifier=Modifier.weight(1.1f))
+                                            Column(modifier=Modifier.weight(1.1f),
+                                                verticalArrangement=Arrangement.spacedBy(1.dp)) {
+                                                Text(rawValue,fontSize=12.sp,
+                                                    color=abnormalColor(row.abnormal))
+                                                if(row.refRange.isNotBlank()) Text(
+                                                    "Ref: " + row.refRange +
+                                                        if(row.unit.isBlank()) ""
+                                                        else " " + row.unit,
+                                                    fontSize=10.sp,
+                                                    color=Color(0xFF66788A))
+                                            }
                                         }
                                     }
                                     if(index<inlineRows.lastIndex) HorizontalDivider(
@@ -3313,9 +3376,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             title={Text("Choose original PDF")},
                             text={
                                 Column {
-                                    Text("These are possible reports; verify specimen, " +
-                                        "collection date and accession in the PDF.",
-                                        fontSize=11.sp,color=Color(0xFF875B22))
+                                    Text("Matched by labelled lab accession when supplied; " +
+                                        "otherwise same investigation and source date. " +
+                                        "Confirm patient and specimen in the report.",
+                                        fontSize=11.sp,color=Color(0xFF486581))
                                     LazyColumn(Modifier.heightIn(max=390.dp)) {
                                         items(candidates,key={it.url}) { report ->
                                             TextButton(onClick={
