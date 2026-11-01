@@ -47,7 +47,13 @@ android {
             }
         }
         buildTypes {
+            // Local unit-test artifacts can still use a debug variant,
+            // but clinician-distributed builds MUST be non-debuggable.
             getByName("debug") {
+                signingConfig = signingConfigs.getByName("nimsPersistent")
+            }
+            getByName("release") {
+                isDebuggable = false
                 signingConfig = signingConfigs.getByName("nimsPersistent")
             }
         }
