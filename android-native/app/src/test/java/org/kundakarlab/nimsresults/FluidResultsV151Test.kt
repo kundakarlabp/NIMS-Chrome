@@ -76,7 +76,7 @@ class FluidResultsV151Test {
         }
         assertTrue(ClinicalReportRenderer.isUninterpretedCode(
             row(test,"%(Investigation)","Any Other Cells (Type)")))
-        assertEquals("Lymphocytes",ClinicalChronology.parameterLabel(
+        assertEquals("Lymphocytes %",ClinicalChronology.parameterLabel(
             row(test,"-- Lymphocytes(Result)","40")))
         assertEquals("Polymorphs",ClinicalChronology.parameterLabel(
             row(test,"-- Polymorphs(Result)","60")))
