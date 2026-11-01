@@ -41,9 +41,6 @@ object ClinicalResultsLayout {
         if(Regex("""(?i)csf|pleural|ascitic|synovial|fluidcellcount|pericardial""")
                 .containsMatchIn(t)) return false
         if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
-        if(ClinicalReportRenderer.isUrineRoutine(test) ||
-            Regex("""(?i)\b(?:hiv|hcv|hbsag|hbs\s*ag|hepatitis\s*[bc])\b""")
-                .containsMatchIn(test)) return true
         if(t.contains("culture") || t.contains("staining") ||
             t.contains("radiology") || t.contains("pet") ||
             t.contains("cardiacstudy") || t.contains("doppler") ||
@@ -150,6 +147,9 @@ object ClinicalResultsLayout {
      * PDF inventory remains accessible in the dedicated Source PDFs screen.
      */
     fun omitRoutinePdf(test: String, rows: List<LabResult>): Boolean {
+        if(ClinicalReportRenderer.isUrineRoutine(test) ||
+            Regex("""(?i)\b(?:hiv|hcv|hbsag|hbs\s*ag|hepatitis\s*[bc])\b""")
+                .containsMatchIn(test)) return true
         if (rows.isEmpty() || ClinicalReportRenderer.isMicrobiologyInvestigation(test)) return false
         val t = key(test)
         if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
