@@ -87,4 +87,15 @@ class ClinicalCoagAndCsvV144Test {
         assertTrue(CoagulationDisplay.missingPTComponents(t,ordered).isEmpty())
     }
 
+    @Test fun mixedPtApttPanelUsesExplicitAssayLabelsWithoutAssumingBareControl() {
+        val test="PT/APTT"
+        val rows=listOf(row(test,"Prothrombin Time (PT)(Patient Result)","13.8"),
+            row(test,"Prothrombin Time (PT)(Control)","11.7"),
+            row(test,"APTT Patient","32.1"),row(test,"APTT Control","29.2"))
+        assertEquals(listOf("PT (patient)","PT (control)",
+            "aPTT (patient)","aPTT (control)"),
+            rows.map(ClinicalChronology::parameterLabel))
+        assertEquals("Control",ClinicalChronology.parameterLabel(row(test,"Control","29.0")))
+    }
+
 }
