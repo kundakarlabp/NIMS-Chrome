@@ -24,6 +24,19 @@ object SourceMetadataReview {
                 value == "rft" || value == "kft" -> "rft"
             value == "serumcreatinine" || value == "creatinine" -> "creatinine"
             value == "serumurea" || value == "urea" -> "urea"
+            value.startsWith("grams") || value.startsWith("gramstain") ||
+                value.startsWith("gramsmear") -> "gramstain"
+            value.startsWith("fungalfluorescen") ||
+                value.startsWith("calcofluor") -> "calcofluor"
+            value.startsWith("fungalkoh") || value.startsWith("kohpreparation") ||
+                value.startsWith("kohmount") -> "fungalkoh"
+            value.startsWith("afbsmear") || value.startsWith("afbstain") ||
+                value.startsWith("acidfastbacilli") -> "afbstain"
+            value=="urineculture" || value=="urineaerobicculture" -> "urineculture"
+            value=="indirectcoombstestgel" || value=="indirectcoombstest" ||
+                value=="iat" -> "indirectcoombs"
+            value=="directcoombstestgel" || value=="directcoombstest" ||
+                value=="dat" -> "directcoombs"
             else -> value
         }
     }

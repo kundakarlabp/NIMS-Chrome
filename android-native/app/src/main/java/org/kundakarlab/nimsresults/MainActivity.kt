@@ -3239,9 +3239,15 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             PdfUrineSummaries.extract(candidatePart)
                         else emptyList()
                     }
-                    val cultureIndex = remember(rows,candidates,reportTitleEpoch) {
-                        if(ClinicalPresentation.isCulture(study.title))
-                            ClinicalResultsLayout.cultureProvenance(rows,candidates)
+                    val verifiedCoombs=remember(study.title,candidatePart) {
+                        PdfClinicalSummaries.coombs(study.title,candidatePart)
+                    }
+                    val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
+                    val isCulture=ClinicalPresentation.isCulture(study.title)
+                    val microIndex=remember(rows,candidates,verifiedHeader) {
+                        if(isMicro) ClinicalResultsLayout.microbiologyProvenance(
+                            rows,candidates,verifiedHeader,
+                            bloodCulture=isCulture && study.title.contains("blood",true))
                         else emptyList()
                     }
                     val urineCodes=remember(study.rows) {
@@ -3258,6 +3264,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         mutableStateOf(false)
                     }
                     var showCultureGuidance by remember(current.patient.crNo,study.key) {
+                        mutableStateOf(false)
+                    }
+                    var showSourceComment by remember(current.patient.crNo,study.key) {
                         mutableStateOf(false)
                     }
                     var pickPdf by remember(current.patient.crNo,study.key) {
@@ -3311,15 +3320,24 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     .filter(String::isNotBlank).distinct().singleOrNull()
                                     ?.let{"Sample "+it}
                             )
-                            if(provenance.isNotEmpty() &&
-                                !ClinicalPresentation.isCulture(study.title))
+                            if(provenance.isNotEmpty() && !isMicro)
                                 Text(provenance.joinToString(" · "),
                                     fontSize=10.sp,color=Color(0xFF486581))
-                            if(cultureIndex.isNotEmpty() &&
+                            if(isMicro && !isCulture && microIndex.isNotEmpty())
+                                Text(microIndex.joinToString(" · "),fontSize=10.sp,
+                                    color=Color(0xFF486581))
+                            if(isCulture && microIndex.isNotEmpty() &&
                                 inlineRows.none {
                                     ClinicalChronology.isNarrativeRow(study,it)
-                                }) Text(cultureIndex.joinToString(" · "),
+                                }) Text(microIndex.joinToString(" · "),
                                 fontSize=10.sp,color=Color(0xFF486581))
+                            if(verifiedCoombs!=null) {
+                                Text("Coombs: "+verifiedCoombs,fontSize=12.sp,
+                                    fontWeight=FontWeight.Medium,
+                                    color=Color(0xFF102A43))
+                                Text("CR-checked candidate PDF; confirm lab/study identity",
+                                    fontSize=9.sp,color=Color(0xFF875B22))
+                            }
                             if(verifiedBlood!=null) {
                                 Text("ABO/Rh: "+verifiedBlood.group,
                                     fontSize=13.sp,fontWeight=FontWeight.Bold,
@@ -3344,9 +3362,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                             if(inlineRows.isEmpty()) {
-                                if(verifiedBlood==null)
-                                    Text("No readable result value was supplied in the " +
-                                        "structured NIMS feed for this investigation.",
+                                if(verifiedBlood==null && verifiedCoombs==null)
+                                    Text("No readable result in structured NIMS feed. " +
+                                        "Check original report for source-coded investigations.",
                                         fontSize=11.sp,color=Color(0xFF66788A))
                             } else {
                                 // Render every result in the ordinary scroll, with
@@ -3356,7 +3374,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)
                                         else ClinicalChronology.parameterLabel(row)
-                                    val rawValue=ClinicalChronology.fullValue(row)
+                                    val rawValue=ClinicalReadableSummaries.compactValue(row)
                                     val unmapped=ClinicalChronology.isUnmapped(row)
                                     val longText=ClinicalChronology.isNarrativeRow(study,row)
                                     val caption=if(unmapped)
@@ -3364,8 +3382,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                         else label
                                     if(longText) {
                                         Column(verticalArrangement=Arrangement.spacedBy(2.dp)) {
-                                            if(!(caption.equals("Result",true) &&
-                                                    ClinicalPresentation.isCulture(study.title)))
+                                            if(!ClinicalReadableSummaries.redundantNarrativeLabel(
+                                                    caption,study.title))
                                                 Text(caption,fontSize=11.sp,
                                                     color=if(unmapped) Color(0xFF875B22)
                                                         else Color(0xFF486581),
@@ -3391,18 +3409,31 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     }
                                                 val collectedFromPdf=verifiedHeader?.collectionDate
                                                     ?.takeIf { it.isNotBlank() &&
-                                                        cultureIndex.none { x -> x.startsWith("Collected ") } }
+                                                        microIndex.none { x -> x.contains("Collected ") } }
                                                     ?.let {
                                                         "Collected "+LabPanelMatrix.displayDateTime(it)
                                                     }
-                                                val fullInfo=(cultureInfo + cultureIndex +
+                                                val fullInfo=(cultureInfo + microIndex +
                                                     listOfNotNull(collectedFromPdf,reportedFromPdf))
                                                     .distinct()
                                                 if(fullInfo.isNotEmpty()) Text(
                                                     fullInfo.joinToString(" · "),
                                                     fontSize=10.sp,fontWeight=FontWeight.Medium,
                                                     color=Color(0xFF24496A))
-                                                Text(culture.result.ifBlank { rawValue },
+                                                val cultureSections=if(study.title.contains(
+                                                        "urine",true))
+                                                    ClinicalReadableSummaries.urineCulture(
+                                                        culture.result.ifBlank { rawValue })
+                                                    else emptyList()
+                                                if(cultureSections.isNotEmpty())
+                                                    cultureSections.forEach { part ->
+                                                        Text(part.heading,fontSize=10.sp,
+                                                            fontWeight=FontWeight.SemiBold,
+                                                            color=Color(0xFF24496A))
+                                                        Text(part.content,fontSize=12.sp,
+                                                            color=abnormalColor(row.abnormal))
+                                                    }
+                                                else Text(culture.result.ifBlank { rawValue },
                                                     fontSize=12.sp,color=abnormalColor(row.abnormal))
                                                 if(culture.guidance.isNotBlank()) {
                                                     TextButton(onClick={
@@ -3429,7 +3460,26 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     "Reported by: " + structured.reporter,
                                                     fontSize=10.sp,color=Color(0xFF486581))
                                             } else {
-                                                Text(rawValue,fontSize=12.sp,
+                                                val summary=ClinicalReadableSummaries.crp(
+                                                    study.title,row.valueText)
+                                                    ?:ClinicalReadableSummaries.hiv(
+                                                        study.title,row.valueText)
+                                                if(summary!=null) {
+                                                    Text(summary.finding,fontSize=12.sp,
+                                                        fontWeight=FontWeight.Medium,
+                                                        color=abnormalColor(row.abnormal))
+                                                    if(summary.comment.isNotBlank()) {
+                                                        TextButton(onClick={
+                                                            showSourceComment=!showSourceComment
+                                                        }) {Text(if(showSourceComment)
+                                                            "Hide laboratory comment"
+                                                            else "Read laboratory comment",
+                                                            fontSize=10.sp)}
+                                                        if(showSourceComment)
+                                                            Text(summary.comment,fontSize=11.sp,
+                                                                color=Color(0xFF486581))
+                                                    }
+                                                } else Text(rawValue,fontSize=12.sp,
                                                     color=abnormalColor(row.abnormal))
                                             }
                                             // Culture provenance is displayed with the
@@ -3475,8 +3525,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                 Text(rawValue,fontSize=12.sp,
                                                     color=abnormalColor(row.abnormal),
                                                     modifier=Modifier.weight(0.8f))
-                                                if(row.refRange.isNotBlank()) Text(
-                                                    row.refRange,
+                                                if(ClinicalReadableSummaries.usefulReference(
+                                                        row.refRange).isNotBlank()) Text(
+                                                    ClinicalReadableSummaries.usefulReference(
+                                                        row.refRange),
                                                     fontSize=9.sp,
                                                     color=Color(0xFF7B8794),
                                                     maxLines=1,
@@ -3494,19 +3546,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 }
                             }
                             if(pendingUrineCodes.isNotEmpty()) {
-                                Text("Urine chemistry · unverified HIS codes",
-                                    fontSize=10.sp,fontWeight=FontWeight.SemiBold,
-                                    color=Color(0xFF486581))
-                                pendingUrineCodes.forEach { field ->
-                                    Row(Modifier.fillMaxWidth(),
-                                        horizontalArrangement=Arrangement.SpaceBetween) {
-                                        Text(ClinicalResultsLayout.urineChemistryLabel(field),
-                                            fontSize=11.sp,color=Color(0xFF486581),
-                                            modifier=Modifier.weight(1f))
-                                        Text(ClinicalResultsLayout.urineCodeDisplay(field),
-                                            fontSize=11.sp,color=Color(0xFF875B22))
-                                    }
-                                }
+                                Text("Other urine chemistry requires the original PDF ("+
+                                    pendingUrineCodes.size+" coded HIS fields). " +
+                                    "Codes are not clinical measurements.",
+                                    fontSize=10.sp,color=Color(0xFF875B22))
                             }
                             if(CoagulationDisplay.isAPTTPanel(study.title)) {
                                 val apttMissing=CoagulationDisplay.missingAPTTComponents(

@@ -34,7 +34,7 @@ object MicrobiologyNarrativeMetadata {
         val header = lines.take(18).joinToString("\n")
         val pdf = PdfDocumentHeaders.parse(header)
         val prefixLab = Regex(
-            """(?im)^\s*([A-Z]{1,3}\d{4,8})\s+(?:(?:FAN\s+)?(?:BLOOD\s+|AEROBIC\s+|FUNGAL\s+)?CULTURE\s+REPORT)\b"""
+            """(?im)^\s*([A-Z]{1,3}\d{4,8})\s+(?:(?:FAN\s+)?(?:BLOOD\s+|AEROBIC\s+|FUNGAL\s+)?CULTURE\s+REPORT|GRAM(?:S)?\s+STAIN(?:ING)?|FUNGAL\s+(?:STAINING|KOH|FLUORESCENCE)|AFB\s+STAIN(?:ING)?)\b"""
         ).find(header)?.groupValues?.getOrNull(1).orEmpty()
         val value = MicrobiologyNarrativeFields(
             labNumber = pdf.labNumber.ifBlank { prefixLab },

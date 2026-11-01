@@ -263,6 +263,38 @@ object AppDiagnostics {
                         .any { it.startsWith("Sent ") }
                 })
             appendLine("diagnostics.results.reference_layout=inline_compact")
+            appendLine("diagnostics.results.crp_thresholds_recognized=" +
+                studies.count { study ->
+                    study.rows.any { row ->
+                        ClinicalReadableSummaries.crp(row.test,row.valueText)!=null
+                    }
+                })
+            appendLine("diagnostics.results.hiv_qualitative_summaries=" +
+                studies.count { study ->
+                    study.rows.any { row ->
+                        ClinicalReadableSummaries.hiv(row.test,row.valueText)!=null
+                    }
+                })
+            appendLine("diagnostics.results.microbiology_stain_studies=" +
+                studies.count {
+                    ClinicalReadableSummaries.isStain(it.title)
+                })
+            appendLine("diagnostics.results.stain_unique_pdf_candidates=" +
+                studies.count { study ->
+                    ClinicalReadableSummaries.isStain(study.title) &&
+                        SourceMetadataReview.pdfCandidates(study.rows,sourceReports)
+                            .distinctBy { it.url }.size==1
+                })
+            appendLine("diagnostics.results.urine_his_codes_not_interpreted=" +
+                rows.count(ClinicalResultsLayout::urineChemistryCode))
+            appendLine("diagnostics.results.urine_source_pdf_required_for_codes=true")
+            appendLine("diagnostics.results.coombs_studies_requiring_verified_source=" +
+                studies.count { study ->
+                    Regex("""(?i)\b(?:direct|indirect)\s+coombs""")
+                        .containsMatchIn(study.title) &&
+                        ClinicalChronology.inlineRows(study).isEmpty()
+                })
+            appendLine("diagnostics.rest_reportList_specimen_enrichment_available=false")
             appendLine("diagnostics.results.coagulation_studies=" +
                 studies.count { CoagulationDisplay.isPTPanel(it.title) })
             appendLine("diagnostics.results.pt_without_patient_or_control=" +

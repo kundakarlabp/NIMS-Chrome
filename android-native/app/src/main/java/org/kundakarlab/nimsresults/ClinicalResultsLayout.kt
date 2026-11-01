@@ -38,6 +38,7 @@ object ClinicalResultsLayout {
     fun omitRoutineHeading(title: String, rows: List<LabResult>): Boolean {
         if(rows.isEmpty()) return false
         val t=key(title)
+        if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
         if(t.contains("culture") || t.contains("staining") ||
             t.contains("radiology") || t.contains("pet") ||
             t.contains("cardiacstudy") || t.contains("doppler") ||
@@ -146,6 +147,7 @@ object ClinicalResultsLayout {
     fun omitRoutinePdf(test: String, rows: List<LabResult>): Boolean {
         if (rows.isEmpty() || ClinicalReportRenderer.isMicrobiologyInvestigation(test)) return false
         val t = key(test)
+        if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
         if (Regex("""(?i)^(?:cbc|cbp|hemogram|haemogram|completehemogram|completehaemogram|completeblood|lft|creatinine|serumcreatinine|serumurea|urea|electrolyte|liverfunction|renalfunction|kidneyfunction|lipidprofile|iron|ferritin|ldh|lactatedehydrogenase|thyroidfunction|prothrombintime|ptinr|ptaptt|inr|esr|serumcalcium|calcium|serummagnesium)""").containsMatchIn(t))
             return true
         // Other uncomplicated biochemistry panels, including single numeric
@@ -222,6 +224,48 @@ object ClinicalResultsLayout {
                 RecentReportDates.parse(it) != RecentReportDates.parse(collection) }
                 ?.let { "Sent " + LabPanelMatrix.displayDateTime(it) }
         )
+    }
+
+
+    /** Provenance from the same observation, with only a labelled, unique
+     * candidate from the report index when specimen identity is absent.
+     * Never present candidate accession as a confirmed specimen match. */
+    fun microbiologyProvenance(rows:List<LabResult>,
+        candidates:List<ReportRef>,
+        verified:PdfDocumentHeader?=null,
+        bloodCulture:Boolean=false):List<String> {
+        val fromNarrative=rows.mapNotNull(MicrobiologyNarrativeMetadata::extract)
+        val directLab=rows.map { it.labNumber.trim() }.firstOrNull(String::isNotBlank)
+            ?:fromNarrative.map { it.labNumber }.firstOrNull(String::isNotBlank).orEmpty()
+        val directSample=rows.map { it.sampleNumber.trim() }.firstOrNull(String::isNotBlank)
+            ?:fromNarrative.map { it.sampleNumber }.firstOrNull(String::isNotBlank).orEmpty()
+        val lab=directLab.ifBlank { verified?.labNumber.orEmpty() }
+        val sample=directSample.ifBlank { verified?.sampleNumber.orEmpty() }
+        val collection=rows.map { it.collectionDateTime.trim() }.firstOrNull(String::isNotBlank)
+            ?:fromNarrative.map { it.collectionDate }.firstOrNull(String::isNotBlank)
+            ?:verified?.collectionDate.orEmpty()
+        val reported=rows.map { it.reportedDate.trim() }.firstOrNull(String::isNotBlank)
+            ?:fromNarrative.map { it.reportedDate }.firstOrNull(String::isNotBlank)
+            ?:verified?.reportedDate.orEmpty()
+        val one=candidates.singleOrNull()
+        val chosen=one?.takeIf { candidate ->
+            lab.isBlank() || candidate.labNumber.equals(lab,true)
+        }
+        val attachedLab=lab.ifBlank { chosen?.labNumber.orEmpty() }
+        val verifiedSource=lab.isNotBlank()
+        val line=mutableListOf<String>()
+        if(attachedLab.isNotBlank()) line+=
+            (if(verifiedSource) "Lab " else "Possible lab ")+attachedLab
+        val coll=collection.ifBlank { chosen?.collectionDateTime.orEmpty() }
+        if(coll.isNotBlank())line+=(if(collection.isBlank()) "Possible collected " else "Collected ")+
+            LabPanelMatrix.displayDateTime(coll)
+        if(reported.isNotBlank())line+="Reported "+LabPanelMatrix.displayDateTime(reported)
+        if(!bloodCulture) {
+            val samp=sample.ifBlank { chosen?.sampleNumber.orEmpty() }
+            if(samp.isNotBlank())line+=
+                (if(sample.isNotBlank()) "Sample " else "Possible sample ")+samp
+        }
+        return line
     }
 
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
