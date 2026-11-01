@@ -77,4 +77,14 @@ class ClinicalCoagAndCsvV144Test {
         assertTrue(csv.contains("\"11 - 13\""))
         assertTrue(csv.contains("\"s\""))
     }
+    @Test fun standaloneINRTestKeepsPtPatientAndControlIfSupplied() {
+        val t="INR"
+        val source=listOf(row(t,"INR","1.20"),row(t,"PT Control","12.3"),
+            row(t,"PT Patient","15.6"))
+        val ordered=ClinicalResultsLayout.ordered(t,source)
+        assertEquals(listOf("PT (patient)","PT (control)","INR"),
+            ordered.map(ClinicalChronology::parameterLabel))
+        assertTrue(CoagulationDisplay.missingPTComponents(t,ordered).isEmpty())
+    }
+
 }
