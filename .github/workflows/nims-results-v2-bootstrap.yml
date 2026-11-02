@@ -95,12 +95,24 @@ jobs:
             echo "::error::Refuse debuggable clinical APK"
             exit 1
           fi
-          cert="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')"
-          if [[ -z "$cert" ]]; then
-            echo "::error::apksigner did not report a certificate SHA-256."
+          # APK signer output labels vary across Android SDK releases.
+          # Read the known keystore certificate and require that exact SHA-256
+          # digest to appear in the independently verified APK signer report.
+          cert="$(keytool -list -v -keystore "$NIMS_SIGNING_STORE_FILE"             -storepass "$NIMS_SIGNING_STORE_PASSWORD"             -alias "$NIMS_SIGNING_KEY_ALIAS" 2>/dev/null |
+            sed -n 's/^.*SHA256: //p' | head -n 1 |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [[ -z "$cert" || ! "$cert" =~ ^[A-F0-9]{64}$ ]]; then
+            echo "::error::Signing keystore certificate fingerprint missing."
             exit 1
           fi
-          echo "::notice::Signer certificate digest recorded: $cert"
+          signer_report="$("$signer" verify --print-certs "$apk")"
+          normalized_report="$(printf '%s' "$signer_report" |
+            tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+          if [[ "$normalized_report" != *"$cert"* ]]; then
+            echo "::error::APK signing certificate does not match the original generated keystore."
+            exit 1
+          fi
+          echo "::notice::APK and signing keystore certificate matched: $cert"
           cp "$apk" dist/NIMS-Results-v2.0.0-PARALLEL-SIGNED.apk
           mkdir "$RUNNER_TEMP/recovery"
           cp "$NIMS_SIGNING_STORE_FILE" "$RUNNER_TEMP/recovery/nims-release-v2.p12"
