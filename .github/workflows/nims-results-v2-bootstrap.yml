@@ -1,0 +1,145 @@
+name: NIMS Results v2 signed bootstrap (parallel, legacy-preserving)
+
+on:
+  push:
+    branches: [recovery/nims-results-new-signing-baseline]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nims-signing-bootstrap-v2
+  cancel-in-progress: false
+
+jobs:
+  signed-bootstrap:
+    if: github.event_name == 'push' || github.head_ref == 'recovery/nims-results-new-signing-baseline'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Verify non-destructive parallel package
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "org.kundakarlab.nimsresults.recovery"' android-native/app/build.gradle.kts
+          grep -Fq 'versionCode = 20001' android-native/app/build.gradle.kts
+          grep -Fq 'android:label="NIMS Results 2"' android-native/app/src/main/AndroidManifest.xml
+          test -f android-native/signing/recovery-public-cert.pem
+          openssl x509 -in android-native/signing/recovery-public-cert.pem -noout >/dev/null
+          node --check android-native/app/src/main/assets/nims_engine.js
+          node --test android-native/tests/*.test.cjs
+
+      - name: Generate permanent signer and keep plaintext key only in runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          pass="$(openssl rand -hex 32)"
+          echo "::add-mask::$pass"
+          store="$RUNNER_TEMP/nims-results-v2-release.p12"
+          keytool -genkeypair -noprompt -storetype PKCS12 \
+            -keystore "$store" -storepass "$pass" \
+            -alias "nims-results-v2" -keypass "$pass" -keyalg RSA \
+            -keysize 3072 -validity 15000 \
+            -dname "CN=NIMS Results, OU=Independent Android Release, O=Private, C=IN"
+          echo "NIMS_SIGNING_STORE_FILE=$store" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_STORE_PASSWORD=$pass" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_KEY_ALIAS=nims-results-v2" >> "$GITHUB_ENV"
+          echo "NIMS_SIGNING_KEY_PASSWORD=$pass" >> "$GITHUB_ENV"
+          echo "::notice::Release key is for a NEW package ID, not an in-place update of v1."
+
+      - name: Build and test non-debuggable signed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p android-native clean test lintRelease assembleRelease --stacktrace --console=plain
+
+      - name: Verify and encrypt signing-key backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p dist
+          apk="android-native/app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          sdk="$ANDROID_HOME"
+          signer="$(find "$sdk/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n 1)"
+          aapt="$(find "$sdk/build-tools" -maxdepth 2 -name aapt -type f | sort -V | tail -n 1)"
+          test -x "$signer" && test -x "$aapt"
+          "$signer" verify --verbose "$apk"
+          info="$("$aapt" dump badging "$apk" | sed -n '1p')"
+          echo "::notice::APK package metadata: $info"
+          if [[ "$info" != *"name='org.kundakarlab.nimsresults.recovery'"* ]]; then
+            echo "::error::APK package name is not the new coexistence application ID."
+            exit 1
+          fi
+          if [[ "$info" != *"versionCode='20001'"* ]]; then
+            echo "::error::Incorrect APK versionCode in recovery release."
+            exit 1
+          fi
+          echo "::notice::APK package and version verified."
+          manifest="$("$aapt" dump xmltree "$apk" AndroidManifest.xml)"
+          echo "::notice::Release manifest inspected."
+          if printf '%s\n' "$manifest" | grep -Eq 'android:debuggable.*(0xffffffff|0x1)([[:space:]]|$)'; then
+            echo "::error::Refuse debuggable clinical APK"
+            exit 1
+          fi
+          cert="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')"
+          if [[ -z "$cert" ]]; then
+            echo "::error::apksigner did not report a certificate SHA-256."
+            exit 1
+          fi
+          echo "::notice::Signer certificate digest recorded: $cert"
+          cp "$apk" dist/NIMS-Results-v2.0.0-PARALLEL-SIGNED.apk
+          mkdir "$RUNNER_TEMP/recovery"
+          cp "$NIMS_SIGNING_STORE_FILE" "$RUNNER_TEMP/recovery/nims-release-v2.p12"
+          cat > "$RUNNER_TEMP/recovery/restore-info.txt" <<EOF
+          STORE_PASSWORD=$NIMS_SIGNING_STORE_PASSWORD
+          KEY_ALIAS=$NIMS_SIGNING_KEY_ALIAS
+          KEY_PASSWORD=$NIMS_SIGNING_KEY_PASSWORD
+          CERT_SHA256=$cert
+          PACKAGE=org.kundakarlab.nimsresults.recovery
+          EOF
+          tar -czf "$RUNNER_TEMP/signing-key-backup.tgz" -C "$RUNNER_TEMP/recovery" .
+          openssl cms -encrypt -binary -aes256 -in "$RUNNER_TEMP/signing-key-backup.tgz" \
+            -out dist/NIMS-SIGNER-RECOVERY-ENCRYPTED.p7m -outform DER \
+            android-native/signing/recovery-public-cert.pem
+          test -s dist/NIMS-SIGNER-RECOVERY-ENCRYPTED.p7m
+          cat > dist/RELEASE-IDENTITY.txt <<EOF
+          versionName=2.0.0
+          versionCode=20001
+          package=org.kundakarlab.nimsresults.recovery
+          certificateSHA256=$cert
+          sourceCommit=$GITHUB_SHA
+          oldPackageUntouched=org.kundakarlab.nimsresults
+          legacyInPlaceUpdate=false
+          nativeLiveClinicalValidation=not_run
+          signerBackup=encrypted CMS file; requires separately supplied recovery private key
+          EOF
+          echo "::notice::APK verified; keystore backed up with CMS encryption."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NIMS-Results-v2.0.0-SIGNED-PLUS-ENCRYPTED-KEY-BACKUP
+          path: dist/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Erase runner signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/nims-results-v2-release.p12"
+          rm -f "$RUNNER_TEMP/signing-key-backup.tgz"
+          rm -rf "$RUNNER_TEMP/recovery"
