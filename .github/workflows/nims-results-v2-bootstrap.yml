@@ -3,6 +3,8 @@ name: NIMS Results v2 signed bootstrap (parallel, legacy-preserving)
 on:
   push:
     branches: [recovery/nims-results-new-signing-baseline]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,6 +15,7 @@ concurrency:
 
 jobs:
   signed-bootstrap:
+    if: github.event_name == 'push' || github.head_ref == 'recovery/nims-results-new-signing-baseline'
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
