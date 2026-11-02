@@ -79,15 +79,28 @@ jobs:
           test -x "$signer" && test -x "$aapt"
           "$signer" verify --verbose "$apk"
           info="$("$aapt" dump badging "$apk" | sed -n '1p')"
-          [[ "$info" == *"name='org.kundakarlab.nimsresults.recovery'"* ]]
-          [[ "$info" == *"versionCode='20001'"* ]]
+          echo "::notice::APK package metadata: $info"
+          if [[ "$info" != *"name='org.kundakarlab.nimsresults.recovery'"* ]]; then
+            echo "::error::APK package name is not the new coexistence application ID."
+            exit 1
+          fi
+          if [[ "$info" != *"versionCode='20001'"* ]]; then
+            echo "::error::Incorrect APK versionCode in recovery release."
+            exit 1
+          fi
+          echo "::notice::APK package and version verified."
           manifest="$("$aapt" dump xmltree "$apk" AndroidManifest.xml)"
+          echo "::notice::Release manifest inspected."
           if printf '%s\n' "$manifest" | grep -Eq 'android:debuggable.*(0xffffffff|0x1)([[:space:]]|$)'; then
             echo "::error::Refuse debuggable clinical APK"
             exit 1
           fi
           cert="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')"
-          test -n "$cert"
+          if [[ -z "$cert" ]]; then
+            echo "::error::apksigner did not report a certificate SHA-256."
+            exit 1
+          fi
+          echo "::notice::Signer certificate digest recorded: $cert"
           cp "$apk" dist/NIMS-Results-v2.0.0-PARALLEL-SIGNED.apk
           mkdir "$RUNNER_TEMP/recovery"
           cp "$NIMS_SIGNING_STORE_FILE" "$RUNNER_TEMP/recovery/nims-release-v2.p12"
