@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.kundakarlab.nimsresults"
+        applicationId = "org.kundakarlab.nimsresults.recovery"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10053
-        versionName = "1.0.53-native"
+        versionCode = 20001
+        versionName = "2.0.0"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
