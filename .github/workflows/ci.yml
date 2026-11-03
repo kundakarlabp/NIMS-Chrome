@@ -153,7 +153,18 @@ jobs:
             test -x "$signer"
             report="$("$signer" verify --verbose --print-certs "$apk")"
             # SHA-256 is a public certificate fingerprint, not the private key.
-            actual="$(printf '%s\n' "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+            actual="$(printf '%s\n' "$report" | grep -i -m1 'SHA-256 digest' | sed -E 's/.*[Dd]igest:[[:space:]]*//' | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]' || true)"
+            if [[ ! "$actual" =~ ^[0-9A-F]{64}$ ]]; then
+              # Android SDK apksigner versions use different certificate
+              # report prefixes; allow digest-only fallback, never trust a
+              # value without exact comparison to keystore AND installed cert.
+              actual="$(printf '%s\n' "$report" | grep -Eo '[0-9a-fA-F]{64}' | head -n 1 | tr '[:lower:]' '[:upper:]' || true)"
+            fi
+            if [[ ! "$actual" =~ ^[0-9A-F]{64}$ ]]; then
+              printf '%s\n' "$report" | sed -E 's/[A-Fa-f0-9]{64}/[certificate digest]/g' | head -n 12
+              echo "::error::Unable to parse a SHA-256 certificate fingerprint from apksigner."
+              exit 1
+            fi
             from_key="$(keytool -list -v -keystore "$NIMS_SIGNING_STORE_FILE" -storepass "$NIMS_SIGNING_STORE_PASSWORD" -alias "$NIMS_SIGNING_KEY_ALIAS" 2>/dev/null | sed -n 's/^.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
             expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
             pinned='0932A983C18134C898D05671E579969BCE5724F9C44840D367A5BE556C2F11C5'
