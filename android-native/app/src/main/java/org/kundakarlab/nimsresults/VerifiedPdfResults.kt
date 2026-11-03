@@ -156,23 +156,73 @@ object VerifiedPdfResults {
         val wanted=if(isScreen) "SCREENING TESTS" else "CONFIRMATORY TESTS"
         val start=sourceText.indexOf(wanted,ignoreCase=true)
         if(start<0)return emptyList()
+        val next=if(isScreen) "CONFIRMATORY TESTS" else "END OF THE REPORT"
         val section=sourceText.substring(start).take(5000)
-            .substringBefore(if(isScreen) "CONFIRMATORY TESTS" else "********* END")
+            .substringBefore(next,missingDelimiterValue=sourceText.substring(start).take(5000),
+                ignoreCase=true)
+        // The laboratory's final conclusion takes priority over every
+        // threshold in the generic interpretation reference table.
         val interpretation=if(isScreen) {
             Regex("""(?i)LUPUS\s+ANTICOAGULANT\s+SCREENING\s+TESTS\s+ARE\s+(POSITIVE|NEGATIVE)""")
                 .find(section)?.groupValues?.get(1)
-        }else {
-            Regex("""(?i)POSITIVE\s+FOR\s+LUPUS\s+ANTICOAGULANT|NEGATIVE\s+FOR\s+LUPUS\s+ANTICOAGULANT""")
+        } else {
+            Regex("""(?i)(POSITIVE|NEGATIVE)\s+FOR\s+LUPUS\s+ANTICOAGULANT""")
                 .find(section)?.value
         }
         val result=mutableListOf<VerifiedPdfItem>()
         if(!interpretation.isNullOrBlank())
             result+=VerifiedPdfItem("Interpretation",interpretation)
-        if(isConfirm) {
-            item(section,"Normalized ratio",
-                """(?i)Normalis(?:ed|ed)\s+Ratio\s*[:\-]?\s*([\d.]+)\b""")?.let(result::add)
+
+        fun subsection(startPattern:String,endPattern:String):String {
+            val at=Regex(startPattern,RegexOption.IGNORE_CASE).find(section)
+                ?.range?.first ?: return ""
+            val fragment=section.substring(at)
+            val end=Regex(endPattern,RegexOption.IGNORE_CASE).find(
+                fragment,1)?.range?.first ?: fragment.length
+            return fragment.take(end).take(1100)
         }
-        return result
+        fun append(block:String,label:String,pattern:String) {
+            item(block,label,pattern)?.let(result::add)
+        }
+        if(isScreen) {
+            append(section,"PT",
+                """(?i)\bProthrombin\s+Time\s*\(\s*PT\s*\)\s*([\d.]+\s*Sec)\b""")
+            append(section,"aPTT",
+                """(?i)\b(?:Activated\s+Partial\s+Thromboplastin\s+Time|APTT)\s*([\d.]+\s*Sec)\b""")
+            append(section,"Thrombin time",
+                """(?i)\bThrombin\s+Time\s*\(\s*TT\s*\)\s*([\d.]+\s*Sec)\b""")
+            val ptt=subsection("""PTT[\s-]*LA""","""DRVVT[\s-]*SCREEN""")
+            append(ptt,"PTT-LA patient",
+                """(?i)Patient\s+Plasma\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(ptt,"PTT-LA control",
+                """(?i)Pooled\s+Normal\s+Plasma\s*(?:\(\s*PNP\s*\))?\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(ptt,"PTT-LA ratio",
+                """(?i)\bRatio\s*[:\-]?\s*([\d.]+)\b""")
+            val drvvt=subsection("""DRVVT[\s-]*SCREEN""","""Interpretation""")
+            append(drvvt,"DRVVT screen patient",
+                """(?i)Patient\s+Plasma\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(drvvt,"DRVVT screen control",
+                """(?i)Pooled\s+Normal\s+Plasma\s*(?:\(\s*PNP\s*\))?\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(drvvt,"DRVVT screen ratio",
+                """(?i)Screen\s+Ratio\s*[:\-]?\s*([\d.]+)\b""")
+        } else {
+            val ptt=subsection("""PTT[\s-]*LA\s*Mix""","""DRVVT[\s-]*Mix""")
+            append(ptt,"PTT-LA mixing",
+                """(?i)Patient\s+plasma\s+with\s+PNP\s*\(\s*1:1\s*\)\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            val mixed=subsection("""DRVVT[\s-]*Mix""","""DRVVT[\s-]*CONFIRM""")
+            append(mixed,"DRVVT mixing",
+                """(?i)Patient\s+plasma\s+with\s+PNP\s*\(\s*1:1\s*\)\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            val confirm=subsection("""DRVVT[\s-]*CONFIRM""","""Interpretation""")
+            append(confirm,"DRVVT confirm patient",
+                """(?i)Patient\s+Plasma\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(confirm,"DRVVT confirm control",
+                """(?i)Pooled\s+Normal\s+Plasma\s*(?:\(\s*PNP\s*\))?\s*[:\-]?\s*([\d.]+\s*Sec)\b""")
+            append(confirm,"DRVVT confirm ratio",
+                """(?i)Confirm\s+Ratio\s*[:\-]?\s*([\d.]+)\b""")
+            append(confirm,"Normalized ratio",
+                """(?i)Normalis(?:ed|ed)\s+Ratio\s*[:\-]?\s*([\d.]+)\b""")
+        }
+        return result.distinctBy { it.label }
     }
 
     fun extract(test: String, pdfText: String): List<VerifiedPdfItem> {
