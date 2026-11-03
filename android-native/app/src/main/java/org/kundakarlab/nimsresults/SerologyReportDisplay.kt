@@ -45,13 +45,40 @@ object SerologyReportDisplay {
         label+assay(test,section).takeIf(String::isNotBlank)
             ?.let { " ("+it+")" }.orEmpty()
 
+    private val aplMarker=Regex(
+        """(?i)(?:anti[\s-]*)?(?:cardiolipin\s+antibodies?|beta[\s-]*2\s*glycoprotein[\s-]*1\s*antibodies?)\s*\(?\s*(IgG|IgM)\s*\)?"""
+    )
+
+    private fun antiphospholipid(text:String):List<Finding> {
+        val source=text.replace(Regex("""\s+""")," ").trim()
+        val markers=aplMarker.findAll(source).toList()
+        return markers.mapNotNull { (index,match) ->
+            val end=markers.getOrNull(index+1)?.range?.first ?: source.length
+            val section=source.substring(match.range.last+1,end).take(250)
+            val reactionValue=reaction.find(section)?.value ?: return@mapNotNull null
+            val measurement=Regex("""(?i)\b[\d.]+\s*(?:GPL|MPL|U\s*/\s*mL)\b""")
+                .find(section)?.value?.replace(Regex("""\s+""")," ").orEmpty()
+            val isBeta=match.value.contains("glycoprotein",true)
+            val name=(if(isBeta) "Anti-β2GPI " else "Anticardiolipin ")+
+                match.groupValues[1]
+            Finding(name,reactionValue.lowercase().replaceFirstChar { it.uppercase() },
+                measurement)
+        }
+    }
+
     fun isSerology(test:String):Boolean =
-        Regex("""(?i)\b(?:dengue|hiv|hcv|hepatitis\s+c|leptospira|NS1)\b""")
+        Regex("""(?i)\b(?:dengue|hiv|hcv|hepatitis\s+c|leptospira|NS1|anticardiolipin|glycoprotein|phospholipid)\b""")
             .containsMatchIn(test)
 
     fun extract(test: String, narrative: String): List<Finding> {
         if(!isSerology(test) || narrative.isBlank()) return emptyList()
         val source=narrative.replace(Regex("""\s+""")," ").trim()
+        if(Regex("""(?i)anticardiolipin|beta[ -]*2[ -]*glycoprotein|phospholipid""")
+                .containsMatchIn(source) &&
+            (test.contains("cardiolipin",true) ||
+                test.contains("glycoprotein",true) ||
+                test.contains("phospholipid",true)))
+            return antiphospholipid(source)
         val dengue=dengueIg.findAll(source).toList()
         if(dengue.isNotEmpty()) {
             // Explicit analyte labels are essential: two immunoglobulins can
