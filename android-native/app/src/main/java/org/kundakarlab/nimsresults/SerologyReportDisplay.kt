@@ -52,7 +52,7 @@ object SerologyReportDisplay {
     private fun antiphospholipid(text:String):List<Finding> {
         val source=text.replace(Regex("""\s+""")," ").trim()
         val markers=aplMarker.findAll(source).toList()
-        return markers.mapNotNull { (index,match) ->
+        return markers.mapIndexedNotNull { index, match ->
             val end=markers.getOrNull(index+1)?.range?.first ?: source.length
             val section=source.substring(match.range.last+1,end).take(250)
             val reactionValue=reaction.find(section)?.value ?: return@mapNotNull null
