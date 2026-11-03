@@ -67,7 +67,7 @@ object SerologyReportDisplay {
     }
 
     fun isSerology(test:String):Boolean =
-        Regex("""(?i)\b(?:dengue|hiv|hcv|hepatitis\s+c|leptospira|NS1|anticardiolipin|glycoprotein|phospholipid)\b""")
+        Regex("""(?i)\b(?:dengue|hiv|hcv|hepatitis\s+c|leptospira|NS1|anticardiolipin|glycoprotein|antiphospholipid|phospholipid)\b""")
             .containsMatchIn(test)
 
     fun extract(test: String, narrative: String): List<Finding> {
