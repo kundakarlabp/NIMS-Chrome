@@ -123,6 +123,19 @@ object VerifiedPdfResults {
                 """(?i)\bPT\s*INR\s*[:\-]?\s*([\d.]+)\b""")?.let(result::add)
             item(patient,"aPTT (patient)",
                 """(?i)\b(?:aPTT|activated\s+partial\s+thromboplastin\s+time)\s*[:\-]?\s*([\d.]+\s*(?:sec|seconds?))\b""")?.let(result::add)
+            // NIMS tables put the control immediately after patient time.
+            // Require an explicit Control header; a nearby reference
+            // interval alone must never be misread as a control.
+            if(Regex("""(?i)\bControl\b""").containsMatchIn(patient)) {
+                Regex("""(?i)\bProthrombin\s+Time\s*\(\s*PT\s*\)\s*[\d.]+\s*Sec\s+([\d.]+)\b""")
+                    .find(patient)?.groupValues?.get(1)?.let {
+                        result+=VerifiedPdfItem("PT (control)",it+" Sec")
+                    }
+                Regex("""(?i)\b(?:APTT|Activated\s+Partial\s+Thromboplastin\s+Time)\s*[\d.]+\s*Sec\s+([\d.]+)\b""")
+                    .find(patient)?.groupValues?.get(1)?.let {
+                        result+=VerifiedPdfItem("aPTT (control)",it+" Sec")
+                    }
+            }
         }
         if(rejected)result+=VerifiedPdfItem("Patient result","Not reported")
         Regex("""(?i)improper\s+sample\s+collection[^\r\n.]*\.?\s*(?:please\s+repeat\s+the\s+test\.?)?""")
