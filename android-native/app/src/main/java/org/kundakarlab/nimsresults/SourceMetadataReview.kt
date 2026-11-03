@@ -171,7 +171,11 @@ object SourceMetadataReview {
                 .find(text)?.groupValues?.get(1)
             val before=Regex("""(?i)\b(\d+)\s*(?:st|nd|rd|th)?\s*"""+kind+"""\b""")
                 .find(text)?.groupValues?.get(1)
-            return after ?: before
+            // NIMS uses either "1 set 2 bottle" or "Set 1 Bottle 2".
+            // A number immediately after "set" in prefix style actually
+            // belongs to the bottle, so choose orientation as a whole.
+            val prefixStyle=Regex("""(?i)\b\d+\s*set\b""").containsMatchIn(text)
+            return if(prefixStyle) before ?: after else after ?: before
         }
         val set=ordinal(test,"set")
         val otherSet=ordinal(source,"set")
