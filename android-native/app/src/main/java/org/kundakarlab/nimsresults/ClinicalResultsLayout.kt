@@ -40,7 +40,8 @@ object ClinicalResultsLayout {
         val t=key(title)
         if(Regex("""(?i)csf|pleural|ascitic|synovial|fluidcellcount|pericardial""")
                 .containsMatchIn(t)) return false
-        if(t.contains("crp") || t.startsWith("creactiveprotein")) return true
+        // CRP needs its assay name alongside qualitative values such as "<6".
+        if(t.contains("crp") || t.startsWith("creactiveprotein")) return false
         if(t.contains("culture") || t.contains("staining") ||
             t.contains("radiology") || t.contains("pet") ||
             t.contains("cardiacstudy") || t.contains("doppler") ||
