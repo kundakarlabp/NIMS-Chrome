@@ -62,6 +62,7 @@ object ClinicalChronology {
         row.valueText.isNotBlank() && !ClinicalReportRenderer.isPlaceholder(row) &&
             !CoagulationDisplay.isAbsentValue(row) &&
             !ClinicalResultsLayout.suppressCbcRow(row) &&
+            !ClinicalResultsLayout.suppressStructuredArtifact(row) &&
             !ClinicalPresentation.isTechnical(row) &&
             study.visible.any { it === row }
     }
