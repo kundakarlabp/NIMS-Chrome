@@ -140,30 +140,45 @@ jobs:
           echo "::notice::Persistent signer enabled. APK certificate verification is mandatory."
       - name: Build, unit test, lint, assemble
         run: gradle -p android-native clean test lintDebug lintRelease assembleDebug assembleRelease --stacktrace --console=plain
-      - name: Verify APK
+      - name: Verify production APK and configured update identity
         shell: bash
         run: |
           set -euo pipefail
-          apk="android-native/app/build/outputs/apk/debug/app-debug.apk"
+          apk="android-native/app/build/outputs/apk/release/app-release.apk"
           test -s "$apk"
           unzip -t "$apk" >/dev/null
           if [[ -n "${NIMS_SIGNING_STORE_FILE:-}" ]]; then
-            # Compare against the certificate of the ALREADY-INSTALLED app,
-            # not against a newly generated key or filename.
             sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
             signer="$(find "$sdk/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n 1)"
             test -x "$signer"
-            actual="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+            report="$("$signer" verify --verbose --print-certs "$apk")"
+            # SHA-256 is a public certificate fingerprint, not the private key.
+            actual="$(printf '%s\n' "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
+            from_key="$(keytool -list -v -keystore "$NIMS_SIGNING_STORE_FILE" -storepass "$NIMS_SIGNING_STORE_PASSWORD" -alias "$NIMS_SIGNING_KEY_ALIAS" 2>/dev/null | sed -n 's/^.*SHA256: //p' | head -n 1 | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
             expected="$(printf '%s' "$NIMS_EXPECTED_INSTALLED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:lower:]' '[:upper:]')"
-            if [[ -z "$actual" || "$actual" != "$expected" ]]; then
-              echo "::error::Signer mismatch: this APK MUST NOT replace the installed app."
+            pinned='0932A983C18134C898D05671E579969BCE5724F9C44840D367A5BE556C2F11C5'
+            [[ -n "$actual" ]] || { echo "::error::Could not extract APK signing certificate."; exit 1; }
+            [[ -n "$from_key" ]] || { echo "::error::Could not extract keystore certificate."; exit 1; }
+            if [[ "$actual" != "$from_key" ]]; then
+              echo "::error::APK certificate differs from configured signing keystore."
               exit 1
             fi
-            echo "NIMS_APK_ARTIFACT_NAME=nims-results-existing-signer-verified" >> "$GITHUB_ENV"
+            if [[ "$expected" != "$pinned" ]]; then
+              echo "::error::Configured installed certificate differs from verified v2 recovery baseline."
+              exit 1
+            fi
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::Original installation signer not available in CI; no compatible update."
+              exit 1
+            fi
+            echo "NIMS_APK_ARTIFACT_NAME=nims-results-release-original-signer-verified" >> "$GITHUB_ENV"
+            echo "::notice::Production APK verified with original installed-app signer."
+          else
+            echo "::warning::No original signer: release is not distributable."
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.NIMS_APK_ARTIFACT_NAME }}
-          path: android-native/app/build/outputs/apk/debug/app-debug.apk
+          path: android-native/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
