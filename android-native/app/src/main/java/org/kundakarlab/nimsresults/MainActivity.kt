@@ -3412,9 +3412,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else null
                     }
                     val microSpecimen=resolvedMicro?.specimen.orEmpty()
-                    val microLine=remember(rows,candidates,verifiedHeader,resolvedMicro) {
-                        if(isMicro) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
-                            rows,resolvedMicro?.let { listOf(it.report) } ?: candidates,
+                    val showReportMetadata=isMicro ||
+                        Regex("""(?i)smear|pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|coombs|blood[ -]*(?:group|type)|antibody[ -]*screen|cardiolipin|glycoprotein""")
+                            .containsMatchIn(study.title)
+                    val microLine=remember(rows,verifiedHeader,resolvedMicro,showReportMetadata) {
+                        if(showReportMetadata) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
+                            rows,resolvedMicro?.let { listOf(it.report) } ?: emptyList(),
                             resolvedMicro?.header ?: verifiedHeader)
                         else ""
                     }
@@ -3522,7 +3525,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     color=Color(0xFF486581))
                             // One compact metadata line; keep raw sample IDs and
                             // PDF-source verification details in diagnostics.
-                            if(isMicro && microLine.isNotBlank())
+                            if(showReportMetadata && microLine.isNotBlank())
                                 Text(microLine,fontSize=9.sp,
                                     color=Color(0xFF486581),maxLines=1,
                                     softWrap=true,
