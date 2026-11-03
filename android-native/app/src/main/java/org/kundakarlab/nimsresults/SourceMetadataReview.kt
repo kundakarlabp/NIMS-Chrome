@@ -164,10 +164,19 @@ object SourceMetadataReview {
             (target.contains("aerobicculture") && !target.contains("urineculture"))
         if (!culture) return false
         if (!candidate.contains("culture")) return false
-        val set = Regex("""(?i)(\d+)\s*set""").find(test)?.groupValues?.get(1)
-        val otherSet = Regex("""(?i)(\d+)\s*set""").find(source)?.groupValues?.get(1)
-        val bottle = Regex("""(?i)(\d+)\s*bottle""").find(test)?.groupValues?.get(1)
-        val otherBottle = Regex("""(?i)(\d+)\s*bottle""").find(source)?.groupValues?.get(1)
+        // Both "Set 1 Bottle 2" and NIMS "1 set 2 bottle" occur in
+        // signed PDFs. A mismatched bottle must never be offered as a link.
+        fun ordinal(text:String, kind:String):String? {
+            val after=Regex("""(?i)\b"""+kind+"""\s*[:#.\-]?\s*(\d+)\b""")
+                .find(text)?.groupValues?.get(1)
+            val before=Regex("""(?i)\b(\d+)\s*(?:st|nd|rd|th)?\s*"""+kind+"""\b""")
+                .find(text)?.groupValues?.get(1)
+            return after ?: before
+        }
+        val set=ordinal(test,"set")
+        val otherSet=ordinal(source,"set")
+        val bottle=ordinal(test,"bottle")
+        val otherBottle=ordinal(source,"bottle")
         if (set != null && otherSet != null && set != otherSet) return false
         if (bottle != null && otherBottle != null && bottle != otherBottle) return false
         val isFinal = test.contains("final",true)
