@@ -38,6 +38,8 @@ object ClinicalResultsLayout {
             """(?:pcr|viralload|quantiferon|igra|lacscr|lacconfirm|lupusanticoagulant|bonemarrow|trephine|dicprofile)"""
         ).containsMatchIn(t)
         if(!sourceDriven) return false
+        if(t.contains("dicprofile") && p=="others" && row.unit.isBlank() &&
+            v.toDoubleOrNull()!=null) return true
         if(p.matches(Regex("""(?:ref|reference)[0-9]+|textarea[0-9]*|textbox[0-9]*|cytochemistry[0-9]+""")))
             return true
         if(p in setOf("methodology","ref","reference","interpretationtable",
