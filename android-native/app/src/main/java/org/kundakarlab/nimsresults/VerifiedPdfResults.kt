@@ -83,8 +83,29 @@ object VerifiedPdfResults {
             .find(patient)?.groupValues?.get(1)
             ?: Regex("""(?i)\b(?:QFT[\s-]*plus\s+result|IGRA\s+result)\s*[:\-]?\s*(POSITIVE|NEGATIVE|INDETERMINATE)\b""")
                 .find(patient)?.groupValues?.get(1)
-        return if (final==null) emptyList()
-            else listOf(VerifiedPdfItem("Final result",final.uppercase(Locale.ROOT)))
+        if(final==null) return emptyList()
+        val readings=mutableListOf<VerifiedPdfItem>()
+        // Only accept measurements in the single row immediately following
+        // an explicitly labelled QuantiFERON column-header sequence.
+        val header=Regex("""(?is)\bNil\s*(?:Tube)?\b.{0,140}\bTB1\b.{0,80}\bTB2\b.{0,100}\bMitogen""")
+            .find(patient)
+        val finalColumn=Regex("""(?i)\bFinal\s+Result\b""").find(
+            patient,header?.range?.last?.plus(1) ?: 0)
+        if(header!=null && finalColumn!=null) {
+            val patientRow=patient.substring(finalColumn.range.last+1)
+                .lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+            val nums=Regex("""(?<![A-Za-z])\d+(?:\.\d+)?""")
+                .findAll(patientRow).map { it.value }.take(4).toList()
+            if(nums.size==4 && Regex("""(?i)\b(?:POSITIVE|NEGATIVE|INDETERMINATE)\b""")
+                    .containsMatchIn(patientRow)) {
+                listOf("Nil","TB1","TB2","Mitogen").zip(nums)
+                    .forEach { (label,number) ->
+                        readings+=VerifiedPdfItem(label,number+" IU/mL")
+                    }
+            }
+        }
+        readings+=VerifiedPdfItem("Final result",final.uppercase(Locale.ROOT))
+        return readings
     }
 
     private fun coagulation(test:String, source:String):List<VerifiedPdfItem> {
