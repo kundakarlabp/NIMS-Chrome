@@ -65,6 +65,22 @@ class VerifiedPdfResultsV203Test {
         assertFalse(facts.any { it.label=="PT (patient)" || it.label=="aPTT (patient)" })
     }
 
+    @Test fun validPtApttKeepsPatientAndControlTimesSeparate() {
+        val report="""
+            Investigation Patient Result Control Ref Range
+            Prothrombin Time (PT) 11.5 Sec 11.7 9.0-13.0 Sec
+            PT INR 0.96 1.0
+            APTT 43.5 Sec 32.0 25.0-39.0 Sec
+        """.trimIndent()
+        val results=VerifiedPdfResults.extract("PT/APTT",report)
+            .associate { it.label to it.result }
+        assertEquals("11.5 Sec",results["PT (patient)"])
+        assertEquals("11.7 Sec",results["PT (control)"])
+        assertEquals("0.96",results["INR"])
+        assertEquals("43.5 Sec",results["aPTT (patient)"])
+        assertEquals("32.0 Sec",results["aPTT (control)"])
+    }
+
     @Test fun marrowBiopsyAndAspirateDoNotOverwriteEachOther() {
         val aspirate="""
             BONE MARROW ASPIRATION
