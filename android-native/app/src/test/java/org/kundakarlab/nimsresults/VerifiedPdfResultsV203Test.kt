@@ -41,8 +41,10 @@ class VerifiedPdfResultsV203Test {
             INTERPRETATION:
             Any Any Positive M.tuberculosis infection likely
         """.trimIndent()
-        assertEquals("POSITIVE",VerifiedPdfResults.extract(
-            "IGRA QuantiFERON TB Gold Plus",sample).single().result)
+        val patient=VerifiedPdfResults.extract("IGRA QuantiFERON TB Gold Plus",sample)
+        assertEquals("POSITIVE",patient.last().result)
+        assertEquals(listOf("Nil","TB1","TB2","Mitogen","Final result"),
+            patient.map { it.label })
         assertTrue(VerifiedPdfResults.extract("IGRA QuantiFERON TB Gold Plus",
             "INTERPRETATION: Final Result POSITIVE for any positive response")
             .isEmpty())
@@ -100,6 +102,9 @@ class VerifiedPdfResultsV203Test {
             ReportRef(id="b",title="Fan Blood Culture (1 set 2 bottle) 48 hrs",
                 labNumber="B221",collectionDateTime="2026-10-23",
                 url="https://hospital.example/b.pdf"),
+            ReportRef(id="wrong",title="Fan Blood Culture (1 set 1 bottle) 48 hrs",
+                labNumber="B222",collectionDateTime="2026-10-23",
+                url="https://hospital.example/wrong.pdf"),
             ReportRef(id="e",title="Aerobic Culture",labNumber="E221",
                 collectionDateTime="2026-10-23",url="https://hospital.example/e.pdf"))
         assertEquals(listOf("B221"),SourceMetadataReview.pdfCandidates(rows,source)
@@ -118,6 +123,41 @@ class VerifiedPdfResultsV203Test {
         assertEquals(listOf("5 GPL","6 MPL","1 U/ml","1 U/ml"),
             values.map { it.testValue })
         assertTrue(values.all { it.result == "Negative" })
+    }
+
+    @Test fun lupusAnticoagulantReportSectionsAndRatiosRemainSeparate() {
+        val screen="""
+            LUPUS ANTICOAGULANTS (SCREENING TESTS)
+            PTT-LA Test
+            Patient Plasma 92.7 Sec
+            Pooled Normal Plasma (PNP) 39.0 Sec
+            Ratio 2.38
+            DRVVT SCREEN
+            Patient Plasma 62.4 Sec
+            Pooled Normal Plasma (PNP) 31.7 Sec
+            Screen Ratio 1.97
+            Interpretation: LUPUS ANTICOAGULANT SCREENING TESTS ARE POSITIVE
+        """.trimIndent()
+        val confirm="""
+            LUPUS ANTICOAGULANTS (CONFIRMATORY TESTS)
+            PTT-LA Mix
+            Patient plasma with PNP (1:1) 57.5 Sec
+            DRVVT Mix
+            Patient plasma with PNP (1:1) 41.6 Sec
+            DRVVT CONFIRM
+            Patient Plasma 38.1 Sec
+            Pooled Normal Plasma(PNP) 31.9 Sec
+            Confirm Ratio 1.19
+            Normalised Ratio 1.66
+            Interpretation: POSITIVE FOR LUPUS ANTICOAGULANT
+        """.trimIndent()
+        val s=VerifiedPdfResults.extract("546 LAC SCREEN (DRV SCREEN+PTT LA)",screen)
+        assertTrue(s.any { it.label=="Interpretation" && it.result=="POSITIVE" })
+        assertTrue(s.any { it.label=="DRVVT screen ratio" && it.result=="1.97" })
+        val c=VerifiedPdfResults.extract("547 LAC CONFIRM (MIXING+DRV CONFIRM)",confirm)
+        assertTrue(c.any { it.label=="Interpretation" &&
+            it.result.contains("POSITIVE FOR LUPUS ANTICOAGULANT") })
+        assertTrue(c.any { it.label=="Normalized ratio" && it.result=="1.66" })
     }
 
     @Test fun structuredSourceCodesCannotDisplayAsMarrowValues() {
