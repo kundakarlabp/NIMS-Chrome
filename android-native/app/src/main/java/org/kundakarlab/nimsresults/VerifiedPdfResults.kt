@@ -157,9 +157,10 @@ object VerifiedPdfResults {
         val start=sourceText.indexOf(wanted,ignoreCase=true)
         if(start<0)return emptyList()
         val next=if(isScreen) "CONFIRMATORY TESTS" else "END OF THE REPORT"
-        val section=sourceText.substring(start).take(5000)
-            .substringBefore(next,missingDelimiterValue=sourceText.substring(start).take(5000),
-                ignoreCase=true)
+        val fullSection=sourceText.substring(start).take(5000)
+        val boundary=Regex(Regex.escape(next),RegexOption.IGNORE_CASE)
+            .find(fullSection)?.range?.first ?: fullSection.length
+        val section=fullSection.take(boundary)
         // The laboratory's final conclusion takes priority over every
         // threshold in the generic interpretation reference table.
         val interpretation=if(isScreen) {
