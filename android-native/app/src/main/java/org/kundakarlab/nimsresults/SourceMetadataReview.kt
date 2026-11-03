@@ -127,7 +127,7 @@ object SourceMetadataReview {
         if(test.contains("culture",true) && source.contains("culture",true)) {
             fun kind(value: String): String = when {
                 value.contains("urine",true) -> "urine"
-                Regex("""(?i)blood|fan\\s*blood|bottle|\\bset\\s*[0-9]+""")
+                Regex("""(?i)blood|fan[ ]*blood|bottle|set[ ]*[0-9]+""")
                     .containsMatchIn(value) -> "blood"
                 Regex("""(?i)fungal|mycolog""").containsMatchIn(value) -> "fungal"
                 else -> "other"
@@ -138,7 +138,7 @@ object SourceMetadataReview {
         if (target == candidate) return true
         // A signed multi-section LAC PDF can contain both screen and confirm.
         if(target in setOf("lacscreen","lacconfirm") &&
-            Regex("""(?i)lupus\\s*anticoagulant|\\blac\\b""")
+            Regex("""(?i)lupus[ ]*anticoagulant|lac""")
                 .containsMatchIn(source)) return true
         // One signed NIMS blood-bank report contains both DAT and IAT.
         // Require BOTH explicit test names in the original title rather than
