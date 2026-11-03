@@ -35,6 +35,15 @@ object SourceMetadataReview {
             value.startsWith("afbsmear") || value.startsWith("afbstain") ||
                 value.startsWith("acidfastbacilli") -> "afbstain"
             value=="urineculture" || value=="urineaerobicculture" -> "urineculture"
+            value.contains("lacscre") || value.contains("lupusanticoagulantsscreen") -> "lacscreen"
+            value.contains("lacconfirm") || value.contains("lupusanticoagulantsconfirm") -> "lacconfirm"
+            value.contains("cmv") && (value.contains("viral") || value.contains("pcr") || value.contains("dna")) -> "cmvpcr"
+            value.contains("ebv") && (value.contains("viral") || value.contains("pcr") || value.contains("dna")) -> "ebvpcr"
+            value.contains("parvo") && (value.contains("pcr") || value.contains("viral")) -> "parvopcr"
+            value.contains("bonemarrow") && (value.contains("biopsy") || value.contains("trephine")) -> "marrowbiopsy"
+            value.contains("bonemarrow") && (value.contains("aspiration") || value.contains("aspirate")) -> "marrowaspirate"
+            value.contains("fibrinogen") -> "fibrinogen"
+            value.contains("bloodgroup") || value=="bgt" -> "bloodgrouping"
             value.startsWith("indirectcoombs") ||
                 value.startsWith("indirectantiglobulin") ||
                 value in setOf("iat","iatgel","ict","ictgel") -> "indirectcoombs"
@@ -113,7 +122,24 @@ object SourceMetadataReview {
     private fun sameInvestigation(test: String, source: String): Boolean {
         val target = titleKey(test)
         val candidate = titleKey(source)
+        // The word culture alone does not identify a specimen. Avoid
+        // attaching urine/wound PDFs to a blood-culture result.
+        if(test.contains("culture",true) && source.contains("culture",true)) {
+            fun kind(value: String): String = when {
+                value.contains("urine",true) -> "urine"
+                Regex("""(?i)blood|fan\\s*blood|bottle|\\bset\\s*[0-9]+""")
+                    .containsMatchIn(value) -> "blood"
+                Regex("""(?i)fungal|mycolog""").containsMatchIn(value) -> "fungal"
+                else -> "other"
+            }
+            if(kind(test)!=kind(source)) return false
+            if(kind(test)=="other" && target!=candidate) return false
+        }
         if (target == candidate) return true
+        // A signed multi-section LAC PDF can contain both screen and confirm.
+        if(target in setOf("lacscreen","lacconfirm") &&
+            Regex("""(?i)lupus\\s*anticoagulant|\\blac\\b""")
+                .containsMatchIn(source)) return true
         // One signed NIMS blood-bank report contains both DAT and IAT.
         // Require BOTH explicit test names in the original title rather than
         // a substring: "direct" also occurs inside "indirect".
@@ -134,7 +160,8 @@ object SourceMetadataReview {
         }
         if (component.isNotEmpty() && candidate.contains(component)) return true
         // For cultures preserve set/bottle and preliminary/final distinction.
-        val culture = target.contains("bloodculture") || target.contains("aerobicculture")
+        val culture = target.contains("bloodculture") ||
+            (target.contains("aerobicculture") && !target.contains("urineculture"))
         if (!culture) return false
         if (!candidate.contains("culture")) return false
         val set = Regex("""(?i)(\d+)\s*set""").find(test)?.groupValues?.get(1)
