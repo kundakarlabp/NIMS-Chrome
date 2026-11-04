@@ -309,7 +309,7 @@ object ClinicalResultsLayout {
         if(collected.isNotBlank()) lines+="Collected "+LabPanelMatrix.displayDateTime(collected)
         val sentDate=sent.ifBlank { candidate?.sentDate.orEmpty() }
         if(sentDate.isNotBlank() &&
-            RecentReportDates.parse(sentDate)!=RecentReportDates.parse(collected))
+            sentDate.trim()!=collected.trim())
             lines+="Sent "+LabPanelMatrix.displayDateTime(sentDate)
         if(reported.isNotBlank()) lines+="Reported "+LabPanelMatrix.displayDateTime(reported)
         if(!bloodCulture) {
