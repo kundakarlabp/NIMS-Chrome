@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import android.view.Gravity
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -30,6 +31,7 @@ class FullClinicalPdfActivity : Activity() {
     private var rendered:Bitmap?=null
     private var pageIndex=0
     private var pageCount=0
+    private var zoom=1f
     private var closing=false
     private lateinit var image:ImageView
     private lateinit var counter:TextView
@@ -68,6 +70,10 @@ class FullClinicalPdfActivity : Activity() {
         header.addView(next)
         header.addView(counter,LinearLayout.LayoutParams(0,
             LinearLayout.LayoutParams.WRAP_CONTENT,1f))
+        header.addView(button("Zoom") {
+            zoom=if(zoom<1.5f)1.9f else 1f
+            applyZoom()
+        })
         header.addView(button("Save") { saveCopy() })
         root.addView(header)
         image=ImageView(this).apply {
@@ -78,7 +84,12 @@ class FullClinicalPdfActivity : Activity() {
         }
         root.addView(ScrollView(this).apply {
             setBackgroundColor(Color.rgb(243,246,248))
-            addView(image,android.widget.FrameLayout.LayoutParams(
+            addView(HorizontalScrollView(this@FullClinicalPdfActivity).apply {
+                isFillViewport=true
+                addView(image,android.widget.FrameLayout.LayoutParams(
+                    resources.displayMetrics.widthPixels,
+                    android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
+            },android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
         },LinearLayout.LayoutParams(-1,0,1f))
@@ -104,6 +115,14 @@ class FullClinicalPdfActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun applyZoom() {
+        if(!::image.isInitialized)return
+        val width=(resources.displayMetrics.widthPixels*zoom).toInt()
+        image.layoutParams=android.widget.FrameLayout.LayoutParams(
+            width.coerceAtLeast(1),
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT)
     }
 
     private fun showPage(index:Int) {
