@@ -14,6 +14,12 @@ data class FullClinicalStudy(
     val findings: List<FullClinicalFinding>, val conflictingCulture: Boolean
 )
 
+data class FullClinicalSource(
+    val title:String, val labNumber:String, val collectedAt:String,
+    val reportedAt:String, val specimen:String, val stage:String,
+    val evidence:String
+)
+
 /** Device-local dataset shared by CSV and full PDF. All unverified fields are
  * visibly labelled; original HIS results and candidate URLs are unchanged. */
 object FullClinicalResultsDocument {
@@ -80,6 +86,41 @@ object FullClinicalResultsDocument {
             )
         }
         return out
+    }
+
+    /** Source-index appendix is never folded into a patient result.
+     * Source reportList REST rows only offer title/date and are omitted
+     * from the lab-ID list to avoid duplicate metadata-only events.
+     */
+    fun sourceInventory(bundle:ClinicalBundle):List<FullClinicalSource> {
+        return bundle.reports.asSequence()
+            .filter { !it.sourceTag.startsWith("nims_rest_reportList") }
+            .distinctBy { it.url.ifBlank { it.id } }
+            .map { report ->
+                val checked=ReportTitleCache.header(report.url)
+                    ?.takeIf { it.crNo==bundle.patient.crNo &&
+                        (report.labNumber.isBlank() ||
+                            it.labNumber.equals(report.labNumber,true)) }
+                FullClinicalSource(
+                    title=report.title,
+                    labNumber=report.labNumber.ifBlank { checked?.labNumber.orEmpty() },
+                    collectedAt=report.collectionDateTime
+                        .ifBlank { checked?.collectionDate.orEmpty() },
+                    reportedAt=checked?.reportedDate.orEmpty()
+                        .ifBlank { report.reportedDate },
+                    specimen=checked?.let {
+                        PdfSourceEvidence.specimen(
+                            ReportTitleCache.extracted(report.url).orEmpty())
+                    }.orEmpty(),
+                    stage=report.reportStage.ifBlank {
+                        checked?.let {
+                            PdfSourceEvidence.stage(
+                                ReportTitleCache.extracted(report.url).orEmpty())
+                        }.orEmpty()
+                    },
+                    evidence=if(checked!=null)"PDF CR verified; NOT linked to a result"
+                        else "Source-index metadata only; NOT linked to a result")
+            }.toList()
     }
 
     /** Pure model for CSV tests and for the PDF preview, no network calls. */
