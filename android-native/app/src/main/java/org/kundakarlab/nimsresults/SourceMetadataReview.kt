@@ -115,6 +115,7 @@ object SourceMetadataReview {
         return when {
             test.contains("coombs",true) -> options.take(2)
             ClinicalPresentation.isCulture(test) -> options.take(3)
+            ClinicalReportRenderer.isMicrobiologyInvestigation(test) -> options.take(3)
             else -> options.singleOrNull()?.let(::listOf) ?: emptyList()
         }
     }
