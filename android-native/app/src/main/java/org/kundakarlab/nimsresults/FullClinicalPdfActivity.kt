@@ -78,9 +78,9 @@ class FullClinicalPdfActivity : Activity() {
         }
         root.addView(ScrollView(this).apply {
             setBackgroundColor(Color.rgb(243,246,248))
-            addView(image,ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT))
+            addView(image,android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
         },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(root)
         previous.isEnabled=false;next.isEnabled=false
