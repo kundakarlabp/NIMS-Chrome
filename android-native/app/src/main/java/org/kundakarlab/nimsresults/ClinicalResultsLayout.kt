@@ -426,12 +426,14 @@ object ClinicalResultsLayout {
             return day.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM")) +
                 (clock?.let { " "+it } ?: "")
         }
-        return listOf(
-            "Lab "+lab.ifBlank { "—" },
-            "Col "+shortDate(collection).ifBlank { "—" },
-            sent.takeIf(String::isNotBlank)?.let { "Sent "+shortDate(it) },
-            "Rep "+shortDate(reporting).ifBlank { "—" }
-        ).filterNotNull().joinToString(" · ")
+        return listOfNotNull(
+            lab.takeIf(String::isNotBlank),
+            shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
+            sent.takeIf(String::isNotBlank)?.let { date ->
+                shortDate(date).takeIf(String::isNotBlank)?.let { "Sent "+it }
+            },
+            shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
+        ).joinToString(" · ")
     }
 
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
