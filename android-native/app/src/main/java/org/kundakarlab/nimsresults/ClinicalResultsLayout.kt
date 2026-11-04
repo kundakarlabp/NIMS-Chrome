@@ -417,6 +417,8 @@ object ClinicalResultsLayout {
             ?.removePrefix("Collected ").orEmpty()
         val reporting = metadata.firstOrNull { it.startsWith("Reported ") }
             ?.removePrefix("Reported ").orEmpty()
+        val sent = metadata.firstOrNull { it.startsWith("Sent ") }
+            ?.removePrefix("Sent ").orEmpty()
         fun shortDate(raw:String):String {
             if (raw.isBlank()) return ""
             val day=RecentReportDates.parse(raw) ?: return ""
@@ -424,11 +426,12 @@ object ClinicalResultsLayout {
             return day.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM")) +
                 (clock?.let { " "+it } ?: "")
         }
-        return listOfNotNull(
-            lab.takeIf(String::isNotBlank),
-            shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
-            shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
-        ).joinToString(" · ")
+        return listOf(
+            "Lab "+lab.ifBlank { "—" },
+            "Col "+shortDate(collection).ifBlank { "—" },
+            sent.takeIf(String::isNotBlank)?.let { "Sent "+shortDate(it) },
+            "Rep "+shortDate(reporting).ifBlank { "—" }
+        ).filterNotNull().joinToString(" · ")
     }
 
     data class Narrative(val sections: List<SourceSection>, val reporter: String)
