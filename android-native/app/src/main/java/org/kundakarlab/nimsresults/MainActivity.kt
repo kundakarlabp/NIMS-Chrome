@@ -1044,6 +1044,41 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    /** Explicit, bounded source verification for an older or ambiguous
+     * microbiology card; does not block scrolling or create false PDF links. */
+    private fun verifyMicrobiologySources(
+        rows: List<LabResult>, candidates: List<ReportRef>, cr: String
+    ) {
+        if(sessionState!=SessionState.CONNECTED || cr!=bundle?.patient?.crNo) {
+            statusText="NIMS session required to verify PDF sources."
+            return
+        }
+        val test=rows.firstOrNull()?.test.orEmpty()
+        val choices=SourceMetadataReview.inspectionCandidates(test,candidates)
+            .distinctBy { it.url }.take(3)
+        if(choices.isEmpty()) {
+            browseSourceReports(test)
+            return
+        }
+        val request=activeRequestId
+        Toast.makeText(this,"Checking NIMS source PDFs…",Toast.LENGTH_SHORT).show()
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            choices.forEach { report ->
+                val selected={ !Thread.currentThread().isInterrupted &&
+                    cr==bundle?.patient?.crNo &&
+                    request==activeRequestId }
+                if(!selected())return@execute
+                val ok=enricher.inspect(report,cr,selected)
+                runOnUiThread {
+                    if(!selected())return@runOnUiThread
+                    if(ok)reportTitleEpoch++
+                    else DiagnosticEvents.record("USER_PDF_SOURCE_UNAVAILABLE")
+                }
+            }
+        }
+    }
+
     private fun openReport(url: String) {
         if (ReportPayloadParser.safeReportUrl(url).isBlank()) return
         startActivity(Intent(this, ReportActivity::class.java)
@@ -3270,7 +3305,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 items(day.studies,key={ "study|"+it.key }) { study ->
                     val rows=study.rows
                     val relevant=study.visible
-                    val candidates=remember(rows,current.reports) {
+                    val candidates=remember(rows,current.reports,reportTitleEpoch) {
                         SourceMetadataReview.pdfCandidates(rows,current.reports)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
@@ -3502,6 +3537,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     if(displayPdf!=null) {
                                         TextButton(onClick={openReport(displayPdf.url)}) {
                                             Text("PDF",fontSize=10.sp)
+                                        }
+                                    } else if(candidates.isNotEmpty()) {
+                                        TextButton(onClick={
+                                            verifyMicrobiologySources(rows,candidates,
+                                                current.patient.crNo)
+                                        }) {
+                                            Text("Verify PDF",fontSize=10.sp)
                                         }
                                     } else {
                                         TextButton(onClick={browseSourceReports(study.title)}) {
