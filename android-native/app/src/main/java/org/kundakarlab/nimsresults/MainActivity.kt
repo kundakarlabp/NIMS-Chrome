@@ -985,8 +985,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // report types. Never bulk-download a patient's hundreds of PDFs.
         val targets=studies.sortedWith(compareBy<ClinicalChronology.Study> {
             when {
-                it.title.contains("coombs",true) -> 0
-                ClinicalPresentation.isCulture(it.title) -> 1
+                ClinicalPresentation.isCulture(it.title) -> 0
+                Regex("""(?i)gram|giemsa|stain|smear|calcofluor|koh|afb""")
+                    .containsMatchIn(it.title) -> 1
+                it.title.contains("coombs",true) -> 2
                 Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|pt/aptt|pt[ /]*inr|blood[ -]*(?:group|type)|antibody[ -]*screen|bgt""")
                     .containsMatchIn(it.title) -> 2
                 Regex("""(?i)malaria|microfilaria|filaria|smear\s+for\s+mp|strip\s+test\s+for\s+mp""")
@@ -1006,6 +1008,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
                 ClinicalPresentation.isCulture(study.title) ||
+                Regex("""(?i)gram|giemsa|stain|smear|calcofluor|koh|afb""")
+                    .containsMatchIn(study.title) ||
                 Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|pt/aptt|pt[ /]*inr|blood[ -]*(?:group|type)|antibody[ -]*screen|bgt""")
                     .containsMatchIn(study.title) ||
                 Regex("""(?i)malaria|microfilaria|filaria|smear\s+for\s+mp|strip\s+test\s+for\s+mp""")
@@ -1188,7 +1192,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         color = Color(0xFFBDCAD6), fontSize = 9.sp, maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 }
-                SessionBadge(sessionState)
+                TextButton(onClick={openLogin(manageSession=true)}) {
+                    SessionBadge(sessionState)
+                }
             }
         }
     }
@@ -1222,11 +1228,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     TextButton(onClick = { openLogin() }) { Text("NIMS login", fontSize = 12.sp) }
                 } else {
                     TextButton(onClick = { engine.checkSession() }) { Text("Check", fontSize = 12.sp) }
-                    TextButton(onClick = { openLogin(manageSession = true) }) {
-                        Text("Session / Logout", fontSize = 12.sp)
-                    }
-                    TextButton(onClick = { logout() }) { Text("Clear local", fontSize = 12.sp) }
                 }
+                // Portal session management must remain accessible even when
+                // the hospital has expired or rejected a concurrent login.
+                TextButton(onClick = { openLogin(manageSession = true) }) {
+                    Text("Manage NIMS logins", fontSize = 12.sp)
+                }
+                if(sessionState==SessionState.CONNECTED)
+                    TextButton(onClick = { logout() }) { Text("Clear local", fontSize = 12.sp) }
                 TextButton(onClick = { toggleAppLock() }) {
                     Text(if (appLockEnabled) "Lock On" else "Device lock", fontSize = 12.sp)
                 }
@@ -3407,7 +3416,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val isCulture=ClinicalPresentation.isCulture(study.title)
                     val resolvedMicro=remember(rows,candidates,reportTitleEpoch,
                         current.patient.crNo,study.date) {
-                        if(isMicro) MicrobiologyReportDisplay.uniqueReport(
+                        if(isMicro) MicrobiologyPdfIdentity.unique(
                             rows,candidates,current.patient.crNo,study.date)
                         else null
                     }
@@ -3417,8 +3426,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             .containsMatchIn(study.title)
                     val microLine=remember(rows,verifiedHeader,resolvedMicro,showReportMetadata) {
                         if(showReportMetadata) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
-                            rows,resolvedMicro?.let { listOf(it.report) } ?: emptyList(),
-                            resolvedMicro?.header ?: verifiedHeader)
+                            rows,emptyList(),
+                            resolvedMicro?.header ?: if(!isMicro) verifiedHeader else null)
                         else ""
                     }
                     val urineCodes=remember(study.rows) {
@@ -3467,7 +3476,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                                     .filter(String::isNotBlank).distinct()
                                                     .singleOrNull().orEmpty())
                                         microSpecimen.isNotBlank() ->
-                                            study.title+" · "+microSpecimen
+                                            MicrobiologyPdfIdentity.displayTitle(study.title,rows)+
+                                                " · "+microSpecimen
+                                        isMicro -> MicrobiologyPdfIdentity.displayTitle(study.title,rows)
                                         else -> study.title
                                     },fontSize=13.sp,
                                         fontWeight=FontWeight.Bold,
@@ -3476,17 +3487,36 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 } else {
                                     Spacer(Modifier.weight(1f))
                                 }
-                                if(candidates.isNotEmpty() &&
+                                val exactReport=resolvedMicro?.report
+                                val directAccession=MicrobiologyPdfIdentity.accession(rows)
+                                // Never show multiple competing urine or blood PDFs as
+                                // though they all belong to this one result.
+                                val indexedDirect=if(isMicro && exactReport==null &&
+                                    directAccession.isNotBlank())
+                                    candidates.singleOrNull()?.takeIf { report ->
+                                        report.labNumber.equals(directAccession,true)
+                                    }
+                                    else null
+                                val displayPdf=exactReport ?: indexedDirect
+                                if(isMicro) {
+                                    if(displayPdf!=null) {
+                                        TextButton(onClick={openReport(displayPdf.url)}) {
+                                            Text("PDF",fontSize=10.sp)
+                                        }
+                                    } else {
+                                        TextButton(onClick={browseSourceReports(study.title)}) {
+                                            Text("Find PDF",fontSize=10.sp)
+                                        }
+                                    }
+                                } else if(candidates.isNotEmpty() &&
                                     (!ClinicalResultsLayout.omitRoutinePdf(study.title,inlineRows) ||
                                         urineCodes.isNotEmpty() ||
                                         unresolvedRows.isNotEmpty() ||
                                         study.title.contains("coombs",true) ||
                                         CoagulationDisplay.missingPTComponents(
                                             study.title,inlineRows).isNotEmpty())) {
-                                    // PDF remains an optional source-review action;
-                                    // it is not required to read any structured result.
                                     TextButton(onClick={
-                                        val only = candidates.singleOrNull()
+                                        val only=candidates.singleOrNull()
                                         if(only!=null) openReport(only.url) else pickPdf=true
                                     }) {
                                         Text(if(candidates.size==1) "PDF" else
@@ -3531,6 +3561,14 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     softWrap=true,
                                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
+                            if(isMicro && (resolvedMicro?.discordant==true ||
+                                (study.title.contains("culture",true) &&
+                                    rows.any { MicrobiologyPdfIdentity.contradictoryCulture(
+                                        it.valueText) }))) {
+                                Text("Conflicting culture statements in laboratory source — verify the signed PDF.",
+                                    fontSize=11.sp,color=Color(0xFFB3261E),
+                                    fontWeight=FontWeight.SemiBold)
+                            }
                             if(verifiedParasite!=null)
                                 Text(verifiedParasite,fontSize=12.sp,
                                     fontWeight=FontWeight.Medium,
