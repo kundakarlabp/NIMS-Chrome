@@ -3362,7 +3362,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val rows=study.rows
                     val relevant=study.visible
                     val candidates=remember(rows,current.reports,reportTitleEpoch) {
-                        SourceMetadataReview.pdfCandidates(rows,current.reports)
+                        SourceMetadataReview.reviewCandidates(rows,current.reports)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
                                 val sourceDate=RecentReportDates.parse(
@@ -3595,15 +3595,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             Text("PDF",fontSize=10.sp)
                                         }
                                     } else if(candidates.isNotEmpty()) {
-                                        TextButton(onClick={
-                                            verifyMicrobiologySources(rows,candidates,
-                                                current.patient.crNo)
-                                        }) {
-                                            Text("Verify PDF",fontSize=10.sp)
+                                        // Restored source-PDF review. This opens a
+                                        // chooser, NEVER an inferred specimen link.
+                                        TextButton(onClick={pickPdf=true}) {
+                                            Text(if(candidates.size==1)"Review PDF"
+                                                else "PDFs ("+candidates.size+")",
+                                                fontSize=10.sp)
                                         }
                                     } else {
                                         TextButton(onClick={browseSourceReports(study.title)}) {
-                                            Text("Find PDF",fontSize=10.sp)
+                                            Text("Browse PDFs",fontSize=10.sp)
                                         }
                                     }
                                 } else if(candidates.isNotEmpty() &&
@@ -3949,9 +3950,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     if(pickPdf) {
                         AlertDialog(onDismissRequest={pickPdf=false},
-                            title={Text("Select PDF")},
+                            title={Text(if(isMicro) "Review candidate PDFs"
+                                else "Select PDF")},
                             text={
                                 Column {
+                                    if(isMicro) Text(
+                                        "Listed by investigation and available dates. These are not confirmed source matches. Verify the original specimen, lab number and reporting stage before use.",
+                                        fontSize=11.sp,color=Color(0xFF875B22))
                                     LazyColumn(Modifier.heightIn(max=390.dp)) {
                                         items(candidates,key={it.url}) { report ->
                                             TextButton(onClick={
@@ -3970,9 +3975,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             },
-                            confirmButton={TextButton(onClick={pickPdf=false}) {
-                                Text("Close")
-                            }})
+                            confirmButton={
+                                Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                    if(isMicro) TextButton(onClick={
+                                        pickPdf=false
+                                        verifyMicrobiologySources(rows,candidates,
+                                            current.patient.crNo)
+                                    }) { Text("Verify matching") }
+                                    TextButton(onClick={pickPdf=false}) {
+                                        Text("Close")
+                                    }
+                                }
+                            })
                     }
                 }
             }
