@@ -3603,6 +3603,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     softWrap=true,
                                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
+                            else if(isMicro)
+                                Text("Laboratory dates not linked · Verify source PDF",
+                                    fontSize=9.sp,color=Color(0xFF875B22),maxLines=1)
                             if(isMicro && (resolvedMicro?.discordant==true ||
                                 (study.title.contains("culture",true) &&
                                     rows.any { MicrobiologyPdfIdentity.contradictoryCulture(
