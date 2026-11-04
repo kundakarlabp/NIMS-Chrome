@@ -140,6 +140,14 @@ jobs:
           echo "::notice::Persistent signer enabled. APK certificate verification is mandatory."
       - name: Build, unit test, lint, assemble
         run: gradle -p android-native clean test lintDebug lintRelease assembleDebug assembleRelease --stacktrace --console=plain
+      - name: Preserve Android unit-test XML when checks fail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-results
+          path: android-native/app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify production APK and configured update identity
         shell: bash
         run: |
