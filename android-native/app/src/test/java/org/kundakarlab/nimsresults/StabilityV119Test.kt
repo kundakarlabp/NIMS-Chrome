@@ -28,7 +28,7 @@ class StabilityV119Test {
 
     @Test fun pdfTextCacheRetainsOnlyBoundedVerifiedRecentSources() {
         ReportTitleCache.clear()
-        (1..12).forEach { number ->
+        (1..15).forEach { number ->
             val url = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/" +
                 "invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=$number"
             val success = ReportTitleCache.learnPages(url,
@@ -38,7 +38,7 @@ class StabilityV119Test {
         }
         val first = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/" +
             "invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=1"
-        val latest = first.replace("fileName=1", "fileName=12")
+        val latest = first.replace("fileName=1", "fileName=15")
         assertNull(ReportTitleCache.header(first))
         assertNotNull(ReportTitleCache.header(latest))
         ReportTitleCache.clear()
