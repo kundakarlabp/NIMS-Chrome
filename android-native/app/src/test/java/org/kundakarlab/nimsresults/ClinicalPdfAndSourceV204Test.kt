@@ -94,6 +94,24 @@ class ClinicalPdfAndSourceV204Test {
         assertFalse(csv.contains("E11111"))
     }
 
+    @Test fun sourceIndexAppendixDoesNotInventClinicalRowIdentifiers() {
+        val row=source("AEROBIC CULTURE","NO GROWTH")
+        val indexed=ReportRef(id="1",title="Aerobic Culture",
+            labNumber="E11111",collectionDateTime="02-Nov-2026 10:00",
+            url="https://nimsts.edu.in/source/one.pdf",sourceTag="nims_html")
+        val rest=ReportRef(id="2",title="Aerobic Culture",
+            reportedDate="04-Nov-2026",sourceTag="nims_rest_reportList_context")
+        val bundle=ClinicalBundle(PatientInfo(crNo=patientCr),listOf(row),
+            listOf(indexed,rest))
+        val studies=FullClinicalResultsDocument.build(bundle)
+        assertEquals("",studies.single().accession)
+        val appendix=FullClinicalResultsDocument.sourceInventory(bundle)
+        assertEquals(1,appendix.size)
+        assertEquals("E11111",appendix.single().labNumber)
+        assertTrue(appendix.single().evidence.contains("NOT linked"))
+        assertEquals("",appendix.single().reportedAt)
+    }
+
     @Test fun selectedCsvOnlyContainsRequestedTests() {
         val rows=listOf(source("TEST ALPHA","10.5"),source("TEST BETA","25.0"))
         val all=FullClinicalResultsDocument.build(
