@@ -113,7 +113,7 @@ class MicrobiologyIdentityV203Test {
             reportedDate="2026-11-02 23:22"))
         assertEquals("Lab E19079 · Col 02/11 17:50 · Sent 02/11 18:15 · Rep 02/11 23:22",
             ClinicalResultsLayout.oneLineMicrobiologyMetadata(rows,emptyList()))
-        assertEquals("Lab — · Col — · Rep —",
+        assertEquals("",
             ClinicalResultsLayout.oneLineMicrobiologyMetadata(
                 listOf(row("GRAMS STAINING","2026-11-02","no bacteria")),emptyList()))
     }
