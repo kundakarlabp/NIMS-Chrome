@@ -134,7 +134,15 @@ object SourceMetadataReview {
                 else -> "other"
             }
             if(kind(test)!=kind(source)) return false
-            if(kind(test)=="other" && target!=candidate) return false
+            if(kind(test)=="other" && target!=candidate) {
+                // NIMS source titles may add "report", collection site,
+                // specimen or "(48 hrs)" to a generic aerobic culture.
+                // Such matches are discovery candidates ONLY, never proof.
+                val aerobic={ key:String ->
+                    key.contains("aerobicculture") || key=="culturereport" ||
+                        key=="culture" }
+                if(!aerobic(target) || !aerobic(candidate))return false
+            }
         }
         if (target == candidate) return true
         // NIMS may index a marrow Giemsa smear simply as STAINING,
@@ -196,6 +204,50 @@ object SourceMetadataReview {
         if ((test.contains("48",true) || isFinal) &&
             (source.contains("48",true) || otherFinal) && isFinal != otherFinal) return false
         return true
+    }
+
+    /**
+     * Restores clinician-accessible candidate PDF review without falsely
+     * declaring the selected report as this observation's source.
+     * The REST catalogue has no PDF URL or accession on this deployment.
+     */
+    fun reviewCandidates(rows: List<LabResult>,
+        sourceIndex: List<ReportRef>): List<ReportRef> {
+        val exact=pdfCandidates(rows,sourceIndex)
+        if(exact.isNotEmpty())return exact.take(6)
+        val test=rows.firstOrNull()?.test.orEmpty()
+        if(!ClinicalReportRenderer.isMicrobiologyInvestigation(test))
+            return emptyList()
+        val date=rows.mapNotNull { RecentReportDates.parse(it.reportedDate) }
+            .distinct().singleOrNull()
+            ?: rows.firstNotNullOfOrNull { RecentReportDates.parse(it.date) }
+            ?: return emptyList()
+        val culture=ClinicalPresentation.isCulture(test)
+        return sourceIndex.asSequence().filter { source ->
+            source.url.isNotBlank() &&
+                !source.sourceTag.startsWith("nims_rest_reportList") &&
+                sameInvestigation(test,source.title)
+        }.filter { source ->
+            val collected=RecentReportDates.parse(
+                source.collectionDateTime.ifBlank { source.sentDate }
+                    .ifBlank { source.date })
+            val reported=RecentReportDates.parse(
+                ReportTitleCache.header(source.url)?.reportedDate.orEmpty()
+                    .ifBlank { source.reportedDate })
+            when {
+                reported!=null -> reported==date
+                collected==null -> false
+                culture -> ChronoUnit.DAYS.between(collected,date) in 0L..7L
+                else -> collected==date
+            }
+        }.distinctBy { it.url }.sortedWith(
+            compareBy<ReportRef> {
+                val at=RecentReportDates.parse(
+                    it.collectionDateTime.ifBlank { it.date })
+                if(at==null)Long.MAX_VALUE
+                else kotlin.math.abs(ChronoUnit.DAYS.between(at,date))
+            }.thenBy { it.labNumber }
+        ).take(6).toList()
     }
 
     private fun sameAccession(one: String, two: String): Boolean =
