@@ -4,7 +4,7 @@ package org.kundakarlab.nimsresults
  * the REST reportList: it contains only test name, request number and date. */
 data class FullClinicalFinding(val parameter: String, val value: String,
     val unit: String = "", val reference: String = "",
-    val unresolved: Boolean = false)
+    val unresolved: Boolean = false, val selectionKey: String = "")
 
 data class FullClinicalStudy(
     val title: String, val sourceDate: String,
@@ -49,13 +49,15 @@ object FullClinicalResultsDocument {
             val readable=ClinicalResultsLayout.ordered(study.title,
                 ClinicalChronology.inlineRows(study)).map { row ->
                 FullClinicalFinding(ClinicalChronology.parameterLabel(row),
-                    row.valueText,row.unit,row.refRange)
+                    row.valueText,row.unit,row.refRange,selectionKey=
+                        row.test.trim().lowercase()+"|"+row.parameter.trim().lowercase())
             }
             val unresolved=ClinicalChronology.unresolvedRows(study)
                 .filter { row -> readable.none { it.value==row.valueText &&
                     it.parameter==ClinicalChronology.parameterLabel(row) } }
                 .map { row -> FullClinicalFinding(row.parameter,row.valueText,
-                    row.unit,row.refRange,unresolved=true) }
+                    row.unit,row.refRange,unresolved=true,selectionKey=
+                        row.test.trim().lowercase()+"|"+row.parameter.trim().lowercase()) }
             val findings=readable+unresolved
             out+=FullClinicalStudy(
                 title=if(isMicro)MicrobiologyPdfIdentity.displayTitle(study.title,rows)
@@ -81,14 +83,18 @@ object FullClinicalResultsDocument {
     }
 
     /** Pure model for CSV tests and for the PDF preview, no network calls. */
-    fun csv(studies: List<FullClinicalStudy>): String {
+    fun csv(studies: List<FullClinicalStudy>,
+            selected: Set<String>? = null): String {
         fun quote(value: String):String="\""+value.replace("\"","\"\"")+"\""
         val columns=listOf("Result date","Date evidence","Test","Parameter",
             "Value","Unit","Reference range","Lab/Study ID","Collection date/time",
             "Sent date/time","Reported date/time","Specimen","Source status",
             "Contradictory culture","Unmapped LIS field")
         val lines=studies.flatMap { study ->
-            (study.findings.ifEmpty { listOf(FullClinicalFinding("Result","Not available")) })
+            (if(selected==null)
+                study.findings.ifEmpty {
+                    listOf(FullClinicalFinding("Result","Not available")) }
+                else study.findings.filter { it.selectionKey in selected })
                 .map { item ->
                     listOf(study.sourceDate,study.dateKind,study.title,
                         item.parameter,item.value,item.unit,item.reference,
