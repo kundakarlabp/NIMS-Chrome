@@ -987,6 +987,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             when {
                 it.title.contains("coombs",true) -> 0
                 ClinicalPresentation.isCulture(it.title) -> 1
+                Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|pt/aptt|pt[ /]*inr|blood[ -]*(?:group|type)|antibody[ -]*screen|bgt""")
+                    .containsMatchIn(it.title) -> 2
                 Regex("""(?i)malaria|microfilaria|filaria|smear\s+for\s+mp|strip\s+test\s+for\s+mp""")
                     .containsMatchIn(it.title) -> 2
                 Regex("""(?i)(?:calcofluor|fungal.*(?:stain|fluorescen|koh)|koh.*(?:preparation|mount))""")
@@ -1004,6 +1006,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 Regex("""(?i)csf|pleural|ascitic|synovial|fluid\s+cell""")
                     .containsMatchIn(study.title) ||
                 ClinicalPresentation.isCulture(study.title) ||
+                Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|pt/aptt|pt[ /]*inr|blood[ -]*(?:group|type)|antibody[ -]*screen|bgt""")
+                    .containsMatchIn(study.title) ||
                 Regex("""(?i)malaria|microfilaria|filaria|smear\s+for\s+mp|strip\s+test\s+for\s+mp""")
                     .containsMatchIn(study.title)
         }.flatMap { study ->
@@ -1012,7 +1016,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             // Two same-date aerobic cultures must BOTH be inspected to
             // resolve a unique specimen. Inspection != source attribution.
             SourceMetadataReview.inspectionCandidates(study.title,options)
-        }.distinctBy { it.url }.take(6)
+        }.distinctBy { it.url }.take(12)
         pdfEvidenceTargets=targets.size
         if(targets.isEmpty()) return
         pdfEvidenceWorker.execute {
@@ -3383,11 +3387,22 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             }
                         else ""
                     }
+                    val verifiedPdfItems=remember(study.title,candidatePart,
+                        candidateGeometry,reportTitleEpoch) {
+                        sequenceOf(candidateGeometry,candidatePart)
+                            .filter(String::isNotBlank)
+                            .map { VerifiedPdfResults.extract(study.title,it) }
+                            .firstOrNull { it.isNotEmpty() } ?: emptyList()
+                    }
                     val compactRows=if(isFluidStudy && verifiedFluid.isNotBlank())
                         inlineRows.filterNot {
                             it.parameter.replace(Regex("""(?i)\s*\(result\)\s*$"""),"")
                                 .trim().equals("Nature Of Specimen",true)
                         } else inlineRows
+                    val replaceRaw=verifiedPdfItems.isNotEmpty() &&
+                        Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|pt/aptt|pt[ /]*inr|prothrombin|fibrinogen""")
+                            .containsMatchIn(study.title)
+                    val displayRows=if(replaceRaw) emptyList<LabResult>() else compactRows
                     val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
                     val isCulture=ClinicalPresentation.isCulture(study.title)
                     val resolvedMicro=remember(rows,candidates,reportTitleEpoch,
@@ -3397,9 +3412,12 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else null
                     }
                     val microSpecimen=resolvedMicro?.specimen.orEmpty()
-                    val microLine=remember(rows,candidates,verifiedHeader,resolvedMicro) {
-                        if(isMicro) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
-                            rows,resolvedMicro?.let { listOf(it.report) } ?: candidates,
+                    val showReportMetadata=isMicro ||
+                        Regex("""(?i)smear|pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|coombs|blood[ -]*(?:group|type)|antibody[ -]*screen|cardiolipin|glycoprotein""")
+                            .containsMatchIn(study.title)
+                    val microLine=remember(rows,verifiedHeader,resolvedMicro,showReportMetadata) {
+                        if(showReportMetadata) ClinicalResultsLayout.oneLineMicrobiologyMetadata(
+                            rows,resolvedMicro?.let { listOf(it.report) } ?: emptyList(),
                             resolvedMicro?.header ?: verifiedHeader)
                         else ""
                     }
@@ -3507,9 +3525,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     color=Color(0xFF486581))
                             // One compact metadata line; keep raw sample IDs and
                             // PDF-source verification details in diagnostics.
-                            if(isMicro && microLine.isNotBlank())
+                            if(showReportMetadata && microLine.isNotBlank())
                                 Text(microLine,fontSize=9.sp,
-                                    color=Color(0xFF486581),maxLines=2,
+                                    color=Color(0xFF486581),maxLines=1,
                                     softWrap=true,
                                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     lineHeight=11.sp)
@@ -3552,9 +3570,23 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             }
-                            if(compactRows.isEmpty()) {
+                            if(verifiedPdfItems.isNotEmpty()) {
+                                verifiedPdfItems.forEach { finding ->
+                                    Row(Modifier.fillMaxWidth(),
+                                        horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                        Text(finding.label,fontSize=11.sp,
+                                            color=Color(0xFF486581),
+                                            modifier=Modifier.weight(1f))
+                                        Text(finding.result,fontSize=12.sp,
+                                            fontWeight=FontWeight.Medium,
+                                            modifier=Modifier.weight(1.1f))
+                                    }
+                                }
+                            }
+                            if(displayRows.isEmpty()) {
                                 if(verifiedBlood==null && verifiedCoombs==null &&
-                                    verifiedParasite==null && verifiedFluid.isBlank())
+                                    verifiedParasite==null && verifiedFluid.isBlank() &&
+                                    verifiedPdfItems.isEmpty())
                                     Text(if(study.title.contains("coombs",true))
                                         "Result unavailable"
                                         else "No reported result",
@@ -3562,7 +3594,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             } else {
                                 // Render every result in the ordinary scroll, with
                                 // no preview truncation, collapsed details or PDF dependency.
-                                compactRows.forEachIndexed { index, row ->
+                                displayRows.forEachIndexed { index, row ->
                                     val label=if(CoagulationDisplay.isPTPanel(study.title) ||
                                         CoagulationDisplay.isAPTTPanel(study.title))
                                         CoagulationDisplay.displayLabel(row,inlineRows)

@@ -14,7 +14,7 @@ class ClinicalResultsV146Test {
         val result=ClinicalReadableSummaries.crp(
             "C REACTIVE PROTEIN (CRP) AGGLUTINATION",report)
         assertEquals("<6 mg/1000ml · Negative",result?.finding)
-        assertTrue(ClinicalResultsLayout.omitRoutineHeading(
+        assertFalse(ClinicalResultsLayout.omitRoutineHeading(
             "C REACTIVE PROTEIN (CRP) AGGLUTINATION",
             listOf(row("C REACTIVE PROTEIN (CRP) AGGLUTINATION","Result",report))))
         assertTrue(ClinicalResultsLayout.omitRoutinePdf(

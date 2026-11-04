@@ -35,6 +35,15 @@ object SourceMetadataReview {
             value.startsWith("afbsmear") || value.startsWith("afbstain") ||
                 value.startsWith("acidfastbacilli") -> "afbstain"
             value=="urineculture" || value=="urineaerobicculture" -> "urineculture"
+            value.contains("lacscre") || value.contains("lupusanticoagulantsscreen") -> "lacscreen"
+            value.contains("lacconfirm") || value.contains("lupusanticoagulantsconfirm") -> "lacconfirm"
+            value.contains("cmv") && (value.contains("viral") || value.contains("pcr") || value.contains("dna")) -> "cmvpcr"
+            value.contains("ebv") && (value.contains("viral") || value.contains("pcr") || value.contains("dna")) -> "ebvpcr"
+            value.contains("parvo") && (value.contains("pcr") || value.contains("viral")) -> "parvopcr"
+            value.contains("bonemarrow") && (value.contains("biopsy") || value.contains("trephine")) -> "marrowbiopsy"
+            value.contains("bonemarrow") && (value.contains("aspiration") || value.contains("aspirate")) -> "marrowaspirate"
+            value.contains("fibrinogen") -> "fibrinogen"
+            value.contains("bloodgroup") || value=="bgt" -> "bloodgrouping"
             value.startsWith("indirectcoombs") ||
                 value.startsWith("indirectantiglobulin") ||
                 value in setOf("iat","iatgel","ict","ictgel") -> "indirectcoombs"
@@ -113,7 +122,24 @@ object SourceMetadataReview {
     private fun sameInvestigation(test: String, source: String): Boolean {
         val target = titleKey(test)
         val candidate = titleKey(source)
+        // The word culture alone does not identify a specimen. Avoid
+        // attaching urine/wound PDFs to a blood-culture result.
+        if(test.contains("culture",true) && source.contains("culture",true)) {
+            fun kind(value: String): String = when {
+                value.contains("urine",true) -> "urine"
+                Regex("""(?i)blood|fan[ ]*blood|bottle|set[ ]*[0-9]+""")
+                    .containsMatchIn(value) -> "blood"
+                Regex("""(?i)fungal|mycolog""").containsMatchIn(value) -> "fungal"
+                else -> "other"
+            }
+            if(kind(test)!=kind(source)) return false
+            if(kind(test)=="other" && target!=candidate) return false
+        }
         if (target == candidate) return true
+        // A signed multi-section LAC PDF can contain both screen and confirm.
+        if(target in setOf("lacscreen","lacconfirm") &&
+            Regex("""(?i)lupus[ ]*anticoagulant|lac""")
+                .containsMatchIn(source)) return true
         // One signed NIMS blood-bank report contains both DAT and IAT.
         // Require BOTH explicit test names in the original title rather than
         // a substring: "direct" also occurs inside "indirect".
@@ -134,13 +160,27 @@ object SourceMetadataReview {
         }
         if (component.isNotEmpty() && candidate.contains(component)) return true
         // For cultures preserve set/bottle and preliminary/final distinction.
-        val culture = target.contains("bloodculture") || target.contains("aerobicculture")
+        val culture = target.contains("bloodculture") ||
+            (target.contains("aerobicculture") && !target.contains("urineculture"))
         if (!culture) return false
         if (!candidate.contains("culture")) return false
-        val set = Regex("""(?i)(\d+)\s*set""").find(test)?.groupValues?.get(1)
-        val otherSet = Regex("""(?i)(\d+)\s*set""").find(source)?.groupValues?.get(1)
-        val bottle = Regex("""(?i)(\d+)\s*bottle""").find(test)?.groupValues?.get(1)
-        val otherBottle = Regex("""(?i)(\d+)\s*bottle""").find(source)?.groupValues?.get(1)
+        // Both "Set 1 Bottle 2" and NIMS "1 set 2 bottle" occur in
+        // signed PDFs. A mismatched bottle must never be offered as a link.
+        fun ordinal(text:String, kind:String):String? {
+            val after=Regex("""(?i)\b"""+kind+"""\s*[:#.\-]?\s*(\d+)\b""")
+                .find(text)?.groupValues?.get(1)
+            val before=Regex("""(?i)\b(\d+)\s*(?:st|nd|rd|th)?\s*"""+kind+"""\b""")
+                .find(text)?.groupValues?.get(1)
+            // NIMS uses either "1 set 2 bottle" or "Set 1 Bottle 2".
+            // A number immediately after "set" in prefix style actually
+            // belongs to the bottle, so choose orientation as a whole.
+            val prefixStyle=Regex("""(?i)\b\d+\s*set\b""").containsMatchIn(text)
+            return if(prefixStyle) before ?: after else after ?: before
+        }
+        val set=ordinal(test,"set")
+        val otherSet=ordinal(source,"set")
+        val bottle=ordinal(test,"bottle")
+        val otherBottle=ordinal(source,"bottle")
         if (set != null && otherSet != null && set != otherSet) return false
         if (bottle != null && otherBottle != null && bottle != otherBottle) return false
         val isFinal = test.contains("final",true)

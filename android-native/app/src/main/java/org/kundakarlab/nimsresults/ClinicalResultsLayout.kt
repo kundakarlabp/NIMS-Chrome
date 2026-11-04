@@ -25,6 +25,42 @@ object ClinicalResultsLayout {
         }
     }
 
+    /**
+     * Old HIS forms expose reference tables, method paragraphs and dropdown
+     * widget integers as if they were clinical observations. They remain in
+     * source diagnostics, never in the patient-facing results stream.
+     */
+    fun suppressStructuredArtifact(row: LabResult): Boolean {
+        val t=key(row.test)
+        val p=key(row.parameter)
+        val v=row.valueText.trim()
+        val sourceDriven=Regex(
+            """(?:pcr|viralload|quantiferon|igra|lacscr|lacconfirm|lupusanticoagulant|bonemarrow|trephine|dicprofile)"""
+        ).containsMatchIn(t)
+        if(!sourceDriven) return false
+        if(t.contains("dicprofile") && p=="others" && row.unit.isBlank() &&
+            v.toDoubleOrNull()!=null) return true
+        if(p.matches(Regex("""(?:ref|reference)[0-9]+|textarea[0-9]*|textbox[0-9]*|cytochemistry[0-9]+""")))
+            return true
+        if(p in setOf("methodology","ref","reference","interpretationtable",
+                "mixingstudies","lacsreeningtests") &&
+            (v.length>100 || v.matches(Regex("""[0-9]{1,2}"""))))
+            return true
+        if(v.contains("Result(IU/mL) Interpretation",true) ||
+            v.contains("Target Not Detected Sample does not contain",true) ||
+            v.contains("test is based on Real Time Polymerase",true) ||
+            v.contains("test is designed for theinvitro",true) ||
+            v.contains("below the Linear Range of assay",true) &&
+                v.contains("above the Linear Range",true)) return true
+        val opaqueCode=v.matches(Regex("""[0-9]{1,2}""")) && row.unit.isBlank()
+        return opaqueCode && (
+            p in setOf("result","interpretation","mixingstudies","aspirate",
+                "bonemarrowaspirate","typeofspecimen","cellularity",
+                "cytochemistry","cytochemistry1","drvvtconfirmtest",
+                "drvvtscreeningtest","lascreeningtests","peripheralsmearexamination") ||
+            p.startsWith("ref"))
+    }
+
     fun suppressCbcRow(row: LabResult): Boolean {
         val t=key(row.test)
         if (!(t.startsWith("cbc") || t.contains("hemogram") ||
@@ -377,13 +413,8 @@ object ClinicalResultsLayout {
         val lab = metadata.firstOrNull {
             it.startsWith("Lab ") || it.startsWith("Report index · Lab ")
         }?.removePrefix("Report index · ").orEmpty()
-        val sample = rows.map { it.sampleNumber.trim() }
-            .filter(String::isNotBlank).distinct().singleOrNull()
-            .orEmpty().ifBlank { verified?.sampleNumber.orEmpty() }
         val collection = metadata.firstOrNull { it.startsWith("Collected ") }
             ?.removePrefix("Collected ").orEmpty()
-        val sent = metadata.firstOrNull { it.startsWith("Sent ") }
-            ?.removePrefix("Sent ").orEmpty()
         val reporting = metadata.firstOrNull { it.startsWith("Reported ") }
             ?.removePrefix("Reported ").orEmpty()
         fun shortDate(raw:String):String {
@@ -395,9 +426,7 @@ object ClinicalResultsLayout {
         }
         return listOfNotNull(
             lab.takeIf(String::isNotBlank),
-            sample.takeIf(String::isNotBlank)?.let { "Sample "+it },
             shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
-            shortDate(sent).takeIf(String::isNotBlank)?.let { "Sent "+it },
             shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
         ).joinToString(" · ")
     }

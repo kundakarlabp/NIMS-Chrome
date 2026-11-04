@@ -62,6 +62,7 @@ object ClinicalChronology {
         row.valueText.isNotBlank() && !ClinicalReportRenderer.isPlaceholder(row) &&
             !CoagulationDisplay.isAbsentValue(row) &&
             !ClinicalResultsLayout.suppressCbcRow(row) &&
+            !ClinicalResultsLayout.suppressStructuredArtifact(row) &&
             !ClinicalPresentation.isTechnical(row) &&
             study.visible.any { it === row }
     }
@@ -118,6 +119,9 @@ object ClinicalChronology {
         else original
         val key=name.lowercase().replace(Regex("[^a-z0-9]"), "")
         return when {
+            row.test.contains("DIC",true) && key=="table" &&
+                Regex("""(?i)microcytic|normocytic|hypochromic|schistocyt|anisocyt|polychrom""")
+                    .containsMatchIn(row.valueText) -> "RBC morphology"
             key.startsWith("prothrombintimeptcontrol") || key == "ptcontrol" ->
                 "PT (control)"
             key.startsWith("prothrombintimeptpatient") || key == "ptpatient" ->
