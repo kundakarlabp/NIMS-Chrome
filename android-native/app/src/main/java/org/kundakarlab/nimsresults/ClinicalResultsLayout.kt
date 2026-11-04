@@ -309,7 +309,7 @@ object ClinicalResultsLayout {
         if(collected.isNotBlank()) lines+="Collected "+LabPanelMatrix.displayDateTime(collected)
         val sentDate=sent.ifBlank { candidate?.sentDate.orEmpty() }
         if(sentDate.isNotBlank() &&
-            RecentReportDates.parse(sentDate)!=RecentReportDates.parse(collected))
+            sentDate.trim()!=collected.trim())
             lines+="Sent "+LabPanelMatrix.displayDateTime(sentDate)
         if(reported.isNotBlank()) lines+="Reported "+LabPanelMatrix.displayDateTime(reported)
         if(!bloodCulture) {
@@ -417,6 +417,8 @@ object ClinicalResultsLayout {
             ?.removePrefix("Collected ").orEmpty()
         val reporting = metadata.firstOrNull { it.startsWith("Reported ") }
             ?.removePrefix("Reported ").orEmpty()
+        val sent = metadata.firstOrNull { it.startsWith("Sent ") }
+            ?.removePrefix("Sent ").orEmpty()
         fun shortDate(raw:String):String {
             if (raw.isBlank()) return ""
             val day=RecentReportDates.parse(raw) ?: return ""
@@ -427,6 +429,9 @@ object ClinicalResultsLayout {
         return listOfNotNull(
             lab.takeIf(String::isNotBlank),
             shortDate(collection).takeIf(String::isNotBlank)?.let { "Col "+it },
+            sent.takeIf(String::isNotBlank)?.let { date ->
+                shortDate(date).takeIf(String::isNotBlank)?.let { "Sent "+it }
+            },
             shortDate(reporting).takeIf(String::isNotBlank)?.let { "Rep "+it }
         ).joinToString(" · ")
     }

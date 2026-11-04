@@ -115,6 +115,7 @@ object SourceMetadataReview {
         return when {
             test.contains("coombs",true) -> options.take(2)
             ClinicalPresentation.isCulture(test) -> options.take(3)
+            ClinicalReportRenderer.isMicrobiologyInvestigation(test) -> options.take(3)
             else -> options.singleOrNull()?.let(::listOf) ?: emptyList()
         }
     }
@@ -136,6 +137,13 @@ object SourceMetadataReview {
             if(kind(test)=="other" && target!=candidate) return false
         }
         if (target == candidate) return true
+        // NIMS may index a marrow Giemsa smear simply as STAINING,
+        // while the bulk sheet calls it GRAMS STAINING. This is candidate
+        // discovery only; the signed PDF and clinical narrative must still
+        // independently prove the association.
+        if(target=="gramstain" && candidate in setOf(
+                "staining","giemsastaining","giemsasmear","giemsastain"))
+            return true
         // A signed multi-section LAC PDF can contain both screen and confirm.
         if(target in setOf("lacscreen","lacconfirm") &&
             Regex("""(?i)lupus[ ]*anticoagulant|lac""")
@@ -226,7 +234,9 @@ object SourceMetadataReview {
             return emptyList()
         }
         if (date == null) return emptyList()
-        return source.filter { report ->
+        val reportedEvent = rows.mapNotNull { RecentReportDates.parse(it.reportedDate) }
+            .distinct().singleOrNull()
+        val provisional = source.filter { report ->
             if (!sameInvestigation(test,report.title)) return@filter false
             val candidateDate = RecentReportDates.parse(
                 report.collectionDateTime.ifBlank { report.sentDate }.ifBlank { report.date }
@@ -240,6 +250,24 @@ object SourceMetadataReview {
                 ChronoUnit.DAYS.between(candidateDate,date) in 0L..7L
             } else candidateDate == date
         }.sortedWith(compareBy<ReportRef> { it.title }.thenBy { it.labNumber })
+        // When the source supplies an explicit reporting date, it must
+        // agree with the actual result event, not merely its collection day.
+        // For legacy bulk rows lacking a timestamp, use a uniquely aligned
+        // CR-verified PDF reporting day if one exists. Never invent it.
+        val aligned=provisional.filter { report ->
+            val header=ReportTitleCache.header(report.url)
+            val reported=RecentReportDates.parse(
+                header?.reportedDate.orEmpty().ifBlank { report.reportedDate })
+            val day=reportedEvent ?: date
+            reported!=null && reported==day
+        }
+        return if(aligned.size==1) aligned else if(reportedEvent!=null)
+            provisional.filter { report ->
+                val known=RecentReportDates.parse(
+                    ReportTitleCache.header(report.url)?.reportedDate.orEmpty()
+                        .ifBlank { report.reportedDate })
+                known==null || known==reportedEvent
+            } else provisional
     }
 
 }

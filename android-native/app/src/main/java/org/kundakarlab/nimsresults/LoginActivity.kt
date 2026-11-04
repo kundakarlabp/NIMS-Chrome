@@ -2,6 +2,7 @@ package org.kundakarlab.nimsresults
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -21,6 +22,7 @@ import android.webkit.WebResourceError
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.HorizontalScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.view.ViewCompat
@@ -145,6 +147,46 @@ class LoginActivity : Activity() {
         top.addView(status)
         top.addView(actions)
         top.addView(diagnosticActions)
+        if(manageSession) {
+            val choices=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL
+                gravity=Gravity.START
+            }
+            val show=Button(this).apply {
+                text="Show NIMS sessions"
+                setOnClickListener { showPortalSessions() }
+            }
+            val specific=Button(this).apply {
+                text="Logout one"
+                setOnClickListener { showPortalSessions() }
+            }
+            val all=Button(this).apply {
+                text="Logout all"
+                setOnClickListener {
+                    AlertDialog.Builder(this@LoginActivity)
+                        .setTitle("Logout all NIMS sessions?")
+                        .setMessage("This uses the hospital portal's own Logout all action. It may sign out other devices. Continue?")
+                        .setNegativeButton("Cancel",null)
+                        .setPositiveButton("Logout all") { _,_ -> logoutAllPortalSessions() }
+                        .show()
+                }
+            }
+            val portalBack=Button(this).apply {
+                text="Portal back"
+                setOnClickListener {
+                    if(webView.canGoBack()) webView.goBack()
+                    else status.text="No previous NIMS page is available. Use Show NIMS sessions."
+                }
+            }
+            choices.addView(show)
+            choices.addView(specific)
+            choices.addView(all)
+            choices.addView(portalBack)
+            top.addView(HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled=true
+                addView(choices)
+            })
+        }
         root.addView(top)
 
         networkNotice = TextView(this).apply {
@@ -353,6 +395,108 @@ class LoginActivity : Activity() {
                 }, 12_000L)
             } else {
                 status.text = "No NIMS portal Logout control found. Open its menu and sign out manually; local cookie clearing will not release the server slot."
+            }
+        }
+    }
+
+    /**
+     * Session controls are owned by NIMS. Reveal its existing session list;
+     * do not invent logout URLs or remove DOM elements to bypass login.
+     */
+    private fun showPortalSessions() {
+        val js = """
+          (() => {
+            const docs=[document], seen=new Set();
+            for(let i=0;i<docs.length && i<10;i++) {
+              const doc=docs[i]; if(seen.has(doc)) continue;
+              seen.add(doc);
+              for(const frame of doc.querySelectorAll('iframe,frame')) {
+                try { if(frame.contentDocument) docs.push(frame.contentDocument); }
+                catch(_) {}
+              }
+            }
+            function label(node) {
+              return (node.innerText || node.textContent || node.value ||
+                node.getAttribute('aria-label') || '').replace(/\s+/g,' ').trim();
+            }
+            const controls=[];
+            for(const doc of docs) {
+              for(const element of doc.querySelectorAll(
+                'a,button,input[type=button],input[type=submit],[role=button]')) {
+                const text=label(element);
+                if(/session|active\s*login|logged\s*in|log\s*out\s*(?:all|one|selected)/i.test(text))
+                  controls.push({element,text});
+              }
+            }
+            if(!controls.length) return 'not_found';
+            // The user's session list is already on the hospital page.
+            // Never click "logout all" from the Show button.
+            const safe=controls.find(x =>
+              /^(?:manage|view|show|select|active)\b.*(?:session|login)/i.test(x.text));
+            const target=safe || controls.find(x =>
+              /log\s*out\s*(?:all|one|selected)|logout\s*(?:all|one|selected)/i.test(x.text));
+            if(!target) return 'not_found';
+            // If the portal's login popup overlays its existing session list,
+            // dismiss it via its own Close/Cancel control only.
+            const doc=target.element.ownerDocument;
+            for(const dialog of doc.querySelectorAll('.modal.show,[role=dialog]')) {
+              if(dialog.contains(target.element)) continue;
+              const heading=label(dialog).slice(0,350);
+              if(!/login|log\s*in|sign\s*in|password/i.test(heading)) continue;
+              const close=dialog.querySelector(
+                '[data-bs-dismiss=modal],[data-dismiss=modal],[aria-label=Close],.modal-header .close');
+              if(close) { try { close.click(); } catch(_) {} }
+            }
+            if(safe) {
+              safe.element.click();
+              return 'opened';
+            }
+            target.element.scrollIntoView({block:'center',behavior:'auto'});
+            target.element.focus();
+            return 'visible';
+          })()
+        """.trimIndent()
+        webView.evaluateJavascript(js) { raw ->
+            status.text=when(decodeJsString(raw)) {
+                "opened","visible" ->
+                    "NIMS sessions are displayed in the portal. Select the exact login to logout, or use Logout all."
+                else ->
+                    "NIMS did not expose its session list on this page. Use Portal back or the portal's own session menu; no logout was performed."
+            }
+        }
+    }
+
+    /** Only invoke the hospital's explicitly labelled Logout all control
+     * after the user approves it in the native confirmation dialog. */
+    private fun logoutAllPortalSessions() {
+        val js = """
+          (() => {
+            const docs=[document],seen=new Set();
+            for(let i=0;i<docs.length && i<10;i++) {
+              const doc=docs[i];if(seen.has(doc))continue;seen.add(doc);
+              for(const f of doc.querySelectorAll('iframe,frame')) {
+                try { if(f.contentDocument) docs.push(f.contentDocument); } catch(_) {}
+              }
+            }
+            const matches=[];
+            for(const doc of docs) for(const node of doc.querySelectorAll(
+              'a,button,input[type=button],input[type=submit],[role=button]')) {
+              const text=(node.innerText||node.textContent||node.value||'')
+                .replace(/\s+/g,' ').trim();
+              if(/^(?:log\s*out|logout|sign\s*out)\s+all(?:\s+(?:sessions?|logins?))?$/i.test(text))
+                matches.push(node);
+            }
+            if(matches.length!==1) return 'ambiguous';
+            matches[0].click();return 'requested';
+          })()
+        """.trimIndent()
+        webView.evaluateJavascript(js) { raw ->
+            if(decodeJsString(raw)=="requested") {
+                signOutPending=true
+                status.text="Requested Logout all using the NIMS portal. Confirm the portal's response before signing in again."
+                probe()
+            } else {
+                status.text="NIMS Logout all control was not uniquely accessible. Open the hospital session list and use its own button; no logout was performed."
             }
         }
     }
