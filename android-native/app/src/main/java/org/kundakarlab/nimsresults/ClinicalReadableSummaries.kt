@@ -59,6 +59,17 @@ object ClinicalReadableSummaries {
                 culture.range.first+it.range.first
             }
         val sections=mutableListOf<SourceSection>()
+        if(MicrobiologyPdfIdentity.contradictoryCulture(source)) {
+            if(smear!=null && smear.range.first<culture.range.first)
+                sections+=SourceSection("Gram smear",
+                    source.substring(smear.range.first,culture.range.first).trim())
+            // Do not present a positive E. coli culture as a "laboratory
+            // note" to a preceding negative culture. The original LIS PDF
+            // itself is inconsistent and requires source clarification.
+            sections+=SourceSection("Conflicting culture statements — verify PDF",
+                source.substring(culture.range.first).trim())
+            return sections
+        }
         if(smear!=null && smear.range.first<culture.range.first)
             sections+=SourceSection("Gram smear",
                 source.substring(smear.range.first,culture.range.first).trim())
