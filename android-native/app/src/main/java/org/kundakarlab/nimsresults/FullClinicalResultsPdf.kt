@@ -22,7 +22,8 @@ object FullClinicalResultsPdf {
     private const val LEADING=13f
 
     fun write(output: OutputStream, patient: PatientInfo,
-              retrievedAt: Long, studies: List<FullClinicalStudy>) {
+              retrievedAt: Long, studies: List<FullClinicalStudy>,
+              sources:List<FullClinicalSource> = emptyList()) {
         require(studies.isNotEmpty()) { "No investigations to export" }
         val pdf=PdfDocument()
         val normal=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -135,6 +136,23 @@ object FullClinicalResultsPdf {
                     }
                 }
                 y+=6f
+            }
+            if(sources.isNotEmpty()) {
+                ensure(95f)
+                y+=14f
+                wrapped("SOURCE REPORT INDEX - UNLINKED EVIDENCE",accent)
+                wrapped("These are separate NIMS report-index records. Matching titles and dates do not establish which result belongs to which PDF.",muted)
+                sources.forEachIndexed { index,report ->
+                    ensure(67f)
+                    y+=7f
+                    wrapped((index+1).toString()+". "+report.title,bold)
+                    detail("Lab/Study ID (index)",report.labNumber)
+                    detail("Collection (index)",report.collectedAt)
+                    detail("Reporting time",report.reportedAt)
+                    detail("Specimen (verified PDF)",report.specimen)
+                    detail("Stage",report.stage)
+                    wrapped(report.evidence,muted,8f)
+                }
             }
             endPage()
             pdf.writeTo(output)
