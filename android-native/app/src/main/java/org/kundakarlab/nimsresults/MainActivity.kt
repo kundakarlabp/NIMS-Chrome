@@ -987,7 +987,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             when {
                 ClinicalPresentation.isCulture(it.title) -> 0
                 Regex("""(?i)gram|giemsa|stain|smear|calcofluor|koh|afb""")
-                    .containsMatchIn(it.title) -> 1
+                    .containsMatchIn(it.title) -> 0
                 it.title.contains("coombs",true) -> 2
                 Regex("""(?i)pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|pt/aptt|pt[ /]*inr|blood[ -]*(?:group|type)|antibody[ -]*screen|bgt""")
                     .containsMatchIn(it.title) -> 2
