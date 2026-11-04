@@ -211,6 +211,56 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         labPdfLauncher.launch("NIMS-Labs-" + current.patient.crNo + ".pdf")
     }
 
+    /** Build a complete review PDF from the captured patient bundle, without
+     * downloading all original PDFs or filling unknown report identifiers. */
+    private fun previewCompleteResultsPdf(current: ClinicalBundle) {
+        if(current.results.isEmpty()) return
+        val cr=current.patient.crNo
+        statusText="Preparing full clinical PDF for review…"
+        diagnosticsWorker.execute {
+            val success=runCatching {
+                val studies=FullClinicalResultsDocument.build(current)
+                val file=java.io.File(cacheDir,FullClinicalPdfActivity.PDF_FILE)
+                val temporary=java.io.File(cacheDir,FullClinicalPdfActivity.PDF_FILE+".tmp")
+                try {
+                    temporary.outputStream().buffered().use { output ->
+                        FullClinicalResultsPdf.write(output,current.patient,
+                            current.retrievedAt,studies,
+                            FullClinicalResultsDocument.sourceInventory(current))
+                    }
+                    if(!temporary.renameTo(file)) {
+                        temporary.copyTo(file,overwrite=true)
+                        temporary.delete()
+                    }
+                } finally { if(temporary.isFile)temporary.delete() }
+                file.isFile && file.length()>100L
+            }.getOrDefault(false)
+            runOnUiThread {
+                if(isDestroyed || isFinishing || bundle?.patient?.crNo!=cr)return@runOnUiThread
+                if(success) {
+                    statusText="Full clinical PDF ready for review."
+                    startActivity(Intent(this,FullClinicalPdfActivity::class.java))
+                } else {
+                    statusText="Unable to prepare the clinical PDF."
+                    Toast.makeText(this,"Clinical PDF export failed",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun exportCompleteResultsCsv(current: ClinicalBundle,
+        selected:Set<String>?=null) {
+        if(current.results.isEmpty())return
+        // A full CSV and the selected-field CSV both use identical
+        // source-aware records. REST catalogue entries are not extra values.
+        pendingClinicalCsv=FullClinicalResultsDocument.csv(
+            FullClinicalResultsDocument.build(current),selected)
+        clinicalCsvLauncher.launch(
+            if(selected==null)"NIMS-Results-Complete.csv"
+            else "NIMS-Results-Selected.csv")
+    }
+
     private val deviceUnlockLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             unlockPromptActive = false
@@ -557,6 +607,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         cancelTimeout()
         vault.clear()
         snapshotCache.clear()
+        java.io.File(cacheDir,FullClinicalPdfActivity.PDF_FILE).delete()
         pdfIndexSelection = ""
         cacheDir.listFiles { file ->
             file.name.startsWith("nims-verified-") && file.name.endsWith(".pdf")
@@ -3259,7 +3310,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             contentPadding=PaddingValues(start=10.dp,end=17.dp,top=5.dp,bottom=18.dp),
             verticalArrangement=Arrangement.spacedBy(2.dp)) {
             item {
-                Row(Modifier.fillMaxWidth(),
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement=Arrangement.spacedBy(5.dp)) {
                     FilterChip(selected=true,onClick={},
                         label={Text("Results",fontSize=11.sp)})
@@ -3268,7 +3319,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     FilterChip(selected=false,onClick=onOrders,
                         label={Text("Orders",fontSize=11.sp)})
                     TextButton(onClick={showCsv=true},enabled=csvOptions.isNotEmpty()) {
-                        Text("CSV",fontSize=11.sp)
+                        Text("Select CSV",fontSize=11.sp)
+                    }
+                    TextButton(onClick={exportCompleteResultsCsv(current)}) {
+                        Text("All CSV",fontSize=11.sp)
+                    }
+                    TextButton(onClick={previewCompleteResultsPdf(current)}) {
+                        Text("Full PDF",fontSize=11.sp)
                     }
                 }
                 OutlinedTextField(value=query,onValueChange={query=it},
@@ -3306,7 +3363,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val rows=study.rows
                     val relevant=study.visible
                     val candidates=remember(rows,current.reports,reportTitleEpoch) {
-                        SourceMetadataReview.pdfCandidates(rows,current.reports)
+                        SourceMetadataReview.reviewCandidates(rows,current.reports)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
                                 val sourceDate=RecentReportDates.parse(
@@ -3539,15 +3596,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                             Text("PDF",fontSize=10.sp)
                                         }
                                     } else if(candidates.isNotEmpty()) {
-                                        TextButton(onClick={
-                                            verifyMicrobiologySources(rows,candidates,
-                                                current.patient.crNo)
-                                        }) {
-                                            Text("Verify PDF",fontSize=10.sp)
+                                        // Restored source-PDF review. This opens a
+                                        // chooser, NEVER an inferred specimen link.
+                                        TextButton(onClick={pickPdf=true}) {
+                                            Text(if(candidates.size==1)"Review PDF"
+                                                else "PDFs ("+candidates.size+")",
+                                                fontSize=10.sp)
                                         }
                                     } else {
                                         TextButton(onClick={browseSourceReports(study.title)}) {
-                                            Text("Find PDF",fontSize=10.sp)
+                                            Text("Browse PDFs",fontSize=10.sp)
                                         }
                                     }
                                 } else if(candidates.isNotEmpty() &&
@@ -3893,9 +3951,13 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     }
                     if(pickPdf) {
                         AlertDialog(onDismissRequest={pickPdf=false},
-                            title={Text("Select PDF")},
+                            title={Text(if(isMicro) "Review candidate PDFs"
+                                else "Select PDF")},
                             text={
                                 Column {
+                                    if(isMicro) Text(
+                                        "Listed by investigation and available dates. These are not confirmed source matches. Verify the original specimen, lab number and reporting stage before use.",
+                                        fontSize=11.sp,color=Color(0xFF875B22))
                                     LazyColumn(Modifier.heightIn(max=390.dp)) {
                                         items(candidates,key={it.url}) { report ->
                                             TextButton(onClick={
@@ -3914,9 +3976,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             },
-                            confirmButton={TextButton(onClick={pickPdf=false}) {
-                                Text("Close")
-                            }})
+                            confirmButton={
+                                Row(horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                                    if(isMicro) TextButton(onClick={
+                                        pickPdf=false
+                                        verifyMicrobiologySources(rows,candidates,
+                                            current.patient.crNo)
+                                    }) { Text("Verify matching") }
+                                    TextButton(onClick={pickPdf=false}) {
+                                        Text("Close")
+                                    }
+                                }
+                            })
                     }
                 }
             }
@@ -3961,10 +4032,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 },
                 confirmButton={
                     TextButton(enabled=chosen.isNotEmpty(),onClick={
-                        pendingClinicalCsv=SelectedResultsCsv.render(exportRows,chosen)
                         showCsv=false
-                        clinicalCsvLauncher.launch("NIMS-Results-"+
-                            java.time.LocalDate.now().toString()+".csv")
+                        exportCompleteResultsCsv(current,chosen)
                     }) {Text("Export (${chosen.size})")}
                 },
                 dismissButton={TextButton(onClick={showCsv=false}) {

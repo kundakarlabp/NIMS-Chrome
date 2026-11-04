@@ -16,6 +16,10 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
         <activity
+            android:name=".FullClinicalPdfActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
             android:name=".ReportActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden" />

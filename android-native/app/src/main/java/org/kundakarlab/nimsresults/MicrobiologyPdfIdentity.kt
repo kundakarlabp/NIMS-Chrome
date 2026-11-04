@@ -42,27 +42,48 @@ object MicrobiologyPdfIdentity {
                            sourceText: String): Boolean {
         val t=norm(test)
         val title=norm(sourceTitle)
-        val text=norm(sourceText)
+        val body=norm(sourceText)
         if("culture" in t) {
-            if("culture" !in title && "culture" !in text) return false
+            if("culture" !in title && "culture" !in body)return false
             val urine="urine" in t
-            if (urine != ("urine" in title ||
-                Regex("""(?i)\burine\s+aerobic\s+culture\b""").containsMatchIn(sourceText)))
-                return false
-            if("blood" in t && "urine" in title) return false
-            if("fungal" in t && "urine" in title) return false
-            if("blood" !in t && "urine" !in t && "blood" in title) return false
-            if("fungal" !in t && "fungal" in title) return false
+            val sourceUrine="urine" in title ||
+                Regex("""(?i)\burine\s+aerobic\s+culture\b""")
+                    .containsMatchIn(sourceText)
+            if(urine!=sourceUrine)return false
+            if("blood" in t && "urine" in title)return false
+            if("fungal" in t && "urine" in title)return false
+            if("blood" !in t && "urine" !in t && "blood" in title)return false
+            if("fungal" !in t && "fungal" in title)return false
             return true
         }
-        if (Regex("""(?i)\b(?:gram|giemsa|staining|stain|smear)\b""").containsMatchIn(test)) {
-            return ("stain" in title || "smear" in title || "giemsa" in text ||
-                "grams smear" in text || "gram smear" in text) &&
-                !("culture" in title) &&
-                !Regex("""(?i)\b(?:fungal|calcofluor|afb|acid\s+fast|koh)\b""")
-                    .containsMatchIn(sourceTitle)
+        // Distinguish fungal KOH, fungal fluorescent staining, AFB
+        // fluorescence and Gram/Giemsa. The generic old "staining" rule
+        // accidentally rejected EVERY fungal source title.
+        val isKoh=Regex("""(?i)\bkoh\b""").containsMatchIn(test)
+        val isCalco=Regex("""(?i)calcofluor|calcoflour|fungal\s+fluorescen""")
+            .containsMatchIn(test)
+        val isFungal=isKoh || isCalco || "fungal" in t
+        val isAfb=Regex("""(?i)\bafb\b|acid[\s-]*fast|tb\s+fluorescen|auramine""")
+            .containsMatchIn(test)
+        val candidateCulture="culture" in title
+        if(candidateCulture)return false
+        if(isKoh) return "koh" in title || ("stain" in title && "koh" in body)
+        if(isCalco)return "calcofluor" in title || "calcoflour" in title ||
+            "fungal fluorescence" in title ||
+            ("stain" in title && "calcofluor" in body)
+        if(isFungal)return "fungal" in title && "koh" !in title &&
+            "culture" !in title
+        if(isAfb)return "afb" in title || "tb fluorescence" in title ||
+            "acid fast" in title || "auramine" in title ||
+            ("stain" in title && ("acid fast" in body || "auramine" in body))
+        if(Regex("""(?i)gram|giemsa|stain|smear""").containsMatchIn(test)) {
+            if(Regex("""(?i)\b(?:fungal|calcofluor|afb|koh|acid\s+fast)\b""")
+                    .containsMatchIn(sourceTitle))return false
+            return "stain" in title || "smear" in title ||
+                "giemsa" in title || "giemsa smear" in body ||
+                "gram smear" in body || "grams smear" in body
         }
-        return norm(test)==title
+        return t==title
     }
 
     /**
