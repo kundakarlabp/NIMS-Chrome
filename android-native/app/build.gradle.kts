@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults.recovery"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20006
-        versionName = "2.0.5"
+        versionCode = 20007
+        versionName = "2.0.6"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
