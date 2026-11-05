@@ -283,7 +283,7 @@
       if(!owner || !run || run.requestId!==owner || !run.awaitingResponse) return;
       try {
         const bar=run.frame.contentDocument?.querySelector(UI.patientBar);
-        if(!visible(bar) || !compact(bar.textContent).includes(run.cr))
+        if(!patientBarMatches(bar,run.cr))
           throw Error('NIMS patient changed while fetching results.');
         const raw=typeof value==='string'?value:JSON.stringify(value);
         if(!raw || !raw.trim()) throw Error('Empty Custom Sheet response.');
@@ -370,8 +370,6 @@
       const patientText=String(confirmedDoc.body?.innerText || '');
       // Derive identity from the independently rendered patient header,
       // not from input.value or an unrelated substring on the page.
-      const patientIdentity=String(confirmedBar.innerText ||
-        confirmedBar.textContent || '');
       AndroidNimsBridge.onStage(requestId,'cr_panel_confirmed');
       AndroidNimsBridge.onPatient(requestId,
         JSON.stringify(parsePatient(patientText,crNo)));
