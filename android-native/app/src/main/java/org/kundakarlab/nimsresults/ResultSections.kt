@@ -2,6 +2,7 @@ package org.kundakarlab.nimsresults
 
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
 import java.time.format.DateTimeParseException
 import java.util.Locale
 import java.time.temporal.ChronoUnit
@@ -35,8 +36,10 @@ object ResultSections {
  * For unlabelled inventory dates, visibly label them 'index date'.
  */
 object RecentReportDates {
-    private val textual = DateTimeFormatter.ofPattern("d-MMM-uuuu", Locale.ENGLISH)
+    private val textual = DateTimeFormatterBuilder().parseCaseInsensitive()
+        .appendPattern("d-MMM-uuuu").toFormatter(Locale.ENGLISH)
     private val numeric = DateTimeFormatter.ofPattern("d-M-uuuu", Locale.ENGLISH)
+    private val unpaddedIso = DateTimeFormatter.ofPattern("uuuu-M-d", Locale.ENGLISH)
 
     fun parse(value: String): LocalDate? {
         val trimmed = value.trim()
@@ -45,7 +48,7 @@ object RecentReportDates {
         return try {
             when {
                 token.matches(Regex("""\d{4}-\d{1,2}-\d{1,2}""")) ->
-                    LocalDate.parse(token)
+                    LocalDate.parse(token, unpaddedIso)
                 token.contains('/') && token.any(Char::isLetter) ->
                     LocalDate.parse(token.replace('/', '-'), textual)
                 token.contains('/') || token.matches(Regex("""\d{1,2}-\d{1,2}-\d{4}""")) -> LocalDate.parse(token.replace('/', '-'), numeric)

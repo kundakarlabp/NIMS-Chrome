@@ -1050,7 +1050,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         val current = bundle
         return buildString {
             appendLine("NIMS Results diagnostics · entire app")
-            appendLine("diagnostics.format=v4")
+            appendLine("diagnostics.format=v5")
             appendLine("app.version=${BuildConfig.VERSION_NAME}")
             appendLine("app.sourceCommit=${BuildConfig.SOURCE_COMMIT}")
             appendLine("app.signingCertSha256=" + ApkSigningIdentity.sha256(this@MainActivity))
