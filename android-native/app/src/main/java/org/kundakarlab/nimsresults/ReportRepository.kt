@@ -742,6 +742,21 @@ object ReportTitleCache {
     fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
         .map { it.header.labNumber.trim() }.filter { it.isNotBlank() }.toSet()
+    /** Android memory pressure should discard heavy text/geometry, not
+     * the tiny source identity ledger. Full clear() remains mandatory on
+     * patient change and logout. */
+    @Synchronized fun trimHeavy() {
+        sessionGeneration.incrementAndGet()
+        loadedUrls.clear()
+        recognized.clear()
+        extractedByUrl.clear()
+        positionedByUrl.clear()
+        headers.clear()
+        sectionsByUrl.clear()
+        sha256ByUrl.clear()
+        revision.incrementAndGet()
+    }
+
     @Synchronized
     fun clear() {
         sessionGeneration.incrementAndGet()
