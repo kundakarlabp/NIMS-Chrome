@@ -39,9 +39,15 @@ class StabilityV119Test {
         val first = "https://www.nimsts.edu.in/HISInvestigationG5/new_investigation/" +
             "invDuplicateResultReportPrinting.cnt?hmode=PRINTREPORT&fileName=1"
         val latest = first.replace("fileName=1", "fileName=15")
-        assertNull(ReportTitleCache.header(first))
+        // Only twelve FULL PDF texts are retained; verified, compact event
+        // headers survive eviction to avoid losing already proved identity.
+        assertNull(ReportTitleCache.extracted(first))
+        assertNotNull(ReportTitleCache.header(first))
+        assertNotNull(ReportTitleCache.compactEvidence(first))
         assertNotNull(ReportTitleCache.header(latest))
         ReportTitleCache.clear()
+        assertNull(ReportTitleCache.compactEvidence(first))
+        assertNull(ReportTitleCache.header(first))
     }
 
     @Test fun wrongCrStillCannotEnterEvidenceCache() {
