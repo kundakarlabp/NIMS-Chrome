@@ -23,7 +23,9 @@ class PdfSourceEnricher(private val context: Context) {
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(28, TimeUnit.SECONDS)
-        .followRedirects(true).build()
+        .followRedirects(true)
+        .addNetworkInterceptor(NimsHttpSessionInterceptor())
+        .build()
 
     /** Returns true only for a readable source PDF explicitly proving the CR. */
     fun inspect(report: ReportRef, expectedCr: String, stillSelected: () -> Boolean): Boolean {
@@ -33,7 +35,6 @@ class PdfSourceEnricher(private val context: Context) {
         val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
         if (cookie.isBlank()) return false
         val request = Request.Builder().url(url)
-            .header("Cookie", cookie)
             .header("User-Agent", NimsUrls.DESKTOP_UA)
             .build()
         val tmp = File.createTempFile("nims-source-index-", ".pdf", context.cacheDir)

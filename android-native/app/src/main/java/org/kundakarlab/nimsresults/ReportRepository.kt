@@ -1,6 +1,5 @@
 package org.kundakarlab.nimsresults
 
-import android.webkit.CookieManager
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -15,13 +14,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class ReportRepository(
-    private val cookies: CookieManager = CookieManager.getInstance(),
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(45, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .addNetworkInterceptor(NimsHttpSessionInterceptor())
         .build()
 ) {
     data class Inventory(
@@ -126,7 +125,6 @@ class ReportRepository(
         ).execute().use { response ->
             val responseHost = response.request.url.host.lowercase()
             require(responseHost in NimsUrls.HOSTS) { "REST response redirected off NIMS hosts." }
-            syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val text = response.body?.string().orEmpty()
             RestReportDiagnostics.status(
                 response.code, text.toByteArray(Charsets.UTF_8).size,
@@ -179,7 +177,6 @@ class ReportRepository(
                 .get()
                 .build()
         ).execute().use { response ->
-            syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val body = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), body)) throw AuthenticationRequiredException()
             if (!response.isSuccessful) {
@@ -211,7 +208,6 @@ class ReportRepository(
                 .post(body.build())
                 .build()
         ).execute().use { response ->
-            syncCookies(response.request.url.toString(), response.headers("Set-Cookie"))
             val html = response.body?.string().orEmpty()
             if (isAuthPage(response.code, response.request.url.toString(), html)) throw AuthenticationRequiredException()
             if (!response.isSuccessful) {
@@ -225,18 +221,9 @@ class ReportRepository(
         }
     }
 
-    private fun request(url: String): Request.Builder {
-        val cookie = cookies.getCookie(url).orEmpty()
-        return Request.Builder()
-            .url(url)
-            .header("User-Agent", NimsUrls.DESKTOP_UA)
-            .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
-    }
-
-    private fun syncCookies(url: String, values: List<String>) {
-        values.forEach { value -> runCatching { cookies.setCookie(url, value) } }
-        cookies.flush()
-    }
+    private fun request(url: String): Request.Builder = Request.Builder()
+        .url(url)
+        .header("User-Agent", NimsUrls.DESKTOP_UA)
 
     private fun isAuthPage(code: Int, url: String, text: String): Boolean {
         if (code == 401 || code == 403) return true
