@@ -248,8 +248,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 try {
                     temporary.outputStream().buffered().use { output ->
                         FullClinicalResultsPdf.write(output,current.patient,
-                            current.retrievedAt,studies,
-                            FullClinicalResultsDocument.sourceInventory(current))
+                            current.retrievedAt,studies)
                     }
                     if(!temporary.renameTo(file)) {
                         temporary.copyTo(file,overwrite=true)
