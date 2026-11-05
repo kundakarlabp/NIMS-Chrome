@@ -26,12 +26,19 @@ object CrScanParser {
         if(raw.length>8192)return null
         val text=raw.trim().trim('\uFEFF')
         if(exact.matches(text))return text
+        // Reject outside-host URLs before inspecting any CR-like label.
+        // Otherwise an attacker-controlled QR with ?cr=... would bypass
+        // the allowlist through the generic labeled-text fallback.
+        val uri=runCatching { URI(text) }.getOrNull()
+        if(uri?.scheme!=null && uri.host!=null &&
+            (uri.scheme.lowercase(Locale.US) !in setOf("http","https") ||
+                uri.host.lowercase(Locale.US) !in allowedHosts))
+            return null
         val labeledMatches=labeled.findAll(text)
             .map { it.groupValues[1] }.distinct().toList()
         if(labeledMatches.size>1)return null
         if(labeledMatches.size==1)return labeledMatches.single()
 
-        val uri=runCatching { URI(text) }.getOrNull()
         if(uri!=null && uri.scheme?.lowercase(Locale.US) in setOf("http","https") &&
             uri.host?.lowercase(Locale.US) in allowedHosts) {
             val entries=listOf(uri.rawQuery.orEmpty(),uri.rawFragment.orEmpty())
