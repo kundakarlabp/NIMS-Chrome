@@ -473,7 +473,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // The signed originals remain accessible via the source inventory.
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
             level != android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            ReportTitleCache.clear()
+            ReportTitleCache.trimHeavy()
             ReportLinkResolver.clear()
             reportTitleEpoch++
         }
@@ -482,7 +482,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onLowMemory() {
         super.onLowMemory()
         ProcessHealth.onTrim(this, 100)
-        ReportTitleCache.clear()
+        ReportTitleCache.trimHeavy()
         ReportLinkResolver.clear()
         reportTitleEpoch++
     }
