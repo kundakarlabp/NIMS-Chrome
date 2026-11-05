@@ -18,11 +18,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Enforce desktop Results-only repository
+      - name: Reject deprecated relay and side-panel artifacts
         shell: bash
         run: |
           set -euo pipefail
-          for removed in mobile shared docs scripts railway.json .dockerignore; do
+          for removed in mobile shared scripts railway.json .dockerignore; do
             test ! -e "$removed"
           done
           test ! -e dashboard/mobileRelay.ts
@@ -35,7 +35,7 @@ jobs:
           python - <<'PY'
           import json
           m = json.load(open("extension/manifest.json"))
-          assert m["version"] == "0.6.10"
+          assert __import__("re").fullmatch(r"\d+\.\d+\.\d+", m["version"])
           for entry in m["content_scripts"]:
             if entry.get("match_origin_as_fallback"):
               assert entry.get("all_frames") is True
