@@ -11,7 +11,14 @@ object DiagnosticEvents {
     private val allowed = setOf("AUTH_REQUIRED", "STRUCTURED_FAILURE",
         "REPORT_INDEX_FAILED", "PDF_HTTP_FAILED", "PDF_NOT_VALID",
         "PDF_IDENTITY_MISMATCH", "PDF_TEXT_MISSING", "PDF_RENDER_FAILED",
-        "CR_SCAN_VALID", "CR_SCAN_UNRECOGNIZED", "CR_SCAN_FAILED")
+        "CR_SCAN_VALID", "CR_SCAN_UNRECOGNIZED", "CR_SCAN_FAILED",
+        "CR_PANEL_TIMEOUT", "CR_PANEL_NOT_CONFIRMED", "CR_LOOKUP_RETRY",
+        "WEBVIEW_RENDERER_CRASH", "WEBVIEW_RENDERER_GONE",
+        "MATCHING_CACHE_RESTORED_AFTER_FETCH_ERROR",
+        "TARGET_PDF_EVIDENCE_UNAVAILABLE", "USER_PDF_SOURCE_UNAVAILABLE",
+        "CR_CAMERA_CAPTURE_CANCELLED", "CR_SCAN_MULTIPLE",
+        "CR_SCAN_IMAGE_UNREADABLE", "CR_SCAN_IMAGE_FAILED",
+        "CR_CAMERA_UNAVAILABLE", "CR_SCAN_GMS_UNAVAILABLE")
     fun record(code: String) {
         if (code in allowed) counts.merge(code, 1, Int::plus)
     }
@@ -144,8 +151,8 @@ object AppDiagnostics {
             appendLine("audit.source_identity_ambiguous=" + ambiguous)
             appendLine("audit.source_identity_date_conflict=" + dateConflict)
             appendLine("audit.source_identity_unmatched=" + noIndexMatch)
-            appendLine("audit.pdf_auto_mapping=disabled")
-            appendLine("audit.pdf_match_auto_verified=0")
+            appendLine("audit.pdf_auto_mapping=only_with_CR_verified_source_evidence")
+            appendLine("audit.pdf_match_auto_verified=see_source_link_reconciliation")
             appendLine("audit.pdf_match_one_unverified_candidate=" +
                 candidateCounts.count { it == 1 })
             appendLine("audit.pdf_match_ambiguous=" +
@@ -338,8 +345,9 @@ object AppDiagnostics {
                 rows.count(ClinicalResultsLayout::urineChemistryCode))
             appendLine("diagnostics.enquiry_source_fallback=report_index_labelled_not_orders")
 
-            appendLine("diagnostics.privacy=Counts/booleans only; no patient details or result values")
-            appendLine("audit.privacy=No names, CRs, source values, lab numbers, cookies or URLs")
+            append(ParameterDiagnostics.describe(bundle))
+            appendLine("diagnostics.privacy=Per-parameter redacted status, no patient identifiers, raw clinical values or dates")
+            appendLine("audit.privacy=No CRs, source values, lab identifiers, cookies, original dates or URLs")
         }
     }
 }
