@@ -155,6 +155,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var historyStatus by mutableStateOf("")
     private var historyMode by mutableStateOf("unknown")
     private var apiStage by mutableStateOf("not_checked")
+    private var lastStructuredStep by mutableStateOf("not_started")
+    private var lastStructuredFailure by mutableStateOf("none")
     private var apiReportCount by mutableStateOf(0)
     private var apiAttemptMs by mutableStateOf(0L)
     private var currentTimeout: Runnable? = null
@@ -574,6 +576,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         pdfTotalCount = 0
         pdfEvidenceTargets = 0
         apiStage = "structured_checking"
+        lastStructuredStep = "session_check"
+        lastStructuredFailure = "none"
         loadStage = LoadStage.CHECKING_SESSION
         statusText = "Checking NIMS session for complete Custom Sheet retrieval…"
         if (sessionState == SessionState.CONNECTED) startStructuredFetch(cr, requestId)
@@ -596,6 +600,37 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    /** Restore ONLY a matching encrypted patient snapshot after live HIS
+     * retrieval has failed. Never call it a live result or reuse another CR.
+     * A startup refresh may race the asynchronous initial cache load.
+     */
+    private fun restoreMatchingSnapshot(requestId: String) {
+        val cr=activeCr
+        if(!cr.matches(Regex("""\d{15}""")))return
+        worker.execute {
+            val saved=snapshotCache.load()?.takeIf {
+                it.patient.crNo==cr && it.results.isNotEmpty()
+            } ?:return@execute
+            runOnUiThread {
+                if(requestId!=activeRequestId || activeCr!=cr ||
+                    bundle?.results?.isNotEmpty()==true ||
+                    loadStage!=LoadStage.ERROR)return@runOnUiThread
+                bundle=saved
+                crInput=cr
+                loadStage=LoadStage.READY
+                selectedTab=ResultsTab.ALL
+                apiStage="cached_after_live_failure"
+                apiReportCount=saved.reports.count {
+                    !it.sourceTag.startsWith("nims_rest_reportList")
+                }
+                statusText="NIMS live retrieval failed. Showing an older, encrypted local snapshot — refresh before clinical decisions."
+                historyStatus="Cached "+saved.results.size+
+                    " result fields; NOT verified as current"
+                DiagnosticEvents.record("MATCHING_CACHE_RESTORED_AFTER_FETCH_ERROR")
+            }
+        }
+    }
+
     private fun startStructuredFetch(cr: String, requestId: String) {
         if (requestId != activeRequestId) return
         loadStage = LoadStage.OPENING_TRENDS
@@ -605,6 +640,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             if (requestId != activeRequestId ||
                 loadStage in setOf(LoadStage.READY, LoadStage.ERROR, LoadStage.IDLE)) return@Runnable
             loadStage = if (verifiedRestReports.isNotEmpty()) LoadStage.READY else LoadStage.ERROR
+            lastStructuredFailure="structured_timeout"
+            apiStage="structured_timeout"
+            if(loadStage==LoadStage.ERROR) restoreMatchingSnapshot(requestId)
             statusText = if (verifiedRestReports.isNotEmpty()) {
                 "Structured API timed out. Verified REST reports remain available."
             } else {
@@ -697,6 +735,28 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
         if (requestId != activeRequestId) return
         runOnUiThread {
+            if(requestId!=activeRequestId)return@runOnUiThread
+            // Only fixed, non-PHI status tokens are retained in diagnostics.
+            if(stage.matches(Regex("""[a-z_]{3,50}""")))
+                lastStructuredStep=stage
+            if(stage=="cr_lookup_retry") {
+                statusText="NIMS CR search is delayed; retrying once using the same patient request…"
+                DiagnosticEvents.record("CR_LOOKUP_RETRY")
+                return@runOnUiThread
+            }
+            if(stage=="cr_lookup_submitted") {
+                statusText="NIMS is loading the requested patient's Investigation Trends…"
+                return@runOnUiThread
+            }
+            if(stage=="cr_panel_confirmed") {
+                statusText="Patient CR verified on the NIMS results page."
+                return@runOnUiThread
+            }
+            if(stage.startsWith("cr_panel_")) {
+                lastStructuredFailure=stage
+                DiagnosticEvents.record("CR_PANEL_NOT_CONFIRMED")
+                return@runOnUiThread
+            }
             if (stage == "bulk_mode_single") {
                 historyMode = "single_bulk"
                 historyStatus = "All available Custom Sheet tests and dates requested together."
@@ -929,39 +989,59 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         if (requestId.isNotBlank() && requestId != activeRequestId) return
         cancelTimeout()
         runOnUiThread {
+            if(requestId.isNotBlank() && requestId!=activeRequestId)return@runOnUiThread
             val authLike = Regex("(?i)auth|login|session").containsMatchIn(message)
-            DiagnosticEvents.record(if (authLike) "AUTH_REQUIRED" else "STRUCTURED_FAILURE")
+            val panelTimeout=message.contains("requested CR results did not load",true)
+            lastStructuredFailure=when {
+                panelTimeout -> "cr_panel_timeout"
+                authLike -> "authentication_required"
+                message.contains("Custom Sheet",true) -> "custom_sheet_unavailable"
+                message.contains("trends",true) -> "trends_unavailable"
+                else -> "structured_failure"
+            }
+            apiStage=lastStructuredFailure
+            DiagnosticEvents.record(when {
+                panelTimeout -> "CR_PANEL_TIMEOUT"
+                authLike -> "AUTH_REQUIRED"
+                else -> "STRUCTURED_FAILURE"
+            })
+            if(bundle?.patient?.crNo==activeCr &&
+                bundle?.results?.isNotEmpty()==true) {
+                loadStage=LoadStage.READY
+                statusText="NIMS live refresh failed. Previously loaded results remain available; verify their date before clinical use."
+                return@runOnUiThread
+            }
             if (bulkBatchCount > 0 && bundle?.results?.isNotEmpty() == true) {
                 loadStage = LoadStage.READY
                 historyStatus = "Older history interrupted; " + bulkBatchCount +
                     " accepted batch(es) remain available."
-                if (authLike) {
-                    sessionState = SessionState.LOGIN_REQUIRED
-                    pendingCrAfterLogin = activeCr
+                if(authLike) {
+                    sessionState=SessionState.LOGIN_REQUIRED
+                    pendingCrAfterLogin=activeCr
                 }
-                statusText = historyStatus
+                statusText=historyStatus
                 return@runOnUiThread
             }
-            if (verifiedRestReports.isNotEmpty()) {
-                loadStage = LoadStage.READY
-                if (authLike) pendingCrAfterLogin = activeCr
-                statusText = if (authLike) {
-                    "REST reports available. Log in for structured laboratory values."
-                } else {
-                    "REST reports available; structured retrieval failed. " +
-                        message.replace(Regex("""\b\d{15}\b"""), "[CR redacted]").take(110)
-                }
+            if(verifiedRestReports.isNotEmpty()) {
+                loadStage=LoadStage.READY
+                if(authLike)pendingCrAfterLogin=activeCr
+                statusText=if(authLike)
+                    "REST catalogue available; log in for structured laboratory results."
+                else "REST catalogue only; NIMS clinical results could not be retrieved. Retry Get results."
                 return@runOnUiThread
             }
-            if (authLike) {
-                sessionState = SessionState.LOGIN_REQUIRED
-                pendingCrAfterLogin = activeCr
-                loadStage = LoadStage.IDLE
-                statusText = "NIMS session needs login. Complete CAPTCHA once; this CR will resume."
+            if(authLike) {
+                sessionState=SessionState.LOGIN_REQUIRED
+                pendingCrAfterLogin=activeCr
+                loadStage=LoadStage.IDLE
+                statusText="NIMS session needs login. Complete CAPTCHA once; this CR will resume."
                 openLogin()
             } else {
-                loadStage = LoadStage.ERROR
-                statusText = message.replace(Regex("""\b\d{15}\b"""), "[CR redacted]").take(180)
+                loadStage=LoadStage.ERROR
+                statusText=if(panelTimeout)
+                    "The NIMS Investigation Trends page did not confirm this patient's CR. Retry Get results; login may need refreshing if it persists."
+                else message.replace(Regex("""\b\d{15}\b"""),"[CR redacted]").take(180)
+                restoreMatchingSnapshot(activeRequestId)
             }
         }
     }
@@ -985,6 +1065,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
             appendLine("app.resultCount=${current?.results?.size ?: 0}")
             appendLine("app.reportCount=${current?.reports?.size ?: 0}")
             appendLine("api.stage=$apiStage")
+            appendLine("api.lastStructuredStep=$lastStructuredStep")
+            appendLine("api.lastStructuredFailure=$lastStructuredFailure")
             appendLine("api.verifiedReportCount=$apiReportCount")
             appendLine("api.restElapsedMs=$apiAttemptMs")
             appendLine("bulk.acceptedBatches=$bulkBatchCount")
