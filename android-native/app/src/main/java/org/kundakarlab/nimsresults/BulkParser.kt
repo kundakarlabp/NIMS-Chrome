@@ -209,7 +209,7 @@ object BulkParser {
 
     // Amended values must retain their event identity; preserve repeated specimens.
     // A source ordinal is scoped to the patient and exact source table layout.
-    private fun sourceKey(cr: String, row: JSONObject, groupIndex: Int,
+    internal fun sourceKey(cr: String, row: JSONObject, groupIndex: Int,
                           rowIndex: Int, rawDate: String): String {
         val eventId = listOf("observationId", "resultId", "eventId")
             .firstNotNullOfOrNull { key ->
