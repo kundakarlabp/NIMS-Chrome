@@ -124,6 +124,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var sourceReconcileRunning by mutableStateOf(false)
     private var sourceReconcileDone by mutableStateOf(0)
     private var sourceReconcileTotal by mutableStateOf(0)
+    private val autoPdfRequested=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -1112,6 +1113,36 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         pdfConfirmedCount++
                         reportTitleEpoch++
                     } else DiagnosticEvents.record("TARGET_PDF_EVIDENCE_UNAVAILABLE")
+                }
+            }
+        }
+    }
+
+    /** Verify only on-screen PDF candidates. No navigation is blocked and
+     * failed documents are not retried on every Compose recomposition.
+     * Explicit "Verify matching" and "Reconcile PDFs" can still retry. */
+    private fun autoVerifyVisiblePdf(rows:List<LabResult>,
+        candidates:List<ReportRef>,cr:String) {
+        if(sessionState!=SessionState.CONNECTED || bundle?.patient?.crNo!=cr)return
+        val request=activeRequestId
+        val picked=SourceMetadataReview.inspectionCandidates(
+            rows.firstOrNull()?.test.orEmpty(),candidates)
+            .filter { it.url.isNotBlank() }.take(3)
+            .filter { report ->
+                !ReportTitleCache.hasVerifiedEvidence(report.url,cr) &&
+                    autoPdfRequested.add(cr+"|"+report.url)
+            }
+        if(picked.isEmpty())return
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            picked.forEach { report ->
+                val selected={request==activeRequestId &&
+                    cr==activeCr && !Thread.currentThread().isInterrupted}
+                if(!selected())return@execute
+                val ok=enricher.inspect(report,cr,selected)
+                if(ok)runOnUiThread {
+                    if(request==activeRequestId && cr==bundle?.patient?.crNo)
+                        reportTitleEpoch++
                 }
             }
         }
@@ -3682,6 +3713,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else null
                     }
                     val microSpecimen=resolvedMicro?.specimen.orEmpty()
+                    LaunchedEffect(study.key,reportTitleEpoch,candidates) {
+                        if(isMicro && resolvedMicro==null && candidates.isNotEmpty())
+                            autoVerifyVisiblePdf(rows,candidates,current.patient.crNo)
+                    }
                     val showReportMetadata=isMicro ||
                         Regex("""(?i)smear|pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|coombs|blood[ -]*(?:group|type)|antibody[ -]*screen|cardiolipin|glycoprotein""")
                             .containsMatchIn(study.title)
