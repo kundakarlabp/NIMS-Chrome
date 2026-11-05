@@ -209,6 +209,61 @@
     return false;
   }
 
+  /**
+   * NIMS sometimes re-renders the results iframe after "Go" and sometimes
+   * formats the printed CR with whitespace. Require the SERVER-RENDERED
+   * patient bar, not the CR input, to confirm the requested patient.
+   */
+  function patientBarMatches(bar, expectedCr) {
+    if (!visible(bar) || !/^\d{15}$/.test(expectedCr)) return false;
+    const source = String(bar.innerText || bar.textContent || '');
+    const explicit = [...source.matchAll(/\bCR\s*(?:No\.?|Number)?\s*[:#-]?\s*((?:\d[\s-]*){15})/gi)]
+      .map(m => m[1].replace(/\D/g,'')).filter(v => v.length===15);
+    const other = [...source.matchAll(/(?<!\d)\d{15}(?!\d)/g)].map(m => m[0]);
+    const identifiers = [...new Set([...explicit,...other])];
+    return identifiers.length===1 && identifiers[0]===expectedCr;
+  }
+
+  /**
+   * One bounded, idempotent recovery from an unresponsive CR search.
+   * The script may retry Go once, but will never accept a patient solely
+   * because the input echoes the requested CR.
+   */
+  async function awaitRequestedCr(getDoc, expectedCr, requestId) {
+    const start=Date.now();
+    const until=start+52000;
+    let retried=false;
+    let lastPanelPresent=false;
+    let lastForeignPanel=false;
+    while(Date.now()<until) {
+      const doc=getDoc();
+      const bar=doc?.querySelector(UI.patientBar);
+      if(patientBarMatches(bar,expectedCr)) return doc;
+      if(visible(bar)) {
+        lastPanelPresent=true;
+        const text=String(bar.innerText || bar.textContent || '');
+        lastForeignPanel=/(?<!\d)\d{15}(?!\d)/.test(text);
+      }
+      // Do not re-submit if the patient CR changed or the CR form is gone.
+      if(!retried && Date.now()-start>=18000) {
+        retried=true;
+        const input=doc?.querySelector(UI.crInput);
+        const go=textExact(doc,'button',LABELS.go) ||
+          textExact(doc,'input[type="button"],input[type="submit"]',LABELS.go);
+        if(input && go && visible(go) &&
+            String(input.value||'').replace(/\D/g,'')===expectedCr) {
+          AndroidNimsBridge.onStage(requestId,'cr_lookup_retry');
+          go.click();
+        }
+      }
+      await sleep(300);
+    }
+    AndroidNimsBridge.onStage(requestId,
+      lastForeignPanel ? 'cr_panel_identity_unconfirmed' :
+      lastPanelPresent ? 'cr_panel_unmatched' : 'cr_panel_missing');
+    throw new Error('NIMS requested CR results did not load.');
+  }
+
   // One complete NIMS Custom Sheet request; never substitute partial history.
   let staged = null;
   function continueRun(_requestId) { /* retained solely for older native bridge compatibility */ }
@@ -281,9 +336,15 @@
       if (!requestId) throw new Error('Missing request ID.');
 
       AndroidNimsBridge.onStage(requestId, 'opening_trends');
-      const frame = await openTrends();
+      let frame = await openTrends();
       const doc = () => {
-        try { return frame.contentDocument || null; } catch { return null; }
+        // The HIS can replace the iframe after Go; follow only a uniquely
+        // identified, same-origin Investigation Trends frame.
+        try {
+          const current=trendsFrame();
+          if(current) frame=current;
+          return frame.contentDocument || null;
+        } catch { return null; }
       };
 
       AndroidNimsBridge.onStage(requestId, 'loading_cr');
@@ -297,16 +358,23 @@
       if (!go) throw new Error('NIMS CR search button was not found.');
 
       const current = doc()?.querySelector(UI.patientBar);
-      if (!visible(current) || !compact(current.textContent).includes(crNo)) go.click();
+      if (!patientBarMatches(current,crNo)) {
+        AndroidNimsBridge.onStage(requestId,'cr_lookup_submitted');
+        go.click();
+      }
 
-      await waitFor(() => {
-        const bar = doc()?.querySelector(UI.patientBar);
-        return visible(bar) && compact(bar.textContent).includes(crNo) ? bar : null;
-      }, 'requested CR results', 32000);
-
-      const patientText = String(doc()?.body?.innerText || '');
-      if (!patientText.includes(crNo)) throw new Error('NIMS did not confirm the requested CR.');
-      AndroidNimsBridge.onPatient(requestId, JSON.stringify(parsePatient(patientText, crNo)));
+      const confirmedDoc=await awaitRequestedCr(doc,crNo,requestId);
+      const confirmedBar=confirmedDoc.querySelector(UI.patientBar);
+      if(!patientBarMatches(confirmedBar,crNo))
+        throw new Error('NIMS did not confirm the requested CR.');
+      const patientText=String(confirmedDoc.body?.innerText || '');
+      // Derive identity from the independently rendered patient header,
+      // not from input.value or an unrelated substring on the page.
+      const patientIdentity=String(confirmedBar.innerText ||
+        confirmedBar.textContent || '');
+      AndroidNimsBridge.onStage(requestId,'cr_panel_confirmed');
+      AndroidNimsBridge.onPatient(requestId,
+        JSON.stringify(parsePatient(patientText,crNo)));
 
       AndroidNimsBridge.onStage(requestId, 'preparing_custom_sheet');
       const custom = await waitFor(() => {
