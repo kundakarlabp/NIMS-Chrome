@@ -29,7 +29,7 @@ class PdfSourceEnricher(private val context: Context) {
     fun inspect(report: ReportRef, expectedCr: String, stillSelected: () -> Boolean): Boolean {
         val url = report.url
         if (!stillSelected() || ReportPayloadParser.safeReportUrl(url).isBlank()) return false
-        if (ReportTitleCache.sections(url).isNotEmpty()) return true
+        if (ReportTitleCache.hasVerifiedEvidence(url,expectedCr)) return true
         val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
         if (cookie.isBlank()) return false
         val request = Request.Builder().url(url)
