@@ -47,7 +47,7 @@ object MicrobiologyPdfIdentity {
             if("culture" !in title && "culture" !in body)return false
             val urine="urine" in t
             val sourceUrine="urine" in title ||
-                Regex("""(?i)\burine\s+aerobic\s+culture\b""")
+                Regex("""(?i)\burine\s+aerobic\s+culture\b|\bclean\s*catch\b|\bmid\s*stream\b""")
                     .containsMatchIn(sourceText)
             if(urine!=sourceUrine)return false
             if("blood" in t && "urine" in title)return false
@@ -85,6 +85,11 @@ object MicrobiologyPdfIdentity {
         }
         return t==title
     }
+
+    /** Type-level candidate discovery only; clinical source identity is
+     * established separately by unique() after patient/date/content checks. */
+    fun candidateTypeAgrees(test:String,title:String,pdfText:String):Boolean =
+        compatible(test,title,pdfText)
 
     /**
      * Source identity is an event, not a title or a collection date.
