@@ -19,7 +19,7 @@ object FullClinicalResultsPdf {
     private const val LEFT=35f
     private const val RIGHT=560f
     private const val BOTTOM=797f
-    private const val LEADING=13f
+    private const val LEADING=16f
 
     fun write(output: OutputStream, patient: PatientInfo,
               retrievedAt: Long, studies: List<FullClinicalStudy>,
@@ -27,11 +27,11 @@ object FullClinicalResultsPdf {
         require(studies.isNotEmpty()) { "No investigations to export" }
         val pdf=PdfDocument()
         val normal=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color=Color.rgb(34,50,64);textSize=9.5f
+            color=Color.rgb(34,50,64);textSize=11.2f
         }
-        val muted=Paint(normal).apply { textSize=8.5f;color=Color.rgb(96,108,119) }
-        val bold=Paint(normal).apply { isFakeBoldText=true;textSize=10.5f }
-        val accent=Paint(bold).apply { color=Color.rgb(17,65,105) }
+        val muted=Paint(normal).apply { textSize=9.3f;color=Color.rgb(96,108,119) }
+        val bold=Paint(normal).apply { isFakeBoldText=true;textSize=11.5f }
+        val accent=Paint(bold).apply { textSize=12.3f; color=Color.rgb(17,65,105) }
         val warning=Paint(bold).apply { color=Color.rgb(168,42,39) }
         val line=Paint().apply {color=Color.rgb(222,228,233);strokeWidth=0.7f}
         val created=SimpleDateFormat("dd-MMM-yyyy HH:mm",Locale.ENGLISH)
@@ -46,7 +46,7 @@ object FullClinicalResultsPdf {
         fun endPage() {
             val current=page ?: return
             current.canvas.drawLine(LEFT,812f,RIGHT,812f,line)
-            current.canvas.drawText("Generated clinical review - NOT an original signed NIMS report",
+            current.canvas.drawText("Clinical summary - confirm against signed NIMS report",
                 LEFT,823f,muted)
             current.canvas.drawText("Page "+number,RIGHT-55f,823f,muted)
             pdf.finishPage(current)
@@ -58,13 +58,14 @@ object FullClinicalResultsPdf {
             page=pdf.startPage(PdfDocument.PageInfo.Builder(PAGE_W,PAGE_H,number).create())
             canvas=page!!.canvas
             y=35f
-            canvas!!.drawText("NIMS Results | Complete investigation review",LEFT,y,accent)
+            canvas!!.drawText("NIMS Results | All investigations",LEFT,y,accent)
             y+=16f
             val details=patient.name.ifBlank { "Patient name not provided" }+
                 " | CR: "+patient.crNo+" | "+patient.age+" | "+patient.sex
-            canvas!!.drawText(details.take(125),LEFT,y,normal)
+            val detailLine=details.take(95)
+            canvas!!.drawText(detailLine,LEFT,y,normal)
             y+=15f
-            canvas!!.drawText("Snapshot: "+snapshot+"    Generated: "+created,LEFT,y,muted)
+            canvas!!.drawText("Results snapshot: "+snapshot,LEFT,y,muted)
             y+=12f
             canvas!!.drawLine(LEFT,y,RIGHT,y,line)
             y+=18f
@@ -106,54 +107,54 @@ object FullClinicalResultsPdf {
             if(value.isNotBlank())wrapped(label+": "+value,muted,8f)
         }
         try {
-            studies.forEachIndexed { index,study ->
-                ensure(93f)
-                y+=if(index==0)0f else 9f
-                canvas!!.drawLine(LEFT,y,RIGHT,y,line)
-                y+=17f
-                wrapped((index+1).toString()+". "+study.title,accent)
-                detail("Structured date ("+study.dateKind+")",study.sourceDate)
-                detail("Lab/Study ID",study.accession)
-                detail("Collected",study.collectedAt)
-                detail("Sent",study.sentAt)
-                detail("Reported",study.reportedAt)
-                detail("Specimen",study.specimen)
-                wrapped("Provenance: "+study.evidence,muted,8f)
+            var precedingDate=""
+            for(study in studies) {
+                val date=study.sourceDate.ifBlank { "Date unavailable" }
+                if(date!=precedingDate) {
+                    ensure(68f)
+                    if(precedingDate.isNotBlank())y+=12f
+                    canvas!!.drawLine(LEFT,y,RIGHT,y,line)
+                    y+=21f
+                    wrapped(date,accent)
+                    precedingDate=date
+                }
+                ensure(51f)
+                y+=7f
+                wrapped(study.title,bold)
+                val verifiedDetails=listOfNotNull(
+                    study.accession.takeIf(String::isNotBlank)?.let { "Lab "+it },
+                    study.specimen.takeIf(String::isNotBlank),
+                    study.collectedAt.takeIf(String::isNotBlank)?.let { "Col "+it },
+                    study.sentAt.takeIf(String::isNotBlank)?.let { "Sent "+it },
+                    study.reportedAt.takeIf(String::isNotBlank)?.let { "Rep "+it }
+                ).joinToString("  |  ")
+                if(verifiedDetails.isNotBlank())wrapped(verifiedDetails,muted,8f)
                 if(study.conflictingCulture)
-                    wrapped("WARNING: Conflicting culture statements in source. Inspect original NIMS PDF.",warning,8f)
-                if(study.findings.isEmpty())
-                    wrapped("No readable structured result. See original source report.",muted,8f)
-                else {
-                    study.findings.forEach { finding ->
-                        y+=4f
-                        val tag=if(finding.unresolved)" [Unmapped source field]" else ""
-                        wrapped(finding.parameter+tag,bold,8f)
-                        val unit=if(finding.unit.isNotBlank() &&
-                            !finding.value.endsWith(finding.unit,true))" "+finding.unit else ""
-                        wrapped(finding.value+unit,normal,16f)
-                        if(finding.reference.isNotBlank())
-                            wrapped("Reference: "+finding.reference,muted,16f)
-                    }
-                }
-                y+=6f
-            }
-            if(sources.isNotEmpty()) {
-                ensure(95f)
-                y+=14f
-                wrapped("SOURCE REPORT INDEX - UNLINKED EVIDENCE",accent)
-                wrapped("These are separate NIMS report-index records. Matching titles and dates do not establish which result belongs to which PDF.",muted)
-                sources.forEachIndexed { index,report ->
-                    ensure(67f)
-                    y+=7f
-                    wrapped((index+1).toString()+". "+report.title,bold)
-                    detail("Lab/Study ID (index)",report.labNumber)
-                    detail("Collection (index)",report.collectedAt)
-                    detail("Reporting time",report.reportedAt)
-                    detail("Specimen (verified PDF)",report.specimen)
-                    detail("Stage",report.stage)
-                    wrapped(report.evidence,muted,8f)
+                    wrapped("CONFLICTING CULTURE STATEMENTS - VERIFY ORIGINAL PDF",warning,8f)
+                val readable=study.findings.filterNot { it.unresolved }
+                if(readable.isEmpty())wrapped("Result unavailable in structured data",muted,8f)
+                else readable.forEach { finding ->
+                    val raw=finding.value.trim()
+                    if(raw.isBlank())return@forEach
+                    val unit=if(finding.unit.isNotBlank() &&
+                        !raw.endsWith(finding.unit,true)) " "+finding.unit else ""
+                    val label=finding.parameter.trim()
+                    val generic=label.equals("Result",true) ||
+                        label.equals(study.title,true)
+                    val textValue=if(generic)raw+unit else label+": "+raw+unit
+                    // Keep short numeric rows and reference values on one line.
+                    val reference=finding.reference.trim()
+                    val row=if(reference.isNotBlank() &&
+                        normal.measureText(textValue+"    ["+reference+"]")<RIGHT-LEFT-14f)
+                        textValue+"    ["+reference+"]" else textValue
+                    wrapped(row,normal,10f)
+                    if(reference.isNotBlank() && !row.contains("["+reference+"]"))
+                        wrapped("Ref: "+reference,muted,20f)
                 }
             }
+            // An unlinked PDF-index appendix is intentionally NOT included.
+            // It expanded one patient's review into dozens of unrelated
+            // metadata rows and obscured the actual clinical observations.
             endPage()
             pdf.writeTo(output)
         } finally { pdf.close() }

@@ -12,8 +12,8 @@ android {
         applicationId = "org.kundakarlab.nimsresults.recovery"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20005
-        versionName = "2.0.4"
+        versionCode = 20006
+        versionName = "2.0.5"
         val provenanceSha = System.getenv("GITHUB_SHA")?.take(12)
             ?.takeIf { it.matches(Regex("[a-fA-F0-9]{12}")) } ?: "local"
         buildConfigField("String", "SOURCE_COMMIT", "\"$provenanceSha\"")
@@ -97,6 +97,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    // Bundled, offline capable fallback for a captured photo or QR image;
+    // Google Code Scanner alone relies on a Play Services module download.
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("androidx.core:core:1.15.0")
     implementation("org.jsoup:jsoup:1.18.3")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 

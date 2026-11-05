@@ -15,6 +15,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
@@ -31,7 +33,22 @@ class FullClinicalPdfActivity : Activity() {
     private var rendered:Bitmap?=null
     private var pageIndex=0
     private var pageCount=0
-    private var zoom=1f
+    private var zoom=1.15f
+    private val scaleDetector by lazy {
+        ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector:ScaleGestureDetector):Boolean {
+                zoom=(zoom*detector.scaleFactor).coerceIn(1f,3.2f)
+                applyZoom()
+                return true
+            }
+        })
+    }
+
+    override fun dispatchTouchEvent(event:MotionEvent):Boolean {
+        scaleDetector.onTouchEvent(event)
+        if(scaleDetector.isInProgress)return true
+        return super.dispatchTouchEvent(event)
+    }
     private var closing=false
     private lateinit var image:ImageView
     private lateinit var counter:TextView
@@ -51,31 +68,43 @@ class FullClinicalPdfActivity : Activity() {
             view.setPadding(0,bars.top,0,bars.bottom)
             insets
         }
-        val header=LinearLayout(this).apply {
+        fun button(label:String,action:()->Unit):Button=Button(this).apply {
+            text=label;textSize=12f;minWidth=0;minimumWidth=0
+            setPadding(8,0,8,0);setOnClickListener { action() }
+        }
+        val titleRow=LinearLayout(this).apply {
             orientation=LinearLayout.HORIZONTAL
             gravity=Gravity.CENTER_VERTICAL
-            setPadding(8,8,8,8)
+            setPadding(6,2,6,2)
             setBackgroundColor(Color.rgb(12,45,76))
         }
-        fun button(label:String,action:()->Unit):Button=Button(this).apply {
-            text=label;setOnClickListener { action() }
-        }
-        header.addView(button("Back"){finish()})
-        previous=button("‹"){showPage(pageIndex-1)}
-        next=button("›"){showPage(pageIndex+1)}
+        titleRow.addView(button("Back"){finish()})
         counter=TextView(this).apply {
-            text="Opening…";textSize=13f;setTextColor(Color.WHITE)
+            text="Clinical PDF";textSize=13f
+            setTextColor(Color.WHITE);gravity=Gravity.CENTER
         }
-        header.addView(previous)
-        header.addView(next)
-        header.addView(counter,LinearLayout.LayoutParams(0,
+        titleRow.addView(counter,LinearLayout.LayoutParams(0,
             LinearLayout.LayoutParams.WRAP_CONTENT,1f))
-        header.addView(button("Zoom") {
-            zoom=if(zoom<1.5f)1.9f else 1f
-            applyZoom()
-        })
-        header.addView(button("Save") { saveCopy() })
-        root.addView(header)
+        titleRow.addView(button("Save PDF"){saveCopy()})
+        root.addView(titleRow)
+        val navRow=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER
+            setPadding(4,0,4,0)
+            setBackgroundColor(Color.rgb(230,238,244))
+        }
+        previous=button("Previous"){showPage(pageIndex-1)}
+        next=button("Next"){showPage(pageIndex+1)}
+        navRow.addView(previous,LinearLayout.LayoutParams(0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,1f))
+        navRow.addView(next,LinearLayout.LayoutParams(0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,1f))
+        navRow.addView(button("Fit") {zoom=1f;applyZoom()},
+            LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,0.7f))
+        navRow.addView(button("Zoom +") {
+            zoom=(zoom*1.35f).coerceAtMost(3.2f);applyZoom()
+        },LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,0.9f))
+        root.addView(navRow)
         image=ImageView(this).apply {
             scaleType=ImageView.ScaleType.FIT_CENTER
             adjustViewBounds=true
@@ -87,13 +116,14 @@ class FullClinicalPdfActivity : Activity() {
             addView(HorizontalScrollView(this@FullClinicalPdfActivity).apply {
                 isFillViewport=true
                 addView(image,android.widget.FrameLayout.LayoutParams(
-                    resources.displayMetrics.widthPixels,
+                    (resources.displayMetrics.widthPixels*zoom).toInt(),
                     android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
             },android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
         },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(root)
+        applyZoom()
         previous.isEnabled=false;next.isEnabled=false
         if(!pdfFile.isFile || pdfFile.length()<4L) {
             Toast.makeText(this,"PDF preview is not available",Toast.LENGTH_LONG).show()
@@ -134,7 +164,7 @@ class FullClinicalPdfActivity : Activity() {
             val render=renderer ?:return@execute
             val bitmap=try {
                 render.openPage(index).use { page ->
-                    val scale=1.6f
+                    val scale=2.0f
                     val b=Bitmap.createBitmap(
                         (page.width*scale).toInt().coerceAtLeast(1),
                         (page.height*scale).toInt().coerceAtLeast(1),

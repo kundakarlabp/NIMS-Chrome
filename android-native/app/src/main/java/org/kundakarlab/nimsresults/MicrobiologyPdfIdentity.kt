@@ -47,7 +47,7 @@ object MicrobiologyPdfIdentity {
             if("culture" !in title && "culture" !in body)return false
             val urine="urine" in t
             val sourceUrine="urine" in title ||
-                Regex("""(?i)\burine\s+aerobic\s+culture\b""")
+                Regex("""(?i)\burine\s+aerobic\s+culture\b|\bclean\s*catch\b|\bmid\s*stream\b""")
                     .containsMatchIn(sourceText)
             if(urine!=sourceUrine)return false
             if("blood" in t && "urine" in title)return false
@@ -86,58 +86,162 @@ object MicrobiologyPdfIdentity {
         return t==title
     }
 
+    /** Type-level candidate discovery only; clinical source identity is
+     * established separately by unique() after patient/date/content checks. */
+    fun candidateTypeAgrees(test:String,title:String,pdfText:String):Boolean =
+        compatible(test,title,pdfText)
+
     /**
-     * Return a uniquely verified PDF. When no LIS accession is present,
-     * EVERY plausible candidate must be inspected; an unopened competing
-     * document prevents guessing a direct link.
+     * Source identity is an event, not a title or a collection date.
+     * Resolve only after CR, report day, accession (when supplied),
+     * culture set/bottle/stage, specimen and patient-result evidence agree.
+     * Same-day identical results without bottle or specimen identity are
+     * intentionally ambiguous: return null, retain reviewable candidates.
      */
     fun unique(rows: List<LabResult>, candidates: List<ReportRef>,
                patientCr: String, day: LocalDate): Matched? {
-        if(rows.isEmpty() || patientCr.isBlank() || candidates.isEmpty() ||
-            candidates.size>8) return null
-        val labs=(rows.map { it.labNumber.trim() } +
+        if(rows.isEmpty() || patientCr.isBlank() ||
+            candidates.isEmpty() || candidates.size>20)return null
+        val test=rows.first().test
+        val labs=(rows.map { it.labNumber.trim() }+
             rows.mapNotNull { MicrobiologyNarrativeMetadata.extract(it)?.labNumber })
             .filter(String::isNotBlank).distinct()
         if(labs.size>1)return null
         val lab=labs.singleOrNull().orEmpty()
-        val expectedDate=rows.mapNotNull { RecentReportDates.parse(it.reportedDate) }
-            .distinct().singleOrNull() ?: day
-        val matching=mutableListOf<Matched>()
-        for(report in candidates.distinctBy{it.url}) {
-            val header=ReportTitleCache.header(report.url)
-            // CR verification is mandatory; do not use a different PDF's
-            // lab number or dates to complete this row's metadata.
-            if(header==null || header.crNo!=patientCr) {
-                if(lab.isBlank())return null
-                continue
-            }
+        val reportDates=rows.mapNotNull { RecentReportDates.parse(it.reportedDate) }
+            .distinct()
+        if(reportDates.size>1)return null
+        val eventDate=reportDates.singleOrNull() ?: day
+        val matches=mutableListOf<Matched>()
+        for(report in candidates.distinctBy { it.url }) {
+            val verified=ReportTitleCache.compactEvidence(report.url) ?:continue
+            if(verified.cr!=patientCr)continue
+            val header=verified.header
+            if(header.crNo!=patientCr)continue
             if(report.labNumber.isNotBlank() &&
-                !report.labNumber.equals(header.labNumber,true)) continue
-            if(lab.isNotBlank() && !lab.equals(header.labNumber,true)) continue
-            val pdf=ReportTitleCache.extracted(report.url).orEmpty()
-            if(pdf.isBlank() || !compatible(rows.first().test,report.title,pdf)) continue
-            val observed=rows.map { norm(it.valueText) }
-                .filter { it.length>=34 && it.split(" ").size>=5 }
-            val normalizedPdf=norm(pdf)
-            if(observed.isNotEmpty() &&
-                observed.none { normalizedPdf.contains(it) }) continue
-            // A dated result must match the actual reported day, not just
-            // the date when the specimen was sent to the laboratory.
-            val reportDay=RecentReportDates.parse(header.reportedDate)
+                !report.labNumber.equals(header.labNumber,true))continue
+            if(lab.isNotBlank() && !lab.equals(header.labNumber,true))continue
+            val source=ReportTitleCache.matchingText(report.url)
+            if(source.isBlank() || !compatible(test,report.title,source))continue
+            if(!cultureIdentityAgrees(test,report.title,source,report.reportStage))
+                continue
+            val reportDate=RecentReportDates.parse(header.reportedDate)
                 ?:RecentReportDates.parse(report.reportedDate)
-            if(reportDay!=null && expectedDate!=LocalDate.MIN &&
-                reportDay!=expectedDate) continue
-            if(reportDay==null && lab.isBlank()) continue
-            val rowSample=rows.map { norm(it.specimenType) }
-                .filter { it.isNotBlank() && it !in setOf("other","any other specimen") }
-                .distinct().singleOrNull()
-            val specimen=PdfSourceEvidence.specimen(pdf).trim()
-            if(rowSample!=null && specimen.isNotBlank() &&
-                rowSample!=norm(specimen)) continue
-            matching+=Matched(report,header,specimen,
-                contradictoryCulture(pdf))
+            if(reportDate==null || reportDate!=eventDate)continue
+            val specimen=verified.specimen.ifBlank {
+                PdfSourceEvidence.specimen(source) }
+            if(!specimenAgrees(test,rows,specimen,report.title))continue
+            if(!clinicalContentAgrees(rows,source))continue
+            matches+=Matched(report,header,specimen,
+                contradictoryCulture(source))
         }
-        return matching.singleOrNull()
+        return matches.singleOrNull()
+    }
+
+    private fun specimenAgrees(test:String,rows:List<LabResult>,
+        sourceSpecimen:String,sourceTitle:String):Boolean {
+        val rowSpecimens=rows.map { it.specimenType.trim() }
+            .filter { it.isNotBlank() &&
+                !it.equals("any other specimen",true) &&
+                !it.equals("other",true) }.distinct()
+        if(rowSpecimens.isEmpty() || sourceSpecimen.isBlank())return true
+        if(rowSpecimens.size>1)return false
+        fun category(text:String):String {
+            val x=norm(text)
+            return when {
+                Regex("""\burine\b|\bclean\s*catch\b|\bmidstream\b""")
+                    .containsMatchIn(x) -> "urine"
+                "bone marrow" in x || "marrow" in x -> "marrow"
+                "csf" in x || "cerebrospinal" in x -> "csf"
+                "blood" in x || "bottle" in x -> "blood"
+                "pleural" in x -> "pleural"
+                "ascitic" in x -> "ascitic"
+                "sputum" in x -> "sputum"
+                else -> ""
+            }
+        }
+        val rowCat=category(rowSpecimens.single())
+        val sourceCat=category(sourceSpecimen).ifBlank {
+            category(sourceTitle)
+        }
+        if(rowCat.isNotBlank() && sourceCat.isNotBlank())
+            return rowCat==sourceCat
+        return norm(rowSpecimens.single())==norm(sourceSpecimen)
+    }
+
+    /** "Set 1 Bottle 2" and "1 set 2 bottle" are the same identity.
+     * A final report may use "after 5 days" instead of literal FINAL.
+     */
+    private fun cultureIdentityAgrees(target:String,title:String,
+        source:String,listedStage:String):Boolean {
+        val t=norm(target)
+        if(!t.contains("culture"))return true
+        val names=title+" "+source.lineSequence().take(16).joinToString(" ")
+        fun ordinal(value:String,kind:String):String? {
+            val after=Regex("""(?i)\b"""+kind+"""\s*[:#-]?\s*(\d+)\b""")
+                .find(value)?.groupValues?.get(1)
+            val before=Regex("""(?i)\b(\d+)\s*"""+kind+"""\b""")
+                .find(value)?.groupValues?.get(1)
+            val prefix=Regex("""(?i)\b\d+\s*set\b""").containsMatchIn(value)
+            return if(prefix) before?:after else after?:before
+        }
+        for(k in listOf("set","bottle")) {
+            val x=ordinal(target,k)
+            val y=ordinal(names,k)
+            if(x!=null && y!=null && x!=y)return false
+            // Blood cultures sharing accession/day/results cannot be
+            // differentiated when PDF/index lacks required bottle identity.
+            if(x!=null && y==null)return false
+        }
+        val targetInterim=Regex("""(?i)\b(?:48\s*h|48\s*hrs?|interim|preliminary)\b""")
+            .containsMatchIn(target)
+        val targetFinal=Regex("""(?i)\bfinal\b""").containsMatchIn(target)
+        val sourceInterim=Regex("""(?i)\b(?:48\s*h|48\s*hrs?|interim|preliminary)\b""")
+            .containsMatchIn(title+" "+listedStage) ||
+            Regex("""(?i)\b48\s*hours?\b""")
+                .containsMatchIn(source.lineSequence().take(26).joinToString(" "))
+        val sourceFinal=Regex("""(?i)\bfinal\b""")
+            .containsMatchIn(title+" "+listedStage)
+        if(targetFinal && sourceInterim && !sourceFinal)return false
+        if(targetInterim && sourceFinal && !sourceInterim)return false
+        return true
+    }
+
+    private fun clinicalContentAgrees(rows:List<LabResult>,
+        source:String):Boolean {
+        val body=norm(source)
+        if(body.isBlank())return false
+        val observations=rows.map { it.valueText.trim() }
+            .filter { it.length>=15 &&
+                !it.equals("-1") &&
+                !it.contains("methodology:",true) }.distinct()
+        if(observations.isEmpty())return false
+        fun words(s:String):Set<String> = norm(s).split(' ')
+            .filter { it.length>=3 &&
+                it !in setOf("the","and","for","after","with","report",
+                    "results","culture","shows","patient","sample") }.toSet()
+        return observations.any { observation ->
+            val clean=norm(observation)
+            if(body.contains(clean))return@any true
+            // NIMS reports may differ in punctuation/line wrapping.
+            // A high content overlap plus polarity agreement is acceptable,
+            // but date/title alone never proves a matching source.
+            val target=words(observation)
+            if(target.size<5)return@any false
+            val present=target.count { it in words(body) }
+            if(present.toFloat()/target.size<0.84f)return@any false
+            fun polarity(text:String):String = when {
+                Regex("""(?i)\b(?:no\s+(?:significant\s+)?growth|no\s+growth|negative|not\s+detected|not\s+seen)\b""")
+                    .containsMatchIn(text) -> "negative"
+                Regex("""(?i)\b(?:growth\s+of|positive|detected|seen)\b""")
+                    .containsMatchIn(text) -> "positive"
+                else -> ""
+            }
+            val x=polarity(observation)
+            val y=polarity(source)
+            x.isBlank() || y.isBlank() || x==y ||
+                contradictoryCulture(source) // report genuinely contradictory
+        }
     }
 
     /** Evidence-only accession list for direct PDF controls. */

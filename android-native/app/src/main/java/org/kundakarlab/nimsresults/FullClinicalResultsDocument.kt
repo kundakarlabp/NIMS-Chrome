@@ -37,7 +37,8 @@ object FullClinicalResultsDocument {
             val fromRowsRep=single(rows.map { it.reportedDate })
             val fromRowsSpecimen=single(rows.map { it.specimenType })
             val isMicro=ClinicalReportRenderer.isMicrobiologyInvestigation(study.title)
-            val candidates=SourceMetadataReview.pdfCandidates(rows,bundle.reports)
+            val candidates=SourceMetadataReview.reviewCandidates(
+                rows,bundle.reports,bundle.patient.crNo)
             val verified=if(isMicro)
                 MicrobiologyPdfIdentity.unique(rows,candidates,bundle.patient.crNo,study.date)
                 else null
@@ -110,12 +111,12 @@ object FullClinicalResultsDocument {
                         .ifBlank { report.reportedDate },
                     specimen=checked?.let {
                         PdfSourceEvidence.specimen(
-                            ReportTitleCache.extracted(report.url).orEmpty())
+                            ReportTitleCache.matchingText(report.url))
                     }.orEmpty(),
                     stage=report.reportStage.ifBlank {
                         checked?.let {
                             PdfSourceEvidence.stage(
-                                ReportTitleCache.extracted(report.url).orEmpty())
+                                ReportTitleCache.matchingText(report.url))
                         }.orEmpty()
                     },
                     evidence=if(checked!=null)"PDF CR verified; NOT linked to a result"

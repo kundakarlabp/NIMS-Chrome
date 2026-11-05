@@ -6,6 +6,12 @@ import android.content.Context
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.common.InputImage
+import androidx.core.content.FileProvider
+import android.net.Uri
+import java.io.File
 import android.app.KeyguardManager
 import android.content.Intent
 import android.os.Bundle
@@ -115,6 +121,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var pdfConfirmedCount by mutableStateOf(0)
     private var pdfTotalCount by mutableStateOf(0)
     private var pdfEvidenceTargets by mutableStateOf(0)
+    private var sourceReconcileRunning by mutableStateOf(false)
+    private var sourceReconcileDone by mutableStateOf(0)
+    private var sourceReconcileTotal by mutableStateOf(0)
+    private val autoPdfRequested=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -155,6 +165,20 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     )
     private var pendingLabExport: LabExport? = null
     private var pendingClinicalCsv: String? = null
+    private var pendingScanUri: Uri? = null
+
+    private val crCameraCapture=registerForActivityResult(
+        ActivityResultContracts.TakePicture()) { captured ->
+        val uri=pendingScanUri
+        pendingScanUri=null
+        if(captured && uri!=null)decodeCrImage(uri)
+        else DiagnosticEvents.record("CR_CAMERA_CAPTURE_CANCELLED")
+    }
+    private val crImagePicker=registerForActivityResult(
+        ActivityResultContracts.GetContent()) { uri ->
+        if(uri!=null)decodeCrImage(uri)
+    }
+
     private val clinicalCsvLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
@@ -225,8 +249,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                 try {
                     temporary.outputStream().buffered().use { output ->
                         FullClinicalResultsPdf.write(output,current.patient,
-                            current.retrievedAt,studies,
-                            FullClinicalResultsDocument.sourceInventory(current))
+                            current.retrievedAt,studies)
                     }
                     if(!temporary.renameTo(file)) {
                         temporary.copyTo(file,overwrite=true)
@@ -450,7 +473,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         // The signed originals remain accessible via the source inventory.
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
             level != android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            ReportTitleCache.clear()
+            ReportTitleCache.trimHeavy()
             ReportLinkResolver.clear()
             reportTitleEpoch++
         }
@@ -459,7 +482,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     override fun onLowMemory() {
         super.onLowMemory()
         ProcessHealth.onTrim(this, 100)
-        ReportTitleCache.clear()
+        ReportTitleCache.trimHeavy()
         ReportLinkResolver.clear()
         reportTitleEpoch++
     }
@@ -1095,6 +1118,104 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    /** Verify only on-screen PDF candidates. No navigation is blocked and
+     * failed documents are not retried on every Compose recomposition.
+     * Explicit "Verify matching" and "Reconcile PDFs" can still retry. */
+    private fun autoVerifyVisiblePdf(rows:List<LabResult>,
+        candidates:List<ReportRef>,cr:String) {
+        if(sessionState!=SessionState.CONNECTED || bundle?.patient?.crNo!=cr)return
+        val request=activeRequestId
+        val picked=SourceMetadataReview.inspectionCandidates(
+            rows.firstOrNull()?.test.orEmpty(),candidates)
+            .filter { it.url.isNotBlank() }.take(3)
+            .filter { report ->
+                !ReportTitleCache.hasVerifiedEvidence(report.url,cr) &&
+                    autoPdfRequested.add(cr+"|"+report.url)
+            }
+        if(picked.isEmpty())return
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            picked.forEach { report ->
+                val selected={request==activeRequestId &&
+                    cr==activeCr && !Thread.currentThread().isInterrupted}
+                if(!selected())return@execute
+                val ok=enricher.inspect(report,cr,selected)
+                if(ok)runOnUiThread {
+                    if(request==activeRequestId && cr==bundle?.patient?.crNo)
+                        reportTitleEpoch++
+                }
+            }
+        }
+    }
+
+    /** User-requested reconciliation of the *whole microbiology source index*
+     * using one background worker. The app remains responsive. Previously
+     * the first 12 source PDFs were inspected then evicted; the remaining
+     * tests could never acquire collection/report provenance. */
+    private fun reconcileMicrobiologyIndex(current:ClinicalBundle) {
+        if(sourceReconcileRunning)return
+        if(sessionState!=SessionState.CONNECTED) {
+            Toast.makeText(this,"Sign in to NIMS to verify source PDFs",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val cr=current.patient.crNo
+        val request=activeRequestId
+        val dates=ClinicalChronology.days(current.results)
+            .flatMap { it.studies }
+            .filter { ClinicalReportRenderer.isMicrobiologyInvestigation(it.title) }
+            .map { it.date }.filter { it!=LocalDate.MIN }
+        if(dates.isEmpty())return
+        // Include generic "staining" index rows and later final cultures.
+        // The signed PDF determines the actual test, not the index title.
+        val candidates=current.reports.asSequence().filter { report ->
+            report.url.isNotBlank() &&
+                !report.sourceTag.startsWith("nims_rest_reportList") &&
+                (report.department.contains("microbiology",true) ||
+                    report.department.contains("bacteriology",true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    Regex("""(?i)^staining$|^bacteriology$|^microscopy$""")
+                        .containsMatchIn(report.title))
+        }.filter { report ->
+            val collected=RecentReportDates.parse(
+                report.collectionDateTime.ifBlank { report.date })
+            collected!=null && dates.any { day ->
+                val span=java.time.temporal.ChronoUnit.DAYS.between(collected,day)
+                span in 0L..14L || span in -2L..0L
+            }
+        }.distinctBy { it.url }.take(100).toList()
+        if(candidates.isEmpty()) {
+            statusText="No suitable microbiology source PDFs in the index."
+            return
+        }
+        sourceReconcileTotal=candidates.size
+        sourceReconcileDone=0
+        sourceReconcileRunning=true
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            try {
+                for(report in candidates) {
+                    if(Thread.currentThread().isInterrupted ||
+                        request!=activeRequestId || cr!=activeCr)break
+                    val stillSelected={
+                        !Thread.currentThread().isInterrupted &&
+                        request==activeRequestId && cr==activeCr
+                    }
+                    val verified=if(ReportTitleCache.hasVerifiedEvidence(report.url,cr))
+                        true else enricher.inspect(report,cr,stillSelected)
+                    runOnUiThread {
+                        if(request==activeRequestId && cr==bundle?.patient?.crNo) {
+                            sourceReconcileDone++
+                            if(verified)reportTitleEpoch++
+                        }
+                    }
+                }
+            } finally {
+                runOnUiThread { sourceReconcileRunning=false }
+            }
+        }
+    }
+
     /** Explicit, bounded source verification for an older or ambiguous
      * microbiology card; does not block scrolling or create false PDF links. */
     private fun verifyMicrobiologySources(
@@ -1332,32 +1453,89 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
         }
     }
 
+    private fun acceptScannedCr(payloads:List<String>) {
+        val crs=payloads.mapNotNull(CrScanParser::parse).distinct()
+        when(crs.size) {
+            1 -> {
+                crInput=crs.single()
+                DiagnosticEvents.record("CR_SCAN_VALID")
+                Toast.makeText(this,"CR entered. Check it before Get results.",
+                    Toast.LENGTH_LONG).show()
+            }
+            0 -> {
+                DiagnosticEvents.record("CR_SCAN_UNRECOGNIZED")
+                Toast.makeText(this,"No unambiguous 15-digit NIMS CR found. Reframe or enter manually.",
+                    Toast.LENGTH_LONG).show()
+            }
+            else -> {
+                DiagnosticEvents.record("CR_SCAN_MULTIPLE")
+                Toast.makeText(this,"Multiple CR numbers detected. Scan one code at a time.",
+                    Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun decodeCrImage(uri:Uri) {
+        val scanner=BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE,
+                    Barcode.FORMAT_CODE_128,Barcode.FORMAT_CODE_39,
+                    Barcode.FORMAT_CODE_93,Barcode.FORMAT_PDF417,
+                    Barcode.FORMAT_AZTEC,Barcode.FORMAT_DATA_MATRIX,
+                    Barcode.FORMAT_ITF,Barcode.FORMAT_CODABAR,
+                    Barcode.FORMAT_EAN_13,Barcode.FORMAT_EAN_8,
+                    Barcode.FORMAT_UPC_A,Barcode.FORMAT_UPC_E)
+                .build())
+        val input=runCatching {InputImage.fromFilePath(this,uri)}.getOrElse {
+            scanner.close()
+            DiagnosticEvents.record("CR_SCAN_IMAGE_UNREADABLE")
+            Toast.makeText(this,"Image not readable; try another photo.",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        scanner.process(input)
+            .addOnSuccessListener { scanned ->
+                acceptScannedCr(scanned.mapNotNull { it.rawValue })
+            }.addOnFailureListener {
+                DiagnosticEvents.record("CR_SCAN_IMAGE_FAILED")
+                Toast.makeText(this,"Image scan failed. Try a sharper, well-lit photo.",
+                    Toast.LENGTH_LONG).show()
+            }.addOnCompleteListener { scanner.close() }
+    }
+
+    private fun captureCrPhoto() {
+        val directory=File(cacheDir,"scan").apply { mkdirs() }
+        val file=File(directory,"nims-cr-capture.jpg")
+        runCatching {
+            if(file.exists())file.delete()
+            pendingScanUri=FileProvider.getUriForFile(this,
+                packageName+".scanprovider",file)
+            crCameraCapture.launch(pendingScanUri!!)
+        }.onFailure {
+            DiagnosticEvents.record("CR_CAMERA_UNAVAILABLE")
+            crImagePicker.launch("image/*")
+        }
+    }
+
     private fun scanCrBarcode() {
-        val options = GmsBarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE, Barcode.FORMAT_CODE_128,
-                Barcode.FORMAT_CODE_39, Barcode.FORMAT_PDF417)
+        // Live scanner: broad 1D/2D support with auto zoom. A bundled ML Kit
+        // image/camera route remains available if the GMS module fails.
+        val options=GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE,Barcode.FORMAT_CODE_128,
+                Barcode.FORMAT_CODE_39,Barcode.FORMAT_CODE_93,
+                Barcode.FORMAT_PDF417,Barcode.FORMAT_AZTEC,
+                Barcode.FORMAT_DATA_MATRIX,Barcode.FORMAT_ITF)
             .enableAutoZoom()
             .build()
-        GmsBarcodeScanning.getClient(this, options).startScan()
+        GmsBarcodeScanning.getClient(this,options).startScan()
             .addOnSuccessListener { barcode ->
-                val cr = CrScanParser.parse(barcode.rawValue.orEmpty())
-                if (cr == null) {
-                    DiagnosticEvents.record("CR_SCAN_UNRECOGNIZED")
-                    Toast.makeText(this,
-                        "Code does not contain a valid 15-digit NIMS CR",
-                        Toast.LENGTH_LONG).show()
-                } else {
-                    DiagnosticEvents.record("CR_SCAN_VALID")
-                    crInput = cr
-                    Toast.makeText(this,
-                        "CR entered. Review it, then tap Get results.",
-                        Toast.LENGTH_SHORT).show()
-                }
+                acceptScannedCr(listOfNotNull(barcode.rawValue))
             }
             .addOnFailureListener {
-                DiagnosticEvents.record("CR_SCAN_FAILED")
-                Toast.makeText(this, "Scanner unavailable; enter CR manually.",
-                    Toast.LENGTH_LONG).show()
+                DiagnosticEvents.record("CR_SCAN_GMS_UNAVAILABLE")
+                // Use the device camera with the bundled decoder; never ask
+                // the clinician to sign in again just to use the scanner.
+                captureCrPhoto()
             }
     }
 
@@ -1395,6 +1573,18 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                     }
                                 }
                             )
+                            Row(Modifier.fillMaxWidth(),
+                                horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick={scanCrBarcode()}) {
+                                    Text("Scan QR / Barcode",fontSize=12.sp)
+                                }
+                                TextButton(onClick={captureCrPhoto()}) {
+                                    Text("Camera photo",fontSize=12.sp)
+                                }
+                                TextButton(onClick={crImagePicker.launch("image/*")}) {
+                                    Text("From image",fontSize=12.sp)
+                                }
+                            }
                             Spacer(Modifier.height(4.dp))
                             Button(
                                 onClick = {
@@ -3327,7 +3517,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     TextButton(onClick={previewCompleteResultsPdf(current)}) {
                         Text("Full PDF",fontSize=11.sp)
                     }
+                    TextButton(onClick={reconcileMicrobiologyIndex(current)},
+                        enabled=!sourceReconcileRunning && current.reports.isNotEmpty()) {
+                        Text(if(sourceReconcileRunning)"Reconciling…"
+                            else "Reconcile PDFs",fontSize=11.sp)
+                    }
                 }
+                if(sourceReconcileRunning)
+                    Text("Matching signed microbiology PDFs: "+
+                        sourceReconcileDone+"/"+sourceReconcileTotal,
+                        fontSize=10.sp,color=Color(0xFF486581))
                 OutlinedTextField(value=query,onValueChange={query=it},
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
                     placeholder={Text("Search results, tests or dates")})
@@ -3363,7 +3562,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val rows=study.rows
                     val relevant=study.visible
                     val candidates=remember(rows,current.reports,reportTitleEpoch) {
-                        SourceMetadataReview.reviewCandidates(rows,current.reports)
+                        SourceMetadataReview.reviewCandidates(rows,current.reports,
+                            current.patient.crNo)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
                                 val sourceDate=RecentReportDates.parse(
@@ -3384,7 +3584,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             header?.crNo==current.patient.crNo &&
                                 (report.labNumber.isBlank() ||
                                     header.labNumber.equals(report.labNumber,true))
-                        }?.let { ReportTitleCache.extracted(it.url).orEmpty() }
+                        }?.let { ReportTitleCache.matchingText(it.url) }
                             .orEmpty()
                     }
                     val verifiedHeader=remember(candidates,reportTitleEpoch,current.patient.crNo) {
@@ -3513,6 +3713,10 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         else null
                     }
                     val microSpecimen=resolvedMicro?.specimen.orEmpty()
+                    LaunchedEffect(study.key,reportTitleEpoch,candidates) {
+                        if(isMicro && resolvedMicro==null && candidates.isNotEmpty())
+                            autoVerifyVisiblePdf(rows,candidates,current.patient.crNo)
+                    }
                     val showReportMetadata=isMicro ||
                         Regex("""(?i)smear|pcr|viral[ -]*load|quantiferon|igra|lupus[ -]*anticoagulant|lac[ -]*(?:screen|confirm)|fibrinogen|bone[ -]*marrow|trephine|coombs|blood[ -]*(?:group|type)|antibody[ -]*screen|cardiolipin|glycoprotein""")
                             .containsMatchIn(study.title)

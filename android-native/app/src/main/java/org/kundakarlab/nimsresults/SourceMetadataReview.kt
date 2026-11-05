@@ -212,16 +212,31 @@ object SourceMetadataReview {
      * The REST catalogue has no PDF URL or accession on this deployment.
      */
     fun reviewCandidates(rows: List<LabResult>,
-        sourceIndex: List<ReportRef>): List<ReportRef> {
+        sourceIndex: List<ReportRef>,expectedCr:String=""): List<ReportRef> {
         val exact=pdfCandidates(rows,sourceIndex)
-        if(exact.isNotEmpty())return exact.take(6)
         val test=rows.firstOrNull()?.test.orEmpty()
         if(!ClinicalReportRenderer.isMicrobiologyInvestigation(test))
-            return emptyList()
+            return exact.take(8)
         val date=rows.mapNotNull { RecentReportDates.parse(it.reportedDate) }
             .distinct().singleOrNull()
             ?: rows.firstNotNullOfOrNull { RecentReportDates.parse(it.date) }
-            ?: return emptyList()
+            ?: return exact.take(8)
+        // A generic NIMS "STAINING" or "BACTERIOLOGY" index label may
+        // conceal a specifically identified KOH/AFB/urine report. The
+        // verified signed PDF is the source of its true test identity.
+        val proof=sourceIndex.filter { report ->
+            val ev=ReportTitleCache.compactEvidence(report.url)
+                ?:return@filter false
+            if(expectedCr.isBlank() || ev.cr!=expectedCr)return@filter false
+            val reported=RecentReportDates.parse(ev.header.reportedDate)
+                ?:return@filter false
+            reported==date && MicrobiologyPdfIdentity.candidateTypeAgrees(
+                test,report.title,ev.narrative)
+        }
+        if(proof.isNotEmpty()) {
+            return (proof+exact).distinctBy { it.url }.take(12)
+        }
+        if(exact.isNotEmpty())return exact.take(8)
         val culture=ClinicalPresentation.isCulture(test)
         return sourceIndex.asSequence().filter { source ->
             source.url.isNotBlank() &&
