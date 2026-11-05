@@ -121,6 +121,9 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
     private var pdfConfirmedCount by mutableStateOf(0)
     private var pdfTotalCount by mutableStateOf(0)
     private var pdfEvidenceTargets by mutableStateOf(0)
+    private var sourceReconcileRunning by mutableStateOf(false)
+    private var sourceReconcileDone by mutableStateOf(0)
+    private var sourceReconcileTotal by mutableStateOf(0)
     private val handler = Handler(Looper.getMainLooper())
 
     private var sessionState by mutableStateOf(SessionState.UNKNOWN)
@@ -1111,6 +1114,74 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                         reportTitleEpoch++
                     } else DiagnosticEvents.record("TARGET_PDF_EVIDENCE_UNAVAILABLE")
                 }
+            }
+        }
+    }
+
+    /** User-requested reconciliation of the *whole microbiology source index*
+     * using one background worker. The app remains responsive. Previously
+     * the first 12 source PDFs were inspected then evicted; the remaining
+     * tests could never acquire collection/report provenance. */
+    private fun reconcileMicrobiologyIndex(current:ClinicalBundle) {
+        if(sourceReconcileRunning)return
+        if(sessionState!=SessionState.CONNECTED) {
+            Toast.makeText(this,"Sign in to NIMS to verify source PDFs",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val cr=current.patient.crNo
+        val request=activeRequestId
+        val dates=ClinicalChronology.days(current.results)
+            .flatMap { it.studies }
+            .filter { ClinicalReportRenderer.isMicrobiologyInvestigation(it.title) }
+            .map { it.date }.filter { it!=LocalDate.MIN }
+        if(dates.isEmpty())return
+        // Include generic "staining" index rows and later final cultures.
+        // The signed PDF determines the actual test, not the index title.
+        val candidates=current.reports.asSequence().filter { report ->
+            report.url.isNotBlank() &&
+                !report.sourceTag.startsWith("nims_rest_reportList") &&
+                (report.department.contains("microbiology",true) ||
+                    report.department.contains("bacteriology",true) ||
+                    ClinicalReportRenderer.isMicrobiologyInvestigation(report.title) ||
+                    Regex("""(?i)^staining$|^bacteriology$|^microscopy$""")
+                        .containsMatchIn(report.title))
+        }.filter { report ->
+            val collected=RecentReportDates.parse(
+                report.collectionDateTime.ifBlank { report.date })
+            collected!=null && dates.any { day ->
+                val span=java.time.temporal.ChronoUnit.DAYS.between(collected,day)
+                span in 0L..14L || span in -2L..0L
+            }
+        }.distinctBy { it.url }.take(100).toList()
+        if(candidates.isEmpty()) {
+            statusText="No suitable microbiology source PDFs in the index."
+            return
+        }
+        sourceReconcileTotal=candidates.size
+        sourceReconcileDone=0
+        sourceReconcileRunning=true
+        pdfEvidenceWorker.execute {
+            val enricher=PdfSourceEnricher(applicationContext)
+            try {
+                for(report in candidates) {
+                    if(Thread.currentThread().isInterrupted ||
+                        request!=activeRequestId || cr!=activeCr)break
+                    val stillSelected={
+                        !Thread.currentThread().isInterrupted &&
+                        request==activeRequestId && cr==activeCr
+                    }
+                    val verified=if(ReportTitleCache.hasVerifiedEvidence(report.url,cr))
+                        true else enricher.inspect(report,cr,stillSelected)
+                    runOnUiThread {
+                        if(request==activeRequestId && cr==bundle?.patient?.crNo) {
+                            sourceReconcileDone++
+                            if(verified)reportTitleEpoch++
+                        }
+                    }
+                }
+            } finally {
+                runOnUiThread { sourceReconcileRunning=false }
             }
         }
     }
@@ -3416,7 +3487,16 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     TextButton(onClick={previewCompleteResultsPdf(current)}) {
                         Text("Full PDF",fontSize=11.sp)
                     }
+                    TextButton(onClick={reconcileMicrobiologyIndex(current)},
+                        enabled=!sourceReconcileRunning && current.reports.isNotEmpty()) {
+                        Text(if(sourceReconcileRunning)"Reconciling…"
+                            else "Reconcile PDFs",fontSize=11.sp)
+                    }
                 }
+                if(sourceReconcileRunning)
+                    Text("Matching signed microbiology PDFs: "+
+                        sourceReconcileDone+"/"+sourceReconcileTotal,
+                        fontSize=10.sp,color=Color(0xFF486581))
                 OutlinedTextField(value=query,onValueChange={query=it},
                     modifier=Modifier.fillMaxWidth(),singleLine=true,
                     placeholder={Text("Search results, tests or dates")})
@@ -3452,7 +3532,8 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                     val rows=study.rows
                     val relevant=study.visible
                     val candidates=remember(rows,current.reports,reportTitleEpoch) {
-                        SourceMetadataReview.reviewCandidates(rows,current.reports)
+                        SourceMetadataReview.reviewCandidates(rows,current.reports,
+                            current.patient.crNo)
                             .filter { it.url.isNotBlank() }.distinctBy { it.url }
                             .sortedWith(compareBy<ReportRef> { source ->
                                 val sourceDate=RecentReportDates.parse(
@@ -3473,7 +3554,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                             header?.crNo==current.patient.crNo &&
                                 (report.labNumber.isBlank() ||
                                     header.labNumber.equals(report.labNumber,true))
-                        }?.let { ReportTitleCache.extracted(it.url).orEmpty() }
+                        }?.let { ReportTitleCache.matchingText(it.url) }
                             .orEmpty()
                     }
                     val verifiedHeader=remember(candidates,reportTitleEpoch,current.patient.crNo) {
