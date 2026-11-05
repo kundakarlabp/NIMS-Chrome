@@ -52,6 +52,12 @@ object CrScanParser {
         // only ONE standalone 15-digit identifier and require that the user
         // confirms it before fetching; ambiguous QR payloads are rejected.
         val numbers=tokens.findAll(text).map { it.value }.distinct().toList()
-        return numbers.singleOrNull()
+        if(numbers.size!=1)return null
+        // An arbitrary standalone 15-digit ID in an unrelated QR must not
+        // be promoted to a patient CR. Labels/official URLs above are safer.
+        // For other encoded badges require NIMS or patient/registration
+        // context before offering the value for human confirmation.
+        val context=Regex("""(?i)\bnims\b|\bpatient\b|\bregistration\b|\bcr\b""")
+        return numbers.single().takeIf { context.containsMatchIn(text) }
     }
 }
