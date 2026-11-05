@@ -641,6 +641,14 @@ object ReportTitleCache {
     // Keep only recently opened PDFs in RAM; complete originals remain
     // available in the app-private on-disk cache or authenticated source.
     private const val MAX_MEMORY_PDFS = 12
+    // Keep a compact, CR-checked report ledger even when the large PDF
+    // extracts are evicted. 12 full PDFs were never sufficient to reconcile
+    // 80+ source reports: previous verification was simply forgotten.
+    private const val MAX_COMPACT_EVIDENCE = 180
+    data class CompactEvidence(val cr: String, val header: PdfDocumentHeader,
+        val specimen: String, val stage: String,
+        val narrative: String, val kind: PdfStudyKind)
+    private val compact = LinkedHashMap<String,CompactEvidence>()
     private val loadedUrls = LinkedHashSet<String>()
     fun revision(): Int = revision.get()
     @Synchronized fun diagnosticFootprint(): String {
@@ -674,10 +682,25 @@ object ReportTitleCache {
             parsedParts.firstOrNull { it.header.labNumber.isNotBlank() }?.header
                 ?: PdfDocumentHeaders.parse(full).copy(crNo = expectedCr)
             ) else null
+        val compactPart = if(trusted && parsedHeader!=null) {
+            val titleKind = PdfSourceEvidence.kind(full)
+            val body = parsedParts.joinToString("\n") { it.text }.ifBlank {
+                PdfSourceEvidence.clinicalBody(full)
+            }
+            CompactEvidence(expectedCr,parsedHeader,
+                PdfSourceEvidence.specimen(full),
+                PdfSourceEvidence.stage(full),body.take(14000),titleKind)
+        } else null
         synchronized(this) {
             // Source extracted before a patient switch or memory reset must
             // not be reintroduced after the cache has been cleared.
             if (sessionGeneration.get() != startingSession) return false
+            if(compactPart!=null) {
+                compact.remove(url)
+                compact[url]=compactPart
+                while(compact.size>MAX_COMPACT_EVIDENCE)
+                    compact.remove(compact.keys.first())
+            }
             loadedUrls.remove(url)
             loadedUrls.add(url)
             while (loadedUrls.size > MAX_MEMORY_PDFS) {
@@ -705,8 +728,16 @@ object ReportTitleCache {
     }
     fun get(url: String): String? = recognized[url]
     fun extracted(url: String): String? = extractedByUrl[url]
+    /** Evidence-only summary is CR-verified and retained independently of
+     * the 12 recently opened full PDF documents. */
+    @Synchronized fun compactEvidence(url:String):CompactEvidence? = compact[url]
+    fun matchingText(url:String):String =
+        extractedByUrl[url] ?: compactEvidence(url)?.narrative.orEmpty()
+    fun hasVerifiedEvidence(url:String,cr:String):Boolean =
+        cr.isNotBlank() && compactEvidence(url)?.cr==cr
     fun geometry(url: String): String? = positionedByUrl[url]
-    fun header(url: String): PdfDocumentHeader? = headers[url]
+    fun header(url: String): PdfDocumentHeader? =
+        headers[url] ?: compactEvidence(url)?.header
     fun sections(url: String): List<PdfSourcePart> = sectionsByUrl[url].orEmpty()
     fun digest(url: String): String = sha256ByUrl[url].orEmpty()
     fun accessions(url: String): Set<String> = sections(url)
@@ -715,6 +746,7 @@ object ReportTitleCache {
     fun clear() {
         sessionGeneration.incrementAndGet()
         loadedUrls.clear()
+        compact.clear()
         recognized.clear()
         extractedByUrl.clear()
         positionedByUrl.clear()
