@@ -5,7 +5,7 @@
 **Status:** Source-code and historical-evidence audit, **not** an authenticated live NIMS site audit, emulator run, installed-phone test or clinical validation. This is a description and change-control baseline, **not a new endpoint/API contract supplied by NIMS**.  
 **Scope:** Android native app, Chrome MV3 extension, optional Python helper, NIMS HIS entry points and report provenance. The deployed AppDeploy dashboard implementation is **not in this repository**.
 
-Read alongside [ISSUE_REGISTER_2026-11-05.md](ISSUE_REGISTER_2026-11-05.md) and [NO_REGRESSION_VALIDATION_2026-11-05.md](NO_REGRESSION_VALIDATION_2026-11-05.md). No source code or authentication behavior was altered in this documentation phase.
+Read alongside [ISSUE_REGISTER_2026-11-05.md](NIMS_ISSUE_REGISTER_2026-11-05.md) and [NO_REGRESSION_VALIDATION_2026-11-05.md](NO_REGRESSION_VALIDATION_2026-11-05.md). No source code or authentication behavior was altered in this documentation phase.
 
 ## 1. Components and boundaries
 
