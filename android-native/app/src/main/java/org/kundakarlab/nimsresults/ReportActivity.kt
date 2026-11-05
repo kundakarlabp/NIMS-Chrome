@@ -282,15 +282,9 @@ class ReportActivity : Activity() {
                 val request = Request.Builder()
                     .url(url)
                     .header("User-Agent", NimsUrls.DESKTOP_UA)
-                    .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
                     .build()
 
                 SHARED_CLIENT.newCall(request).execute().use { response ->
-                    response.headers("Set-Cookie").forEach {
-                        runCatching { CookieManager.getInstance().setCookie(response.request.url.toString(), it) }
-                    }
-                    CookieManager.getInstance().flush()
-
                     if (!response.isSuccessful) error("NIMS report returned HTTP " + response.code)
                     val finalUrl = response.request.url
                     if (finalUrl.scheme != "https" || finalUrl.host !in NimsUrls.HOSTS) {
@@ -734,6 +728,7 @@ class ReportActivity : Activity() {
                 .callTimeout(60, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
+                .addNetworkInterceptor(NimsHttpSessionInterceptor())
                 .build()
         }
     }
