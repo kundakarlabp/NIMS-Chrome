@@ -11,8 +11,15 @@ object CoagulationDisplay {
     private fun normalized(text: String): String = text.lowercase(Locale.ROOT)
         .replace(Regex("[^a-z0-9]"), "")
 
+    private fun isCombinedPanel(test: String): Boolean {
+        val t = normalized(test)
+        // NIMS appends test codes, e.g. PT/APTT (40A+41A).
+        return t.startsWith("ptaptt") || t.startsWith("apttpt")
+    }
+
     fun isPTPanel(test: String): Boolean {
         val t=normalized(test)
+        if (isCombinedPanel(test)) return true
         if (t == "aptt" || t.startsWith("activatedpartialthromboplastin"))
             return false
         return t.contains("prothrombin") || t == "ptinr" || t == "inr" ||
@@ -27,7 +34,7 @@ object CoagulationDisplay {
     fun label(row: LabResult): String? {
         val name=normalized(row.parameter.ifBlank { row.test })
         val test=row.test
-        val combined=normalized(test).let { it=="ptaptt" || it=="apttpt" }
+        val combined=isCombinedPanel(test)
         val explicitlyPT=name.contains("prothrombin") || name.startsWith("pt")
         val explicitlyAPTT=name.contains("aptt") ||
             name.contains("partialthromboplastin")
@@ -96,8 +103,8 @@ object CoagulationDisplay {
 
     fun displayLabel(row:LabResult, peers:List<LabResult>):String {
         val base=label(row) ?: return ClinicalChronology.parameterLabelFallback(row)
-        if(!isPTPanel(row.test) || isAPTTPanel(row.test) &&
-            normalized(row.test) !in listOf("ptaptt","apttpt"))return base
+        if(!isPTPanel(row.test) ||
+            (isAPTTPanel(row.test) && !isCombinedPanel(row.test)))return base
         if(base=="INR" || base.startsWith("INR ("))return base
         val role=category(row)
         if(role.isEmpty() || base !in setOf("PT (patient)","PT (control)"))
