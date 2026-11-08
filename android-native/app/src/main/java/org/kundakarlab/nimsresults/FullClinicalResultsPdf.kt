@@ -153,7 +153,7 @@ object FullClinicalResultsPdf {
                 ).joinToString("  |  ")
                 if(verifiedDetails.isNotBlank())wrapped(verifiedDetails,muted,8f)
                 if(study.conflictingCulture)
-                    wrapped("CONFLICTING CULTURE STATEMENTS - VERIFY ORIGINAL PDF",warning,8f)
+                    wrapped("CONTRADICTORY CULTURE STATEMENTS - REQUEST LAB CLARIFICATION",warning,8f)
                 val readable=study.findings.filterNot { it.unresolved }
                 val unresolvedCount=study.findings.count { it.unresolved }
                 if(readable.isEmpty())
