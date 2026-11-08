@@ -182,8 +182,20 @@ object MicrobiologyPdfIdentity {
                 .find(value)?.groupValues?.get(1)
             val before=Regex("""(?i)\b(\d+)\s*"""+kind+"""\b""")
                 .find(value)?.groupValues?.get(1)
+            // Signed NIMS pages say "First Bottle of first Set";
+            // Custom Sheet names say "(1 set 1 bottle)". Match synonyms,
+            // never attach a second bottle from the first bottle heading.
+            val names=mapOf("first" to "1","second" to "2",
+                "third" to "3","fourth" to "4")
+            val wordBefore=Regex("""(?i)\b(first|second|third|fourth)\s+"""+
+                kind+"""\b""").find(value)?.groupValues?.get(1)?.lowercase()
+                ?.let(names::get)
+            val wordAfter=Regex("""(?i)\b"""+kind+
+                """\s+(?:no\.?\s*)?(first|second|third|fourth)\b""")
+                .find(value)?.groupValues?.get(1)?.lowercase()?.let(names::get)
             val prefix=Regex("""(?i)\b\d+\s*set\b""").containsMatchIn(value)
-            return if(prefix) before?:after else after?:before
+            return if(prefix) before?:after?:wordBefore?:wordAfter
+                else after?:before?:wordBefore?:wordAfter
         }
         for(k in listOf("set","bottle")) {
             val x=ordinal(target,k)
