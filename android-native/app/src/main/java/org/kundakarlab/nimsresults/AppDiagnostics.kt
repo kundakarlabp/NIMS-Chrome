@@ -305,6 +305,22 @@ object AppDiagnostics {
                         SourceMetadataReview.pdfCandidates(study.rows,sourceReports)
                             .distinctBy { it.url }.size==1
                 })
+            appendLine("diagnostics.results.foreign_molecular_target_fields=" +
+                rows.count(ClinicalReportRenderer::foreignMolecularTarget))
+            appendLine("diagnostics.results.unverified_single_digit_urine_sg=" +
+                rows.count { ClinicalReportRenderer.isUrineRoutine(it.test) &&
+                    it.parameter.contains("specific gravity",true) &&
+                    it.valueText.trim() == "1" })
+            appendLine("diagnostics.results.cbc_numeric_others_unverified=" +
+                rows.count { row ->
+                    Regex("""(?i)\b(?:cbc|hemogram|haemogram|complete\s+blood)\b""")
+                        .containsMatchIn(row.test) &&
+                        row.parameter.matches(Regex("""(?i)others?\d*""")) &&
+                        row.valueText.trim().toDoubleOrNull()!=null &&
+                        row.unit.isBlank() && row.refRange.isBlank()
+                })
+            appendLine("diagnostics.results.dot_placeholder_fields=" +
+                rows.count { it.valueText.trim() in setOf(".", "..") })
             appendLine("diagnostics.results.urine_his_codes_not_interpreted=" +
                 rows.count(ClinicalResultsLayout::urineChemistryCode))
             appendLine("diagnostics.results.urine_source_pdf_required_for_codes=true")

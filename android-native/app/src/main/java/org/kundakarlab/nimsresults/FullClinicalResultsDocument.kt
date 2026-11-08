@@ -53,9 +53,13 @@ object FullClinicalResultsDocument {
             val sent=agreed(fromRowsSent,header?.sentDate.orEmpty())
             val rep=agreed(fromRowsRep,header?.reportedDate.orEmpty())
             val specimen=agreed(fromRowsSpecimen,verified?.specimen.orEmpty())
-            val readable=ClinicalResultsLayout.ordered(study.title,
-                ClinicalChronology.inlineRows(study)).map { row ->
-                FullClinicalFinding(ClinicalChronology.parameterLabel(row),
+            val inline=ClinicalChronology.inlineRows(study)
+            val readable=ClinicalResultsLayout.ordered(study.title,inline).map { row ->
+                val label=if(CoagulationDisplay.isPTPanel(study.title) ||
+                    CoagulationDisplay.isAPTTPanel(study.title))
+                    CoagulationDisplay.displayLabel(row,inline)
+                    else ClinicalChronology.parameterLabel(row)
+                FullClinicalFinding(label,
                     row.valueText,row.unit,row.refRange,selectionKey=
                         row.test.trim().lowercase()+"|"+row.parameter.trim().lowercase())
             }

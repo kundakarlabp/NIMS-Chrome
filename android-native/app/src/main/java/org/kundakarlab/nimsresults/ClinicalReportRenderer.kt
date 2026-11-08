@@ -23,7 +23,7 @@ object ClinicalReportRenderer {
     private val coded = Regex(
         """(?i)^(?:combo\d+|com\d+|cb\d+|textbox\d*|textarea\d*|[12]\.?\s*antibody\s*screening|\/[hl]pf\s*\((?:investigation|result)\)|negative\s*\(investigation\)|result\s*code)$"""
     )
-    private val unknownValues = setOf("", "-", "--", "—", "null", "n/a",
+    private val unknownValues = setOf("", "-", "--", "—", ".", "..", "null", "n/a",
         "not reported in structured feed", "not available", "not reported")
 
     fun isMicrobiologyInvestigation(test: String): Boolean {
@@ -39,9 +39,36 @@ object ClinicalReportRenderer {
     fun isPlaceholder(row: LabResult): Boolean =
         row.valueText.trim().lowercase(Locale.US) in unknownValues
 
+    /** The Custom Sheet can carry a foreign assay widget under another test.
+     * Do not promote unrelated target-name fields as a CMV/parvovirus result.
+     * Original fields remain intact for source diagnostics/PDF review. */
+    fun foreignMolecularTarget(row: LabResult): Boolean {
+        val test = row.test.lowercase(Locale.US)
+        val field = row.parameter.lowercase(Locale.US)
+        val influenza = Regex("""\b(?:influenza|inf\s*a(?:\s*pdm\s*h1)?|pdm\s*h1|h1n1)\b""")
+            .containsMatchIn(field)
+        val papilloma = Regex("""\b(?:hpv\s*(?:\d+|other|genotype)|human\s+papilloma\s*virus)\b""")
+            .containsMatchIn(field)
+        return when {
+            Regex("""\b(?:cmv|cytomegalovirus)\b""").containsMatchIn(test) ->
+                influenza || papilloma
+            Regex("""\bparvo(?:\s*virus)?\b|\bparvovirus\b""").containsMatchIn(test) ->
+                influenza || papilloma
+            else -> false
+        }
+    }
+
     fun isUninterpretedCode(row: LabResult): Boolean {
         val name = row.parameter.trim()
         val code = row.valueText.trim()
+        if (foreignMolecularTarget(row)) return true
+        // Unlabelled "Others=100" in a CBC can be a widget/control code;
+        // without a unit or reference, do not report it as a cell fraction.
+        if (Regex("""(?i)\b(?:cbc|hemogram|haemogram|complete\s+blood)\b""")
+                .containsMatchIn(row.test) &&
+            name.matches(Regex("""(?i)others?\d*""")) &&
+            code.toDoubleOrNull()!=null && row.unit.isBlank() && row.refRange.isBlank())
+            return true
         if (ClinicalPresentation.isTechnical(row) || ClinicalPresentation.isOpaquePanelCode(row)) return true
         // A qualitative word in an unmapped BioFire/ANA control field does
         // not identify the target to which that word belongs.
@@ -69,7 +96,7 @@ object ClinicalReportRenderer {
                     (name.matches(Regex("""(?i)^ph\s*\(result\)$""")) &&
                         number !in 4.5..9.0) ||
                     (name.matches(Regex("""(?i)^specific\s*gravity\s*\(result\)$""")) &&
-                        number !in 1.0..1.06)
+                        (number !in 1.0..1.06 || code == "1"))
                 )) return true
             if (code.matches(Regex("[1-9]")) &&
                 name.matches(Regex(
