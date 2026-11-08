@@ -3954,7 +3954,7 @@ class MainActivity : ComponentActivity(), NimsEngine.Listener {
                                 (study.title.contains("culture",true) &&
                                     rows.any { MicrobiologyPdfIdentity.contradictoryCulture(
                                         it.valueText) }))) {
-                                Text("Conflicting culture statements in laboratory source — verify the signed PDF.",
+                                Text("Contradictory culture statements in source — review original PDF and request laboratory clarification.",
                                     fontSize=11.sp,color=Color(0xFFB3261E),
                                     fontWeight=FontWeight.SemiBold)
                             }
