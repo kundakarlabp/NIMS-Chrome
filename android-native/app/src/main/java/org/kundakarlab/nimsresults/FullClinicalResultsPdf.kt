@@ -19,7 +19,7 @@ object FullClinicalResultsPdf {
     private const val LEFT=35f
     private const val RIGHT=560f
     private const val BOTTOM=797f
-    private const val LEADING=16f
+    private const val LEADING=13.5f
 
     fun write(output: OutputStream, patient: PatientInfo,
               retrievedAt: Long, studies: List<FullClinicalStudy>,
@@ -27,21 +27,29 @@ object FullClinicalResultsPdf {
         require(studies.isNotEmpty()) { "No investigations to export" }
         val pdf=PdfDocument()
         val normal=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color=Color.rgb(34,50,64);textSize=11.2f
+            color=Color.rgb(34,50,64);textSize=10.4f
         }
-        val muted=Paint(normal).apply { textSize=9.3f;color=Color.rgb(96,108,119) }
-        val bold=Paint(normal).apply { isFakeBoldText=true;textSize=11.5f }
-        val accent=Paint(bold).apply { textSize=12.3f; color=Color.rgb(17,65,105) }
+        val muted=Paint(normal).apply { textSize=8.9f;color=Color.rgb(96,108,119) }
+        val bold=Paint(normal).apply { isFakeBoldText=true;textSize=10.9f }
+        val accent=Paint(bold).apply { textSize=12f; color=Color.rgb(17,65,105) }
         val warning=Paint(bold).apply { color=Color.rgb(168,42,39) }
         val line=Paint().apply {color=Color.rgb(222,228,233);strokeWidth=0.7f}
-        val created=SimpleDateFormat("dd-MMM-yyyy HH:mm",Locale.ENGLISH)
-            .format(Date(System.currentTimeMillis()))
-        val snapshot=SimpleDateFormat("dd-MMM-yyyy HH:mm",Locale.ENGLISH)
+         val snapshot=SimpleDateFormat("dd-MMM-yyyy HH:mm",Locale.ENGLISH)
             .format(Date(retrievedAt))
         var page:PdfDocument.Page?=null
         var canvas:Canvas?=null
         var y=0f
         var number=0
+        var activeStudy=""
+
+        fun fitted(raw:String, paint:Paint, available:Float):String {
+            if(paint.measureText(raw)<=available)return raw
+            var shortened=raw
+            while(shortened.isNotEmpty() &&
+                paint.measureText(shortened+"...")>available)
+                shortened=shortened.dropLast(1)
+            return shortened+"..."
+        }
 
         fun endPage() {
             val current=page ?: return
@@ -58,17 +66,28 @@ object FullClinicalResultsPdf {
             page=pdf.startPage(PdfDocument.PageInfo.Builder(PAGE_W,PAGE_H,number).create())
             canvas=page!!.canvas
             y=35f
-            canvas!!.drawText("NIMS Results | All investigations",LEFT,y,accent)
-            y+=16f
-            val details=patient.name.ifBlank { "Patient name not provided" }+
-                " | CR: "+patient.crNo+" | "+patient.age+" | "+patient.sex
-            val detailLine=details.take(95)
-            canvas!!.drawText(detailLine,LEFT,y,normal)
+            canvas!!.drawText("NIMS Results | Clinical review (not original)",LEFT,y,accent)
             y+=15f
-            canvas!!.drawText("Results snapshot: "+snapshot,LEFT,y,muted)
+            canvas!!.drawText(fitted(patient.name.ifBlank { "Patient name not provided" },
+                normal,RIGHT-LEFT),LEFT,y,normal)
+            y+=14f
+            // The HIS sometimes returns "FemaleAge:38 Yr" in the sex field.
+            // Remove only the duplicated display suffix, not source data.
+            val sex=patient.sex.replace(Regex("""(?i)\s*Age\s*:\s*.*$"""),"").trim()
+            val demographics=listOf("CR: "+patient.crNo,patient.age,sex)
+                .filter(String::isNotBlank).joinToString("  |  ")
+            canvas!!.drawText(fitted(demographics,muted,RIGHT-LEFT),LEFT,y,muted)
+            y+=13f
+            canvas!!.drawText("Captured results: "+snapshot+
+                "  |  Not a signed laboratory report",LEFT,y,muted)
             y+=12f
             canvas!!.drawLine(LEFT,y,RIGHT,y,line)
             y+=18f
+            if(activeStudy.isNotBlank()) {
+                canvas!!.drawText(fitted("Continued: "+activeStudy,muted,RIGHT-LEFT),
+                    LEFT,y,muted)
+                y+=17f
+            }
         }
         fun ensure(space:Float) { if(page==null || y+space>=BOTTOM)newPage() }
         fun wrapped(raw:String,paint:Paint=normal,indent:Float=0f) {
@@ -109,6 +128,7 @@ object FullClinicalResultsPdf {
         try {
             var precedingDate=""
             for(study in studies) {
+                activeStudy=""
                 val date=study.sourceDate.ifBlank { "Date unavailable" }
                 if(date!=precedingDate) {
                     ensure(68f)
@@ -116,11 +136,14 @@ object FullClinicalResultsPdf {
                     canvas!!.drawLine(LEFT,y,RIGHT,y,line)
                     y+=21f
                     wrapped(date,accent)
+                    wrapped("Date grouping only: actual reported time shown where verified",
+                        muted,4f)
                     precedingDate=date
                 }
-                ensure(51f)
-                y+=7f
+                ensure(46f)
+                y+=5f
                 wrapped(study.title,bold)
+                activeStudy=study.title
                 val verifiedDetails=listOfNotNull(
                     study.accession.takeIf(String::isNotBlank)?.let { "Lab "+it },
                     study.specimen.takeIf(String::isNotBlank),
@@ -132,9 +155,17 @@ object FullClinicalResultsPdf {
                 if(study.conflictingCulture)
                     wrapped("CONFLICTING CULTURE STATEMENTS - VERIFY ORIGINAL PDF",warning,8f)
                 val readable=study.findings.filterNot { it.unresolved }
-                if(readable.isEmpty())wrapped("Result unavailable in structured data",muted,8f)
+                val unresolvedCount=study.findings.count { it.unresolved }
+                if(readable.isEmpty())
+                    wrapped("No verified inline result; consult original NIMS report",
+                        muted,8f)
                 else readable.forEach { finding ->
-                    val raw=finding.value.trim()
+                    // Remove repeated collection *instructions* from the derived
+                    // review PDF, never a culture observation or susceptibility.
+                    // The original source PDF and saved clinical record remain intact.
+                    val raw=if(BloodCultureCard.isBloodCulture(study.title))
+                        ClinicalChronology.clinicalText(finding.value)
+                        else finding.value.trim()
                     if(raw.isBlank())return@forEach
                     val unit=if(finding.unit.isNotBlank() &&
                         !raw.endsWith(finding.unit,true)) " "+finding.unit else ""
@@ -151,6 +182,10 @@ object FullClinicalResultsPdf {
                     if(reference.isNotBlank() && !row.contains("["+reference+"]"))
                         wrapped("Ref: "+reference,muted,20f)
                 }
+                if(unresolvedCount>0)wrapped(
+                    "$unresolvedCount unverified source field(s) omitted from clinical display; review original",
+                    muted,10f)
+                activeStudy=""
             }
             // An unlinked PDF-index appendix is intentionally NOT included.
             // It expanded one patient's review into dozens of unrelated
