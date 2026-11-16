@@ -3,13 +3,13 @@
 
   // Read-only comparison of source-attributed VoiceGrowth facts with authenticated
   // NIMS observations. Does not fetch, persist, adjudicate or change care.
-  const CR = /^\\d{15}$/;
+  const CR = /^\d{15}$/;
   const CONFIRMED = new Set(['CLINICIAN_CONFIRMED', 'HIS_CONFIRMED']);
   const VERIFIED_ID_SOURCES = new Set(['NIMS_PATIENT_DISPLAY', 'NIMS_SOURCE_DOCUMENT', 'NIMS_CUSTOM_SHEET_RESPONSE']);
   const RESULT_SOURCES = new Set(['nims_bulk_api', 'nims_verified_pdf', 'nims_authenticated_custom_sheet']);
 
   function value(x) { return x == null ? '' : String(x).trim(); }
-  function normalized(x) { return value(x).replace(/\\s+/g, ' ').toLowerCase(); }
+  function normalized(x) { return value(x).replace(/\s+/g, ' ').toLowerCase(); }
   function same(a, b) { return !!value(a) && !!value(b) && normalized(a) === normalized(b); }
   function isObject(x) { return x !== null && typeof x === 'object' && !Array.isArray(x); }
 
