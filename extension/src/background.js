@@ -1372,18 +1372,23 @@ async function optionalBulkReportMetadata(crNo) {
   try {
     const timeout = new Promise(resolve => setTimeout(() => resolve(null), 3500));
     const normalized = await Promise.race([
-      self.NimsRestApi.fetchReportList(crNo, fetch, "33101"),
+      // Called only after runCustom verified the visible patient CR banner.
+      self.NimsRestApi.fetchReportList(crNo, fetch, "33101", { allowIdentitylessMetadata: true }),
       timeout
     ]);
     if (!normalized) return [];
+    // Identity-less REST rows are catalogue candidates only. Never turn a
+    // token into an original PDF link without response-level CR evidence.
+    const verified = normalized.identityConfirmedByResponse === true;
     return (normalized.reports || []).map(report => ({
       id: report.id,
       title: report.title,
       date: report.date,
-      url: report.url || (report.token && self.NimsRestApi.verifiedReportUrlForToken
+      url: verified ? (report.url || (report.token && self.NimsRestApi.verifiedReportUrlForToken
         ? self.NimsRestApi.verifiedReportUrlForToken(report.token)
-        : ""),
-      token: report.token || ""
+        : "")) : "",
+      token: verified ? (report.token || "") : "",
+      identityScope: verified ? "rest_response" : "verified_custom_sheet_context_metadata"
     }));
   } catch (error) {
     if (error && error.code === "NIMS_IDENTITY_MISMATCH") throw error;
