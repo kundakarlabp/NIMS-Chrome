@@ -84,3 +84,38 @@ test("token-shaped reportUrl is treated as a safe opaque report token, not a URL
   assert.equal(out.reports[0].token, "SAFE_FIXTURE_ARG");
   assert.equal(Object.prototype.hasOwnProperty.call(out.reports[0], "raw"), false);
 });
+
+test("identity-less REST catalogue remains blocked for standalone CR lookup", async () => {
+  const fakeFetch = async url => ({
+    ok: true, status: 200, url,
+    text: async () => JSON.stringify([{ testname: "CBC", reqdno: "SYNTHETIC-REQ" }])
+  });
+  await assert.rejects(
+    () => api.fetchReportList("331012600000001", fakeFetch),
+    /did not confirm the requested CR/
+  );
+});
+
+test("verified Custom Sheet may use identity-less REST rows as metadata only", async () => {
+  const fakeFetch = async url => ({
+    ok: true, status: 200, url,
+    text: async () => JSON.stringify([{ testname: "CBC", reqdno: "SYNTHETIC-REQ", fileName: "unverified.pdf" }])
+  });
+  const catalogue = await api.fetchReportList(
+    "331012600000001", fakeFetch, "33101", { allowIdentitylessMetadata: true }
+  );
+  assert.equal(catalogue.identityConfirmedByResponse, false);
+  assert.equal(catalogue.reports.length, 1);
+  assert.equal(catalogue.reports[0].title, "CBC");
+});
+
+test("metadata-only allowance never accepts a conflicting returned patient CR", async () => {
+  const fakeFetch = async url => ({
+    ok: true, status: 200, url,
+    text: async () => JSON.stringify([{ testName: "CBC", crNo: "331012600000999" }])
+  });
+  await assert.rejects(
+    () => api.fetchReportList("331012600000001", fakeFetch, "33101", { allowIdentitylessMetadata: true }),
+    /different CR number/
+  );
+});

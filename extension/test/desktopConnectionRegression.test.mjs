@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const bg = fs.readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
 const session = fs.readFileSync(new URL('../src/nimsSessionBridge.js', import.meta.url), 'utf8');
+const uiBridge = fs.readFileSync(new URL('../src/nimsUiBridge.js', import.meta.url), 'utf8');
 
 function isolate(source, name, environment) {
   const expression = new RegExp('\\b(?:async\\s+)?function\\s+' + name + '\\s*\\(');
@@ -98,4 +99,67 @@ test('browser fallback rejects a different returned CR before parsing', async ()
   });
   await assert.rejects(run(crNo), /identity verification failed/i);
   assert.deepEqual(messages, ['NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA']);
+});
+
+test('authenticated child frame is recognized when NIMS retains its login URL', () => {
+  const menu = {
+    contentWindow: { location: { href: 'https://www.nimsts.edu.in/HISInvestigationG5/menu' } },
+    contentDocument: {
+      querySelector: () => null,
+      body: { innerText: 'Investigation  CR No Wise Investigation Trends' }
+    }
+  };
+  const run = isolate(uiBridge, 'probe', {
+    URL,
+    NIMS_ORIGINS: new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']),
+    UI: { menuFrame: '#frmMainMenu', trendFrameId: 'trends' },
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    bodyText: () => 'Home Menu',
+    document: {
+      querySelector: selector => selector === '#frmMainMenu' ? menu : null,
+      querySelectorAll: () => [menu],
+      getElementById: () => null
+    }
+  });
+  const state = run();
+  assert.equal(state.authenticated, true);
+});
+
+test('login-route placeholder alone is not accepted as an authenticated session', () => {
+  const run = isolate(uiBridge, 'probe', {
+    URL,
+    NIMS_ORIGINS: new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']),
+    UI: { menuFrame: '#frmMainMenu', trendFrameId: 'trends' },
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    bodyText: () => 'Welcome to NIMS',
+    document: {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      getElementById: () => null
+    }
+  });
+  assert.equal(run().authenticated, false);
+});
+
+test('verified CR browser retrieval retries existing manual processor when direct mapping fails', async () => {
+  const crNo = '123456789012345';
+  const modes = [];
+  const run = isolate(bg, 'fetchCrForDashboardLegacy', {
+    ensureDashboardWorkerTab: async () => 42,
+    probeNimsTab: async () => ({ reportFrame: { frameId: 3, patient: { crNo } } }),
+    chrome: { tabs: { sendMessage: async (_id, message) => {
+      if (message.type === 'NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA') return { patient: { crNo }, reports: [] };
+      if (message.type === 'NIMS_BRIDGE_RUN_SUMMARY') {
+        modes.push(message.mode);
+        return message.mode === 'bulk_full'
+          ? { ok: false, error: 'Direct mapping unavailable' }
+          : { ok: true, state: { parsedReports: [] } };
+      }
+      throw new Error('Unexpected message');
+    } } },
+    bundleFromParsedReports: () => ({ results: [{ parameter: 'fixture' }], reports: [] })
+  });
+  const result = await run(crNo);
+  assert.equal(result.source, 'authenticated_browser_fallback');
+  assert.deepEqual(modes, ['bulk_full', 'manual_fallback']);
 });
