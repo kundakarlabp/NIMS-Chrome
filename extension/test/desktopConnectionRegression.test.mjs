@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const bg = fs.readFileSync(new URL('../src/background.js', import.meta.url), 'utf8');
 const session = fs.readFileSync(new URL('../src/nimsSessionBridge.js', import.meta.url), 'utf8');
+const uiBridge = fs.readFileSync(new URL('../src/nimsUiBridge.js', import.meta.url), 'utf8');
 
 function isolate(source, name, environment) {
   const expression = new RegExp('\\b(?:async\\s+)?function\\s+' + name + '\\s*\\(');
@@ -98,4 +99,44 @@ test('browser fallback rejects a different returned CR before parsing', async ()
   });
   await assert.rejects(run(crNo), /identity verification failed/i);
   assert.deepEqual(messages, ['NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA']);
+});
+
+test('authenticated child frame is recognized when NIMS retains its login URL', () => {
+  const menu = {
+    contentWindow: { location: { href: 'https://www.nimsts.edu.in/HISInvestigationG5/menu' } },
+    contentDocument: {
+      querySelector: () => null,
+      body: { innerText: 'Investigation  CR No Wise Investigation Trends' }
+    }
+  };
+  const run = isolate(uiBridge, 'probe', {
+    URL,
+    NIMS_ORIGINS: new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']),
+    UI: { menuFrame: '#frmMainMenu', trendFrameId: 'trends' },
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    bodyText: () => 'Home Menu',
+    document: {
+      querySelector: selector => selector === '#frmMainMenu' ? menu : null,
+      querySelectorAll: () => [menu],
+      getElementById: () => null
+    }
+  });
+  const state = run();
+  assert.equal(state.authenticated, true);
+});
+
+test('login-route placeholder alone is not accepted as an authenticated session', () => {
+  const run = isolate(uiBridge, 'probe', {
+    URL,
+    NIMS_ORIGINS: new Set(['https://nimsts.edu.in', 'https://www.nimsts.edu.in']),
+    UI: { menuFrame: '#frmMainMenu', trendFrameId: 'trends' },
+    location: { href: 'https://www.nimsts.edu.in/AHIMSG5/hissso/loginLogin.action' },
+    bodyText: () => 'Welcome to NIMS',
+    document: {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      getElementById: () => null
+    }
+  });
+  assert.equal(run().authenticated, false);
 });
