@@ -1802,10 +1802,18 @@ async function fetchCrForDashboardLegacy(crNo) {
     error.code = "NIMS_IDENTITY_UNVERIFIED";
     throw error;
   }
-  const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
+  let processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
   if (!processed || processed.ok === false) {
-    const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
-    throw new Error("The CR result list opened, but structured value extraction failed: " + reason);
+    // Use the existing click-based report processor if direct request mapping
+    // is unavailable. Both run only after the report page confirmed this CR.
+    const directReason = processed && processed.error ? processed.error : "Direct report mapping unavailable.";
+    processed = await chrome.tabs.sendMessage(
+      tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "manual_fallback" }, { frameId: reportFrameId }
+    );
+    if (!processed || processed.ok === false) {
+      const reason = processed && processed.error ? processed.error : "Manual report retrieval unavailable.";
+      throw new Error("NIMS report processing failed (direct: " + directReason + "; browser: " + reason + ").");
+    }
   }
   const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
   if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
