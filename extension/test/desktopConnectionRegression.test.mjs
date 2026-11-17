@@ -140,3 +140,26 @@ test('login-route placeholder alone is not accepted as an authenticated session'
   });
   assert.equal(run().authenticated, false);
 });
+
+test('verified CR browser retrieval retries existing manual processor when direct mapping fails', async () => {
+  const crNo = '123456789012345';
+  const modes = [];
+  const run = isolate(bg, 'fetchCrForDashboardLegacy', {
+    ensureDashboardWorkerTab: async () => 42,
+    probeNimsTab: async () => ({ reportFrame: { frameId: 3, patient: { crNo } } }),
+    chrome: { tabs: { sendMessage: async (_id, message) => {
+      if (message.type === 'NIMS_BRIDGE_EXTRACT_DASHBOARD_DATA') return { patient: { crNo }, reports: [] };
+      if (message.type === 'NIMS_BRIDGE_RUN_SUMMARY') {
+        modes.push(message.mode);
+        return message.mode === 'bulk_full'
+          ? { ok: false, error: 'Direct mapping unavailable' }
+          : { ok: true, state: { parsedReports: [] } };
+      }
+      throw new Error('Unexpected message');
+    } } },
+    bundleFromParsedReports: () => ({ results: [{ parameter: 'fixture' }], reports: [] })
+  });
+  const result = await run(crNo);
+  assert.equal(result.source, 'authenticated_browser_fallback');
+  assert.deepEqual(modes, ['bulk_full', 'manual_fallback']);
+});
