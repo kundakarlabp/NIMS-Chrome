@@ -20,7 +20,7 @@ function classifier() {
     Uint8Array, TextDecoder,
     classificationResult: (classification, byteLength) => ({ classification, byteLength }),
     safeKeywords: () => [],
-    hasReportValues: text => /creatinine/.test(text) && /2\\.4/.test(text)
+    hasReportValues: text => text.includes('creatinine') && text.includes('2.4')
   });
 }
 
