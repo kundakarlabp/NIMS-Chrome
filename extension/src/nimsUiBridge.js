@@ -83,26 +83,11 @@
       /\/AHIMSG5\/hislogin\/transactions(?:\/|$)/i.test(pathname);
     const shellEvidence = /home\s*menu|investigation|welcome|e-?sushrut/i.test(text) ||
       Boolean(document.querySelector(UI.menuFrame));
-    // NIMS may keep loginLogin.action in the outer shell after successful
-    // authentication. Require an actual loaded protected NIMS child frame;
-    // a menu placeholder or "Welcome" text alone is not session evidence.
-    const authenticatedProtectedFrame = [...document.querySelectorAll('iframe,frame')].some(frame => {
-      try {
-        const child = frame.contentDocument;
-        const childUrl = new URL(frame.contentWindow.location.href);
-        return NIMS_ORIGINS.has(childUrl.origin) && child &&
-          !child.querySelector('input[type="password"]') &&
-          Boolean((child.body?.innerText || child.body?.textContent || '').trim()) &&
-          (/\/(?:HISInvestigationG5|HIS|HISUtilities|HBIMS)(?:\/|$)/i.test(childUrl.pathname) ||
-            /\/AHIMSG5\/hislogin\/transactions(?:\/|$)/i.test(childUrl.pathname));
-      } catch { return false; }
-    });
     return {
       href,
       loginForm,
       sessionExpired,
-      authenticated: Boolean(!loginForm && !sessionExpired &&
-        (protectedRoute || authenticatedProtectedFrame || (!loginRoute && shellEvidence))),
+      authenticated: Boolean(!loginForm && !sessionExpired && !loginRoute && (protectedRoute || shellEvidence)),
       trendsReady: Boolean(document.getElementById(UI.trendFrameId)),
       uiCompatibility: {
         selectorVersion: 'v1',

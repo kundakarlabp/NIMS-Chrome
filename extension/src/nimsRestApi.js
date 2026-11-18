@@ -143,7 +143,7 @@
       || (/captcha/.test(body) && /password|user id|username/.test(body));
   }
 
-  async function fetchReportList(crNo, fetchImpl, hosCode, options = {}) {
+  async function fetchReportList(crNo, fetchImpl, hosCode) {
     const normalizedCr = clean(crNo).replace(/\D/g, "");
     if (!/^\d{15}$/.test(normalizedCr)) throw new Error("Enter the 15-digit NIMS CR number.");
     const fetcher = fetchImpl || fetch;
@@ -173,15 +173,11 @@
       error.code = "NIMS_IDENTITY_MISMATCH";
       throw error;
     }
-    const identityConfirmedByResponse = Boolean(normalized.returnedCrNo || normalized.rowCrNos.length);
-    if (!identityConfirmedByResponse && options.allowIdentitylessMetadata !== true) {
+    if (!normalized.returnedCrNo && !normalized.rowCrNos.length) {
       const error = new Error("NIMS report-list API did not confirm the requested CR number.");
       error.code = "NIMS_IDENTITY_UNVERIFIED";
       throw error;
     }
-    // Only the caller with a separately verified NIMS patient banner may
-    // accept an identity-less REST catalogue, and only as metadata.
-    normalized.identityConfirmedByResponse = identityConfirmedByResponse;
     if (!normalized.reports.length) throw new Error("NIMS report-list API returned no usable report rows.");
     return normalized;
   }

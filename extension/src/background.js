@@ -537,12 +537,7 @@ function classifyReportResponse(buffer, contentType, status, urlHostPath) {
   if (byteLength < 20) return classificationResult("empty_response", byteLength, []);
   if (!ctype.includes("text/html") && !ctype.includes("text/plain")) return classificationResult("unsupported_content_type", byteLength, []);
   const text = new TextDecoder("utf-8").decode(buffer.slice(0, 50000)).toLowerCase();
-  const sessionExpired = /session\s*(?:has\s*)?expired|invalid\s*session|please\s*login\s*again|session\s*timeout/.test(text);
-  const loginForm = /<input\b[^>]*\btype\s*=\s*(?:"password"|'password'|password)/.test(text)
-    && /login|captcha|user\s*(?:id|name)|username/.test(text);
-  const loginRedirect = /location(?:\.href)?\s*=\s*['"][^'"]*loginlogin\.action/.test(text);
-  if ([401, 403].includes(Number(status)) || /loginlogin\.action/.test(hostPath)
-      || sessionExpired || loginForm || loginRedirect) {
+  if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
     return classificationResult("html_login_or_session", byteLength, safeKeywords(text));
   }
   if (/duplicate\s+result\s+report/.test(text)) {
@@ -1035,12 +1030,12 @@ function arrayBufferToBase64(buffer) {
 }
 
 async function detectHtmlAuthFailure(buffer, contentType) {
-  if (!(contentType || "").toLowerCase().includes("text/html")) return "";
-  const classification = classifyReportResponse(buffer, contentType, 200, "").classification;
-  if (classification === "html_login_or_session") return "Session expired or login page returned";
-  // Some NIMS reports are valid HTML rather than PDF; do not reject them
-  // solely because a report header/footer mentions login or authentication.
-  if (classification === "html_report_content") return "";
+  const ctype = (contentType || "").toLowerCase();
+  if (!ctype.includes("text/html")) return "";
+  const text = new TextDecoder("utf-8").decode(buffer.slice(0, 5000)).toLowerCase();
+  if (/\b(login|session expired|session has expired|authentication|captcha|otp|sign in|password)\b/.test(text)) {
+    return "Session expired or login page returned";
+  }
   return "HTML response is not a recognizable report";
 }
 
@@ -1377,23 +1372,18 @@ async function optionalBulkReportMetadata(crNo) {
   try {
     const timeout = new Promise(resolve => setTimeout(() => resolve(null), 3500));
     const normalized = await Promise.race([
-      // Called only after runCustom verified the visible patient CR banner.
-      self.NimsRestApi.fetchReportList(crNo, fetch, "33101", { allowIdentitylessMetadata: true }),
+      self.NimsRestApi.fetchReportList(crNo, fetch, "33101"),
       timeout
     ]);
     if (!normalized) return [];
-    // Identity-less REST rows are catalogue candidates only. Never turn a
-    // token into an original PDF link without response-level CR evidence.
-    const verified = normalized.identityConfirmedByResponse === true;
     return (normalized.reports || []).map(report => ({
       id: report.id,
       title: report.title,
       date: report.date,
-      url: verified ? (report.url || (report.token && self.NimsRestApi.verifiedReportUrlForToken
+      url: report.url || (report.token && self.NimsRestApi.verifiedReportUrlForToken
         ? self.NimsRestApi.verifiedReportUrlForToken(report.token)
-        : "")) : "",
-      token: verified ? (report.token || "") : "",
-      identityScope: verified ? "rest_response" : "verified_custom_sheet_context_metadata"
+        : ""),
+      token: report.token || ""
     }));
   } catch (error) {
     if (error && error.code === "NIMS_IDENTITY_MISMATCH") throw error;
@@ -1802,18 +1792,10 @@ async function fetchCrForDashboardLegacy(crNo) {
     error.code = "NIMS_IDENTITY_UNVERIFIED";
     throw error;
   }
-  let processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
+  const processed = await chrome.tabs.sendMessage(tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "bulk_full" }, { frameId: reportFrameId });
   if (!processed || processed.ok === false) {
-    // Use the existing click-based report processor if direct request mapping
-    // is unavailable. Both run only after the report page confirmed this CR.
-    const directReason = processed && processed.error ? processed.error : "Direct report mapping unavailable.";
-    processed = await chrome.tabs.sendMessage(
-      tabId, { type: "NIMS_BRIDGE_RUN_SUMMARY", mode: "manual_fallback" }, { frameId: reportFrameId }
-    );
-    if (!processed || processed.ok === false) {
-      const reason = processed && processed.error ? processed.error : "Manual report retrieval unavailable.";
-      throw new Error("NIMS report processing failed (direct: " + directReason + "; browser: " + reason + ").");
-    }
+    const reason = processed && processed.error ? processed.error : "NIMS values could not be parsed.";
+    throw new Error("The CR result list opened, but structured value extraction failed: " + reason);
   }
   const bundle = bundleFromParsedReports(crNo, extracted, processed.state);
   if (!bundle.results.length) throw new Error("The NIMS result list opened, but no structured result values were produced.");
