@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, fix/results-provenance-identity-v2, fix/android-v120-staged-bulk-clinical-data]
+    branches: [main]
   pull_request:
-    branches: [main, fix/results-provenance-identity-v2, fix/android-v120-staged-bulk-clinical-data]
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -14,8 +15,10 @@ permissions:
   contents: read
 
 jobs:
+  # Draft PRs execute this fast contract-only job. Full CI is reserved for ready PRs and main.
   repository-contract:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Reject deprecated relay and side-panel artifacts
@@ -52,6 +55,7 @@ jobs:
           PY
 
   javascript:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     needs: repository-contract
     runs-on: ubuntu-24.04
     steps:
@@ -64,6 +68,7 @@ jobs:
       - run: npm test
 
   helper:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     needs: repository-contract
     runs-on: ubuntu-24.04
     steps:
@@ -76,6 +81,7 @@ jobs:
       - run: python -m py_compile helper/main.py helper/models.py helper/cache.py helper/parsers/*.py
 
   extension-package:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     needs: [javascript, helper]
     runs-on: ubuntu-24.04
     steps:
@@ -96,6 +102,7 @@ jobs:
           retention-days: 14
 
   android:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
