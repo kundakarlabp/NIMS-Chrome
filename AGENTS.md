@@ -17,6 +17,14 @@
 - Never infer missing clinical values or coded dropdown meanings; never convert chart dates into collection/reported dates without explicit evidence. Preserve full narratives, multiple same-date specimens and preliminary/final reports.
 - Exact-original PDF links and patient identity gates remain mandatory. Candidate title/date matches are **not** proof; no wrong-patient fallback.
 
+## GitHub change workflow: one task, one PR
+
+Before starting a change, search all open **and draft** PRs for the same clinical outcome, affected module or stable **Task-Key**. If one exists, update that PR's **same head branch**; do not create sequential Android version PRs or replacement `-final` branches to fix its CI. Add further changes and regression tests to the original PR. When no matching PR exists, use one branch from current `main` and one draft PR.
+
+Draft PRs run only the fast, dependency-free repository-contract checks. Mark the **same PR** ready to trigger full JavaScript, Python/helper, Android build, and extension-packaging validation. New commits after ready state should return the PR to draft for focused iteration; full CI must pass on the final reviewable head before merge. Ordinary push CI on `main` remains complete. These rules never relax HIS authentication, source identity, patient matching, or APK signing controls.
+
+Stale PRs may be closed only after an exact SHA ancestry check against `main`, or explicit equivalent-change and regression verification. Post the evidence before closing. Keep diverged or unfinished work open; do not automatically delete source branches, tags, APK artifacts, or research data. Historical discussion remains accessible after closure.
+
 ## Change-control / regression prevention
 
 - Read `audit/README.md`, its NIMS integration contracts, issue register and validation matrix before changing HIS selectors, session handling, source matching, PDF processing or Kotlin architecture.
