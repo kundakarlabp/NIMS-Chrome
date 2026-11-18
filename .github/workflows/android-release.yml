@@ -2,8 +2,7 @@ name: Android signed v2 update (persistent recovery signer only)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  # Signed distribution is intentional; normal CI builds/validates every change.
 
 permissions:
   contents: read
